@@ -1,0 +1,6 @@
+name = "ReadConDb"
+version = "0.1.0"
+license = "MIT"
+[build]
+auto-tests = false
+link = ["readcon_db"]

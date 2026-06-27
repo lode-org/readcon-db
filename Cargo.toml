@@ -2,10 +2,22 @@
 name = "readcon-db"
 version = "0.1.0"
 edition = "2021"
-description = "Mmap-backed CON frame corpus store (Heed/LMDB) with non-SQL selection"
+description = "Mmap-backed CON frame corpus (Heed/LMDB), xxHash exact match, multi-language FFI"
 license = "MIT"
 repository = "https://github.com/lode-org/readcon-db"
 rust-version = "1.75"
+readme = "README.md"
+keywords = ["con", "trajectory", "lmdb", "mmap", "molecular-dynamics"]
+categories = ["database", "science", "api-bindings"]
+
+[lib]
+name = "readcon_db"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[features]
+default = []
+python = ["dep:pyo3"]
+capi = []
 
 [dependencies]
 heed = "0.21"
@@ -13,6 +25,12 @@ readcon-core = { version = "0.13", path = "../readcon-core" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+pyo3 = { version = "0.23", features = ["extension-module"], optional = true }
 
 [dev-dependencies]
 tempfile = "3"
+
+[package.metadata.docs.rs]
+all-features = false

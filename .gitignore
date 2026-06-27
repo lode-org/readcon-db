@@ -1,1 +1,9 @@
-target/
+/target
+**/*.rs.bk
+.python-version
+.venv
+dist/
+*.so
+*.a
+__pycache__/
+.pytest_cache/

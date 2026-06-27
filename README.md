@@ -1,97 +1,83 @@
 # readcon-db
 
-**Embedded frame store for large CON/convel corpora** — mmap-backed, concurrent readers, selection without SQL.
+**Mmap-backed CON/convel corpus store** (LMDB via [Heed](https://github.com/meilisearch/heed)), **non-SQL selection**, **xxHash3-128 exact match**, and **Rust / C / C++ / Python / Fortran** bindings.
 
-Companion to [`readcon-core`](https://github.com/lode-org/readcon-core): the core library owns *format fidelity* (parse one stream well); this crate owns *corpus scale* (many trajectories, selective access, OS-level “disk as RAM”).
+Companion to [`readcon-core`](https://github.com/lode-org/readcon-core): core owns **format fidelity**; this crate owns **corpus scale** (many trajectories, selective access, OS page-cache residency).
 
-## Why not SQL?
+## Features
 
-Optimizer corpora are append-mostly sequences of frames with secondary filters (atom count, symbols present, energy metadata, trajectory id). A general SQL engine optimizes joins and transactions we do not need, at the cost of copies and planner overhead on hot paths. We want:
+| Layer | Capability |
+|-------|------------|
+| Storage | Heed/LMDB env: `frames`, `traj_meta`, `idx_natoms`, `idx_symbol`, `frame_by_hash`, `hash_by_frame` |
+| Exact match | **xxHash3-128** of canonical re-serialized CON blob (`xxhash-rust`) |
+| Selection | `Select` builder — trajectory, atom-count range, required symbols, exact hash, limit |
+| Concurrency | Many readers (`RoTxn`), **one writer** for ingest (LMDB) |
+| Rust | `ConCorpus` API |
+| C | `include/readcon-db.h` — `rkrdb_*` (`cdylib` / `staticlib`) |
+| C++ | RAII `readcon_db::Corpus` in the same header (`extern "C"` + thin class) |
+| Python | `maturin` / PyO3 feature `python` → module `readcon_db.ConCorpus` |
+| Fortran | `fortran/ReadConDb` `bind(C)` wrappers |
 
-1. **mmap / page-cache residency** — OS keeps hot pages in RAM without a second buffer pool.
-2. **Many concurrent readers, one writer** — classic LMDB/Heed topology for analysis jobs.
-3. **Zero-copy reads into `readcon-core` types** — deserialize only selected frames.
-4. **Explicit indexes** — we define the access patterns; no query planner surprises.
-
-## Storage engine: Heed (LMDB)
-
-[Heed](https://github.com/meilisearch/heed) is the Rust LMDB wrapper used successfully in Meilisearch. LMDB properties we rely on:
-
-| Property | Use for CON corpora |
-|----------|---------------------|
-| Single-level store, B+ trees in a file | One `*.rdb` (or env dir) per project/corpus |
-| Memory-map entire environment | “Disk data in RAM” when working set fits; otherwise demand paging |
-| MVCC readers without blocking writers long | Parallel analysis threads open read txns |
-| Single writer | Ingestion / append trajectory is serialized (acceptable for MD post-processing) |
-| Multiple named databases in one env | Separate spaces: frames, indexes, trajectory meta |
-
-Alternatives considered and rejected for v1: SQLite (SQL tax, less predictable mmap semantics for blobs), Sled (different durability model), custom append-only log alone (no secondary indexes without reinventing B-trees).
-
-## Data model
-
-```
-Environment (heed::Env)
-├── db "traj_meta"     : traj_id -> TrajMeta { path_hint, n_frames, flags, created }
-├── db "frames"        : FrameKey { traj_id, frame_idx } -> FrameBlob
-├── db "frame_by_hash" : content_hash -> FrameKey (optional dedup)
-├── db "idx_natoms"    : (n_atoms, traj_id, frame_idx) -> ()   # ordered for range scans
-├── db "idx_symbol"    : (symbol, traj_id, frame_idx) -> ()    # multi-entry per frame
-└── db "idx_energy"    : (energy_bin, traj_id, frame_idx) -> () # optional, from metadata
-```
-
-**FrameBlob** encodings (feature-negotiated):
-
-1. **Raw CON text** (default ingest) — maximal fidelity; decode with `readcon-core` on read.
-2. **Postcard/bincode of SoA** (optional “cooked” path) — faster re-read when format is trusted; still produced *by* `readcon-core` so semantics match.
-
-Keys are fixed-width big-endian tuples so LMDB lexicographic order matches numeric order for range queries.
-
-## Selection API (no SQL)
+## Quick start (Rust)
 
 ```rust
-// Pseudocode
-let hits = db.select(
-    Select::new()
-        .trajectory(traj_id)           // optional
-        .natoms_range(50..=200)        // uses idx_natoms
-        .require_symbols(&["Cu", "H"]) // intersection via idx_symbol
-        .energy_ev_range(-10.0..0.0)   // if indexed
-        .limit(10_000),
-)?;
-for key in hits {
-    let frame: ConFrame = db.get_frame(key)?; // decode blob
-}
+use readcon_db::{ConCorpus, Select};
+
+let db = ConCorpus::open("/tmp/my_corpus")?;
+db.append_trajectory_path(1, "run.con")?;
+let keys = db.select(&Select::new().require_symbol("Cu").natoms_range(1, 500))?;
+let h = db.frame_hash(keys[0])?;
+assert_eq!(db.find_by_hash(h)?, Some(keys[0]));
 ```
-
-Implementation strategy: intersect postings lists from secondary DBs (sort-merge), then fetch blobs. No boolean SQL; composition is explicit in Rust.
-
-## Concurrency model
-
-- **Readers**: unlimited `RoTxn` — analysis threads, Python GIL release around decode.
-- **Writer**: one `RwTxn` for `append_trajectory` / `ingest_path`.
-- **Never hold write txn across slow decode of unrelated work.**
-- Prefer **bulk ingest** (one write txn per trajectory file) over per-frame commits.
-
-## Optimal speed checklist
-
-1. Ingest once as raw CON bytes; cook SoA offline if re-read dominates.
-2. Keep environment on fast local NVMe; LMDB map size set at create (grow policy documented).
-3. Secondary indexes only for filters that appear in real workloads (natoms, symbols, energy).
-4. Stream selection results; do not materialize all `ConFrame`s when only keys are needed.
-5. Align with `readcon-core` iterators for single-file workflows; use `readcon-db` only when \(N_{\mathrm{files}}\times N_{\mathrm{frames}}\) exceeds comfortable RAM *as decoded frames* but fits as mmap.
-
-## Relation to readcon-core paper
-
-The CPC manuscript argues format fidelity and a multi-language ABI. **readcon-db** is deliberately a *second* repository so CPC scope stays “format + library,” while corpus-scale concerns (indexes, mmap, multi-reader) do not inflate the interchange story. Cite this design when discussing future work / large NEB ensembles.
-
-## Status (v0.1.0)
-
-**Implemented:** `ConCorpus::open`, `append_trajectory_path` / `_str` (single writer txn per trajectory), `traj_meta`, `get_frame_text` / `get_frame` (decode via `readcon-core`), `select` with `trajectory`, `natoms_range`, `require_symbol` (intersection), `limit`. Integration test ingests `readcon-core` `tiny_cuh2.con` / `tiny_multi_cuh2.con`.
-
-**Not yet:** cooked SoA blobs, energy index, Python bindings, automatic map-size growth, concurrent multi-process writers (LMDB allows one writer by design).
 
 ```bash
-cd readcon-db && cargo test
+cargo test -p readcon-db
+cargo build --release   # libreadcon_db.so / .a
 ```
 
-API is still unstable; key layout may change before 0.2.
+## C
+
+```c
+#include "readcon-db.h"
+size_t id;
+rkrdb_open("/tmp/corpus", &id);
+uint32_t n;
+rkrdb_append_trajectory(id, 1, "run.con", &n);
+rkrdb_select_basic(id, 1, "Cu", 1, 100000, 0);
+int m = rkrdb_result_count(id);
+uint8_t hash[16];
+rkrdb_frame_hash(id, 1, 0, hash);
+rkrdb_close(id);
+```
+
+Link `-lreadcon_db` (and transitive deps from `cargo` staticlib as needed). Header: `include/readcon-db.h`.
+
+## Python
+
+```bash
+cd python && maturin develop --features python
+```
+
+```python
+from readcon_db import ConCorpus
+db = ConCorpus("/tmp/corpus")
+db.append_trajectory(1, "run.con")
+keys = db.select(traj_id=1, symbol="Cu")
+h = db.frame_hash(1, 0)
+assert db.find_by_hash(h) == (1, 0)
+```
+
+## Fortran
+
+Build the shared library first (`cargo build --release`), then point `fpm` / your compiler at `include/` and `target/release/libreadcon_db.so` (or static). Module: `fortran/ReadConDb/src/readcon_db.f90`.
+
+## Design notes
+
+- **No SQL** — access patterns are explicit indexes + in-process intersection.
+- **Decode via readcon-core** — CON semantics never fork.
+- **Dedup map** `frame_by_hash` keeps the **first** key for a given content hash (stable representative).
+- Default map size **2 GiB**; create a larger env or reopen with a bigger map for huge corpora.
+
+## License
+
+MIT

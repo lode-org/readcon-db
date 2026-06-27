@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+title: "readcon-db: mmap CON corpus store with multi-language bindings"
+message: "If you use readcon-db, please cite it using the metadata below."
+type: software
+authors:
+  - given-names: Rohit
+    family-names: Goswami
+    email: rgoswami@ieee.org
+    orcid: "https://orcid.org/0000-0002-2393-8056"
+license: MIT
+repository-code: "https://github.com/lode-org/readcon-db"
+version: 0.1.0
+date-released: "2026-06-27"
+keywords:
+  - CON
+  - LMDB
+  - trajectory
+  - molecular dynamics
