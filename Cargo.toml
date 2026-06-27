@@ -34,3 +34,7 @@ tempfile = "3"
 
 [package.metadata.docs.rs]
 all-features = false
+
+[[example]]
+name = "bench_corpus_ops"
+path = "examples/bench_corpus_ops.rs"

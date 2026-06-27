@@ -1,0 +1,52 @@
+[
+  {
+    "backend": "readcon-db",
+    "concurrent_8readers_extract_s": 0.001074227,
+    "extract_all_mean_s": 0.0000348852,
+    "extract_frames_per_s": 286654.512515336,
+    "insert_frames_per_s": 40271.91597667451,
+    "insert_s": 0.000248312,
+    "n_frames": 10,
+    "select_cu_mean_s": 1.34424e-6
+  },
+  {
+    "backend": "readcon-db",
+    "concurrent_8readers_extract_s": 0.004635392,
+    "extract_all_mean_s": 0.0006667406,
+    "extract_frames_per_s": 149983.36684461695,
+    "insert_frames_per_s": 39890.17437191923,
+    "insert_s": 0.002506883,
+    "n_frames": 100,
+    "select_cu_mean_s": 0.00001947724
+  },
+  {
+    "backend": "readcon-db",
+    "concurrent_8readers_extract_s": 0.00422719,
+    "extract_all_mean_s": 0.0014457259,
+    "extract_frames_per_s": 138338.8095903933,
+    "insert_frames_per_s": 32980.556807442525,
+    "insert_s": 0.006064179,
+    "n_frames": 200,
+    "select_cu_mean_s": 0.00004159846
+  },
+  {
+    "backend": "readcon-db",
+    "concurrent_8readers_extract_s": 0.001602038,
+    "extract_all_mean_s": 0.00035278649999999996,
+    "extract_frames_per_s": 141728.77930419674,
+    "insert_frames_per_s": 32321.268234851505,
+    "insert_s": 0.001546969,
+    "n_frames": 50,
+    "select_cu_mean_s": 8.94682e-6
+  },
+  {
+    "backend": "readcon-db",
+    "concurrent_8readers_extract_s": 0.008608688,
+    "extract_all_mean_s": 0.0029916675,
+    "extract_frames_per_s": 167130.87266549506,
+    "insert_frames_per_s": 36863.72292636029,
+    "insert_s": 0.01356347,
+    "n_frames": 500,
+    "select_cu_mean_s": 0.00009840832
+  }
+]
