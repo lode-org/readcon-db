@@ -91,7 +91,6 @@ impl ConCorpus {
             return Err(Error::TrajExists(traj_id, meta.n_frames));
         }
 
-        let mut iter = ConFrameIterator::new(file_contents);
         let mut frame_idx: u32 = 0;
         let mut iter = ConFrameIterator::new(file_contents);
         loop {
