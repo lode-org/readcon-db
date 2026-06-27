@@ -1,0 +1,18 @@
+[package]
+name = "readcon-db"
+version = "0.0.1"
+edition = "2021"
+description = "Mmap-backed CON frame corpus store (Heed/LMDB) with non-SQL selection"
+license = "MIT"
+repository = "https://github.com/lode-org/readcon-db"
+
+[dependencies]
+# Pin when implementing; heed 0.20+ for LMDB
+# heed = "0.20"
+# readcon-core = { version = "0.13", path = "../readcon-core" }
+# serde = { version = "1", features = ["derive"] }
+# thiserror = "2"
+
+[features]
+default = []
+# cook = ["dep:postcard"]  # optional SoA blob encoding
