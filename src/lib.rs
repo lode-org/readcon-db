@@ -5,12 +5,14 @@
 
 mod corpus;
 mod error;
+mod export_xyz;
 mod keys;
 mod select;
 
 pub use corpus::ConCorpus;
 pub use error::{Error, Result};
-pub use keys::{FrameKey, FrameIdx, TrajId, ContentHash, hash_frame_bytes};
+pub use export_xyz::{write_frame_extxyz, write_frames_extxyz};
+pub use keys::{hash_frame_bytes, ContentHash, FrameIdx, FrameKey, TrajId};
 pub use select::Select;
 
 pub mod ffi;

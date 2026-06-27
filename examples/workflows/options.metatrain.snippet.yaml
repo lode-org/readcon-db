@@ -1,0 +1,13 @@
+# Example fragment — merge into a full metatrain options.yaml
+# After: readcon-db dedup-export /data/corpus --symbol Cu -o train_cu.xyz
+seed: 42
+training_set:
+  systems:
+    read_from: train_cu.xyz
+    length_unit: angstrom
+  targets:
+    energy:
+      key: energy
+      unit: eV
+test_set: 0.1
+validation_set: 0.1

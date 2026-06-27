@@ -28,12 +28,20 @@ db.append_trajectory_path(1, "run.con")?;
 let keys = db.select(&Select::new().require_symbol("Cu").natoms_range(1, 500))?;
 let h = db.frame_hash(keys[0])?;
 assert_eq!(db.find_by_hash(h)?, Some(keys[0]));
+// metatrain / ASE:
+db.export_extxyz(&keys, "train.xyz", "energy")?;
 ```
 
 ```bash
-cargo test -p readcon-db
-cargo build --release   # libreadcon_db.so / .a
+cargo test
+cargo build --release          # lib + CLI `readcon-db`
+./target/release/readcon-db ingest-dir /tmp/corpus ./path/to/cons
+./target/release/readcon-db dedup-export /tmp/corpus --symbol Cu -o train_cu.xyz
 ```
+
+**metatrain:** point `training_set.systems.read_from` at the exported XYZ
+(see [`examples/workflows/metatrain_from_con.md`](examples/workflows/metatrain_from_con.md)
+and `options.metatrain.snippet.yaml`).
 
 ## C
 

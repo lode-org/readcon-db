@@ -15,6 +15,7 @@ api_c
 api_python
 api_fortran
 install
+workflows
 changelog_link
 ```
 

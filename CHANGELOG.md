@@ -10,3 +10,7 @@
 - Optional PyO3 module (`--features python`), maturin project under `python/`
 - Fortran `bind(C)` module under `fortran/ReadConDb`
 - Example `ingest_select`
+- **CLI** `readcon-db` (`ingest`, `ingest-dir`, `select`, `dedup-export`, `hash-file`)
+- **`export_extxyz`** / **`ingest_directory`** / **`unique_frame_keys`** for metatrain-style pipelines
+- Workflow docs: `examples/workflows/metatrain_from_con.md` + YAML snippet
+- Sphinx docs, marketing `website/`, logo kit under `assets/logo/`

@@ -11,12 +11,13 @@ use readcon_core::writer::ConFrameWriter;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::export_xyz::write_frame_extxyz;
 use crate::keys::{
     hash_frame_bytes, natoms_key, symbol_key, symbol_prefix, ContentHash, FrameKey, TrajId,
 };
 use crate::select::Select;
 
-const MAP_SIZE: usize = 2 * 1024 * 1024 * 1024; // 2 GiB default
+const MAP_SIZE: usize = 2 * 1024 * 1024 * 1024;
 const MAX_DBS: u32 = 16;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -32,9 +33,7 @@ pub struct ConCorpus {
     traj_meta: Database<Bytes, Str>,
     idx_natoms: Database<Bytes, Unit>,
     idx_symbol: Database<Bytes, Unit>,
-    /// xxHash3-128 → FrameKey (exact content match / dedup lookup)
     frame_by_hash: Database<Bytes, Bytes>,
-    /// FrameKey → hash (optional reverse; stored as 16 bytes)
     hash_by_frame: Database<Bytes, Bytes>,
 }
 
@@ -114,7 +113,6 @@ impl ConCorpus {
 
             let hb = hash.to_bytes();
             self.hash_by_frame.put(&mut wtxn, &fk_b[..], &hb[..])?;
-            // First key wins for dedup map (stable representative)
             if self.frame_by_hash.get(&wtxn, &hb[..])?.is_none() {
                 self.frame_by_hash.put(&mut wtxn, &hb[..], &fk_b[..])?;
             }
@@ -176,21 +174,18 @@ impl ConCorpus {
         Ok(fr)
     }
 
-    /// xxHash3-128 of the stored blob for `key`.
     pub fn frame_hash(&self, key: FrameKey) -> Result<ContentHash> {
         let rtxn = self.env.read_txn()?;
         let fk_b = key.to_bytes();
         match self.hash_by_frame.get(&rtxn, &fk_b[..])? {
             Some(b) => ContentHash::from_bytes(b).ok_or_else(|| Error::Message("bad hash".into())),
             None => {
-                // legacy rows without hash_by_frame: compute from text
                 let text = self.get_frame_text(key)?;
                 Ok(hash_frame_bytes(text.as_bytes()))
             }
         }
     }
 
-    /// First frame key with this exact content hash, if any.
     pub fn find_by_hash(&self, hash: ContentHash) -> Result<Option<FrameKey>> {
         let rtxn = self.env.read_txn()?;
         let hb = hash.to_bytes();
@@ -200,7 +195,6 @@ impl ConCorpus {
         }
     }
 
-    /// Hash arbitrary CON text the same way ingest does (re-serialize first frame).
     pub fn hash_con_text(text: &str) -> Result<ContentHash> {
         let mut it = ConFrameIterator::new(text);
         let frame = it
@@ -305,6 +299,63 @@ impl ConCorpus {
         }
         Ok(out)
     }
+
+    /// Decode selected frames to ASE/metatrain-oriented extended XYZ.
+    pub fn export_extxyz(
+        &self,
+        keys: &[FrameKey],
+        path: impl AsRef<Path>,
+        energy_key: &str,
+    ) -> Result<usize> {
+        use std::fs::File;
+        use std::io::BufWriter;
+        let mut w = BufWriter::new(File::create(path)?);
+        let mut n = 0usize;
+        for k in keys {
+            let fr = self.get_frame(*k)?;
+            write_frame_extxyz(&mut w, &fr, energy_key)?;
+            n += 1;
+        }
+        Ok(n)
+    }
+
+    /// Ingest `*.con` / `*.convel` files in a directory (non-recursive), traj ids from `start`.
+    pub fn ingest_directory(
+        &self,
+        dir: impl AsRef<Path>,
+        start_traj_id: TrajId,
+    ) -> Result<Vec<(TrajId, u32, String)>> {
+        let mut out = Vec::new();
+        let mut tid = start_traj_id;
+        let mut paths: Vec<_> = fs::read_dir(dir)?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                name.ends_with(".con") || name.ends_with(".convel")
+            })
+            .collect();
+        paths.sort();
+        for p in paths {
+            let n = self.append_trajectory_path(tid, &p)?;
+            out.push((tid, n, p.display().to_string()));
+            tid += 1;
+        }
+        Ok(out)
+    }
+
+    /// Keys that are the representative for their content hash (dedup set).
+    pub fn unique_frame_keys(&self, sel: &Select) -> Result<Vec<FrameKey>> {
+        let keys = self.select(sel)?;
+        let mut uniq = Vec::new();
+        for k in keys {
+            let h = self.frame_hash(k)?;
+            if self.find_by_hash(h)? == Some(k) {
+                uniq.push(k);
+            }
+        }
+        Ok(uniq)
+    }
 }
 
 #[cfg(test)]
@@ -316,6 +367,10 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../readcon-core/resources/test")
             .join(name)
+    }
+
+    fn fixtures_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../readcon-core/resources/test")
     }
 
     #[test]
@@ -331,8 +386,7 @@ mod tests {
             frame_idx: 0,
         };
         let h = db.frame_hash(k0).unwrap();
-        let found = db.find_by_hash(h).unwrap().unwrap();
-        assert_eq!(found, k0);
+        assert_eq!(db.find_by_hash(h).unwrap(), Some(k0));
 
         let by_hash = db
             .select(&Select::new().exact_hash(h.to_bytes()))
@@ -348,5 +402,67 @@ mod tests {
             .append_trajectory_path(2, fixture("tiny_multi_cuh2.con"))
             .unwrap();
         assert!(n2 >= 2);
+    }
+
+    #[test]
+    fn workflow_metatrain_extxyz_export() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path().join("corpus")).unwrap();
+        // simulate multi-trajectory campaign: ingest test suite CONs
+        let ingested = db.ingest_directory(fixtures_dir(), 1).unwrap();
+        assert!(ingested.len() >= 3);
+
+        // ML-style filter: frames containing Cu, bounded size
+        let keys = db
+            .select(
+                &Select::new()
+                    .require_symbol("Cu")
+                    .natoms_range(1, 10_000)
+                    .limit(50),
+            )
+            .unwrap();
+        assert!(!keys.is_empty());
+
+        // dedup for training set (exact geometry match)
+        let uniq = db
+            .unique_frame_keys(&Select::new().require_symbol("Cu"))
+            .unwrap();
+        assert!(!uniq.is_empty());
+        assert!(uniq.len() <= keys.len() + 100);
+
+        let xyz = dir.path().join("train_subset.xyz");
+        let n = db.export_extxyz(&uniq, &xyz, "energy").unwrap();
+        assert_eq!(n, uniq.len());
+        let text = std::fs::read_to_string(&xyz).unwrap();
+        assert!(text.contains("Lattice="));
+        assert!(text.contains("Properties="));
+        // at least one Cu line
+        assert!(text.lines().any(|l| l.trim_start().starts_with("Cu ")));
+    }
+
+    #[test]
+    fn workflow_dedup_identical_ingest() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let f = fixture("tiny_cuh2.con");
+        db.append_trajectory_path(1, &f).unwrap();
+        // second traj same file content → same hashes, different keys
+        db.append_trajectory_path(2, &f).unwrap();
+        let k1 = FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        let k2 = FrameKey {
+            traj_id: 2,
+            frame_idx: 0,
+        };
+        let h1 = db.frame_hash(k1).unwrap();
+        let h2 = db.frame_hash(k2).unwrap();
+        assert_eq!(h1, h2);
+        // representative is first ingested
+        assert_eq!(db.find_by_hash(h1).unwrap(), Some(k1));
+        let uniq = db.unique_frame_keys(&Select::new()).unwrap();
+        assert!(uniq.contains(&k1));
+        assert!(!uniq.contains(&k2));
     }
 }

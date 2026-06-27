@@ -101,6 +101,34 @@ impl PyConCorpus {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// Write selected frames to extended XYZ (metatrain / ASE).
+    /// `keys` is a list of (traj_id, frame_idx).
+    fn export_extxyz(
+        &self,
+        keys: Vec<(u64, u32)>,
+        path: &str,
+        energy_key: Option<String>,
+    ) -> PyResult<usize> {
+        let ek = energy_key.unwrap_or_else(|| "energy".into());
+        let fks: Vec<FrameKey> = keys
+            .into_iter()
+            .map(|(t, f)| FrameKey {
+                traj_id: t,
+                frame_idx: f,
+            })
+            .collect();
+        self.inner
+            .export_extxyz(&fks, path, &ek)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    fn ingest_directory(&self, dir: &str, start_traj_id: Option<u64>) -> PyResult<Vec<(u64, u32, String)>> {
+        let start = start_traj_id.unwrap_or(1);
+        self.inner
+            .ingest_directory(dir, start)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
     #[staticmethod]
     fn xxh3_128(data: &[u8]) -> PyObject {
         Python::with_gil(|py| {
