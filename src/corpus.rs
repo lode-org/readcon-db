@@ -91,17 +91,15 @@ impl ConCorpus {
             return Err(Error::TrajExists(traj_id, meta.n_frames));
         }
 
+        let mut iter = ConFrameIterator::new(file_contents);
         let mut frame_idx: u32 = 0;
-        for item in ConFrameIterator::new(file_contents) {
-            let frame = item.map_err(|e| Error::Parse(e.to_string()))?;
-            let mut buf = Cursor::new(Vec::new());
-            {
-                let mut w = ConFrameWriter::new(&mut buf);
-                w.write_frame(&frame)
-                    .map_err(|e| Error::Parse(format!("re-serialize: {e}")))?;
-            }
-            let blob = String::from_utf8(buf.into_inner())
-                .map_err(|e| Error::Parse(format!("utf8: {e}")))?;
+        let mut iter = ConFrameIterator::new(file_contents);
+        loop {
+            let (frame, blob) = match iter.next_with_raw_span(file_contents) {
+                None => break,
+                Some(Err(e)) => return Err(Error::Parse(e.to_string())),
+                Some(Ok(x)) => x,
+            };
             let hash = hash_frame_bytes(blob.as_bytes());
 
             let fk = FrameKey {
@@ -109,7 +107,7 @@ impl ConCorpus {
                 frame_idx,
             };
             let fk_b = fk.to_bytes();
-            self.frames.put(&mut wtxn, &fk_b[..], blob.as_str())?;
+            self.frames.put(&mut wtxn, &fk_b[..], blob)?;
 
             let hb = hash.to_bytes();
             self.hash_by_frame.put(&mut wtxn, &fk_b[..], &hb[..])?;
