@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>readcon-db — mmap CON corpus store</title>
+  <meta name="description" content="Mmap-backed CON/convel corpus (LMDB/Heed), xxHash3 exact match, Rust C C++ Python Fortran bindings." />
+  <link rel="icon" href="assets/logo.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="css/site.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div class="wrap">
+    <header class="hero">
+      <img class="logo" src="assets/logo.svg" width="112" height="112" alt="readcon-db logo" />
+      <div>
+        <h1>readcon-db</h1>
+        <p class="tag">
+          Mmap-backed <strong>CON / convel</strong> corpus store — LMDB via Heed,
+          non-SQL selection, <strong>xxHash3</strong> exact match, bindings for
+          Rust, C, C++, Python, and Fortran.
+        </p>
+        <div class="badges">
+          <span class="badge">v0.1.0</span>
+          <span class="badge">MIT</span>
+          <span class="badge">Heed / LMDB</span>
+          <span class="badge">xxHash3-128</span>
+          <span class="badge">no SQL</span>
+        </div>
+        <div class="cta">
+          <a class="btn btn-primary" href="https://github.com/lode-org/readcon-db">GitHub</a>
+          <a class="btn btn-ghost" href="../docs/source/index.md">Docs (source)</a>
+          <a class="btn btn-ghost" href="https://github.com/lode-org/readcon-core">readcon-core</a>
+        </div>
+      </div>
+    </header>
+
+    <section>
+      <h2>Why a second crate?</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>readcon-core</h3>
+          <p>Format fidelity — parse, validate, write, multi-language ABI for a stream or file.</p>
+        </div>
+        <div class="card">
+          <h3>readcon-db</h3>
+          <p>Corpus scale — thousands of frames, indexes, mmap residency, selective decode.</p>
+        </div>
+        <div class="card">
+          <h3>Not SQL</h3>
+          <p>Explicit filters and B-tree postings. No planner surprises on hot analysis paths.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Architecture in one breath</h2>
+      <div class="grid">
+        <div class="card"><h3>mmap</h3><p>OS page cache holds hot corpus pages — “disk in RAM” without a second buffer pool.</p></div>
+        <div class="card"><h3>Readers × N</h3><p>LMDB MVCC read transactions for parallel analysis; single writer for ingest.</p></div>
+        <div class="card"><h3>Exact match</h3><p>xxHash3-128 of canonical CON blobs; <code>find_by_hash</code> / <code>select_hash</code>.</p></div>
+        <div class="card"><h3>Hourglass FFI</h3><p>Rust core → <code>rkrdb_*</code> C ABI → C++ / Python / Fortran.</p></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Rust</h2>
+      <pre class="sample"><span class="c">use</span> readcon_db::{ConCorpus, Select};
+
+<span class="c">let</span> db = ConCorpus::open(<span class="s">"/tmp/corpus"</span>)?;
+db.append_trajectory_path(1, <span class="s">"run.con"</span>)?;
+<span class="c">let</span> keys = db.select(&amp;Select::new().require_symbol(<span class="s">"Cu"</span>))?;
+<span class="c">let</span> h = db.frame_hash(keys[0])?;</pre>
+    </section>
+
+    <section>
+      <h2>Languages</h2>
+      <div class="grid">
+        <div class="card"><h3>C / C++</h3><p><code>include/readcon-db.h</code> — <code>rkrdb_*</code> and RAII <code>readcon_db::Corpus</code>.</p></div>
+        <div class="card"><h3>Python</h3><p><code>maturin develop --features python</code> → <code>readcon_db.ConCorpus</code>.</p></div>
+        <div class="card"><h3>Fortran</h3><p><code>fortran/ReadConDb</code> module with <code>bind(C)</code> helpers.</p></div>
+      </div>
+    </section>
+
+    <footer>
+      <div class="brand">
+        <img src="assets/logo.svg" alt="" width="36" height="36" />
+        <strong>readcon-db</strong>
+      </div>
+      <p>MIT licensed · Companion to readcon-core / LODE · Logo and site assets in-repo under <code>assets/logo</code> and <code>website/</code>.</p>
+    </footer>
+  </div>
+</body>
+</html>

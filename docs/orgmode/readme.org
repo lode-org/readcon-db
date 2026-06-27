@@ -1,0 +1,11 @@
+#+title: readcon-db documentation map
+#+options: toc:2
+
+* Sources
+- Sphinx (MyST): =docs/source/= — build with =sphinx-build -b html source _build/html=
+- Marketing site: =website/index.html=
+- Logo SVGs: =assets/logo/readcon-db-logo.svg=, =readcon-db-wordmark.svg=
+- Crate README: repository root
+
+* Design
+See also =docs/design.md= (Heed rationale) and architecture page in Sphinx.

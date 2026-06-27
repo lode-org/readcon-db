@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="readcon-db">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#00695C"/>
+      <stop offset="100%" style="stop-color:#004D40"/>
+    </linearGradient>
+    <linearGradient id="disk" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#26A69A"/>
+      <stop offset="100%" style="stop-color:#00897B"/>
+    </linearGradient>
+  </defs>
+  <!-- rounded app tile -->
+  <rect x="16" y="16" width="224" height="224" rx="48" fill="url(#g)"/>
+  <!-- mmap "page" stack (disk in RAM metaphor) -->
+  <rect x="52" y="148" width="152" height="28" rx="6" fill="url(#disk)" opacity="0.95"/>
+  <rect x="60" y="128" width="136" height="28" rx="6" fill="#4DB6AC" opacity="0.9"/>
+  <rect x="68" y="108" width="120" height="28" rx="6" fill="#B2DFDB" opacity="0.95"/>
+  <!-- B-tree node -->
+  <rect x="96" y="48" width="64" height="36" rx="8" fill="#E0F2F1" stroke="#80CBC4" stroke-width="3"/>
+  <line x1="112" y1="84" x2="96" y2="108" stroke="#80CBC4" stroke-width="3" stroke-linecap="round"/>
+  <line x1="144" y1="84" x2="160" y2="108" stroke="#80CBC4" stroke-width="3" stroke-linecap="round"/>
+  <!-- hash spark (exact match) -->
+  <circle cx="188" cy="64" r="10" fill="#FFAB91"/>
+  <path d="M184 64 h8 M188 60 v8" stroke="#BF360C" stroke-width="2" stroke-linecap="round"/>
+</svg>

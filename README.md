@@ -81,3 +81,22 @@ Build the shared library first (`cargo build --release`), then point `fpm` / you
 ## License
 
 MIT
+
+## Documentation & website
+
+| Artifact | Path |
+|----------|------|
+| **Logo (SVG)** | [`assets/logo/readcon-db-logo.svg`](assets/logo/readcon-db-logo.svg) |
+| **Wordmark** | [`assets/logo/readcon-db-wordmark.svg`](assets/logo/readcon-db-wordmark.svg) |
+| **Brand notes** | [`assets/logo/BRAND.md`](assets/logo/BRAND.md) |
+| **Marketing site** | open [`website/index.html`](website/index.html) (teal LODE-style landing) |
+| **Sphinx docs** | `docs/source/` — `cd docs && pip install -r requirements.txt && make html` |
+| **CI Pages** | `.github/workflows/pages.yml` publishes `website/` + Sphinx under `/docs` |
+
+Local preview:
+
+```bash
+cd docs && pip install -r requirements.txt && make html
+# open docs/_build/html/index.html
+python3 -m http.server 8765 --directory website   # marketing page
+```
