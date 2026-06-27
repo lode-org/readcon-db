@@ -108,3 +108,16 @@ cd docs && pip install -r requirements.txt && make html
 # open docs/_build/html/index.html
 python3 -m http.server 8765 --directory website   # marketing page
 ```
+
+## ASE and CON
+
+ASE can `ase.io.read("file.con")` for many legacy coordinate files. **readcon** is still
+required for forces-section files, `.convel`, CON spec v2/v3 metadata, and non-Python
+ABIs. **readcon-db** is the campaign store (mmap, indexes, multi-reader)—not a claim that
+ASE has never seen CON. Install Python wheels:
+
+```bash
+# from checkouts (path dep on readcon-core)
+cd readcon-core && maturin develop --release --features python
+cd ../readcon-db && maturin develop --release --features python
+```
