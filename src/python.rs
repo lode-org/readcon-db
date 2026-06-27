@@ -1,6 +1,5 @@
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use pyo3::types::PyBytes;
 
 use crate::corpus::ConCorpus;
 use crate::keys::{ContentHash, FrameKey};
@@ -26,7 +25,6 @@ impl PyConCorpus {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Returns list of (traj_id, frame_idx).
     #[pyo3(signature = (traj_id=None, symbol=None, natoms_min=0, natoms_max=u32::MAX, exact_hash=None, limit=None))]
     fn select(
         &self,
@@ -65,17 +63,15 @@ impl PyConCorpus {
             .collect())
     }
 
-    fn frame_hash(&self, traj_id: u64, frame_idx: u32) -> PyResult<PyObject> {
-        Python::with_gil(|py| {
-            let h = self
-                .inner
-                .frame_hash(FrameKey {
-                    traj_id,
-                    frame_idx,
-                })
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-            Ok(PyBytes::new(py, &h.to_bytes()).into())
-        })
+    fn frame_hash(&self, traj_id: u64, frame_idx: u32) -> PyResult<Vec<u8>> {
+        let h = self
+            .inner
+            .frame_hash(FrameKey {
+                traj_id,
+                frame_idx,
+            })
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(h.to_bytes().to_vec())
     }
 
     fn find_by_hash(&self, hash: Vec<u8>) -> PyResult<Option<(u64, u32)>> {
@@ -101,8 +97,7 @@ impl PyConCorpus {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Write selected frames to extended XYZ (metatrain / ASE).
-    /// `keys` is a list of (traj_id, frame_idx).
+    #[pyo3(signature = (keys, path, energy_key=None))]
     fn export_extxyz(
         &self,
         keys: Vec<(u64, u32)>,
@@ -122,7 +117,12 @@ impl PyConCorpus {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
-    fn ingest_directory(&self, dir: &str, start_traj_id: Option<u64>) -> PyResult<Vec<(u64, u32, String)>> {
+    #[pyo3(signature = (dir, start_traj_id=None))]
+    fn ingest_directory(
+        &self,
+        dir: &str,
+        start_traj_id: Option<u64>,
+    ) -> PyResult<Vec<(u64, u32, String)>> {
         let start = start_traj_id.unwrap_or(1);
         self.inner
             .ingest_directory(dir, start)
@@ -130,11 +130,8 @@ impl PyConCorpus {
     }
 
     #[staticmethod]
-    fn xxh3_128(data: &[u8]) -> PyObject {
-        Python::with_gil(|py| {
-            let h = crate::keys::hash_frame_bytes(data);
-            PyBytes::new(py, &h.to_bytes()).into()
-        })
+    fn xxh3_128(data: Vec<u8>) -> Vec<u8> {
+        crate::keys::hash_frame_bytes(&data).to_bytes().to_vec()
     }
 }
 
