@@ -2,7 +2,7 @@
 
 **Mmap-backed CON/convel corpus store** — LMDB via Heed, non-SQL selection, xxHash3 exact match, and bindings for **Rust, C, C++, Python, and Fortran**.
 
-Companion to [readcon-core](https://github.com/lode-org/readcon-core): **core** owns format fidelity; **db** owns corpus scale (many trajectories, selective access, OS page-cache residency).
+Part of the **readcon ecosystem** with [readcon-core](https://github.com/lode-org/readcon-core) ([core Sphinx](https://lode-org.github.io/readcon-core/)): **core** owns format fidelity and multi-language interchange; **db** owns corpus scale (many trajectories, selective access, OS page-cache residency).
 
 ```{toctree}
 :maxdepth: 2
@@ -23,8 +23,8 @@ changelog_link
 
 | Need | Use |
 |------|-----|
-| Parse/write one `.con` / stream | `readcon-core` |
-| Thousands of frames, filter by symbol / \(N\) / exact content | **`readcon-db`** |
+| Parse/write one `.con` / stream | [readcon-core](https://github.com/lode-org/readcon-core) |
+| Thousands of frames; filter by symbol / \(N\) / **energy** / **forces·velocities** / exact content | **`readcon-db`** |
 | SQL | Not provided (by design) |
 
 ```bash

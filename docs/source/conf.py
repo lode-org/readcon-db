@@ -50,4 +50,6 @@ master_doc = "index"
 
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
+    # Peer interchange library; objects.inv may be offline in CI.
+    "readcon-core": ("https://lode-org.github.io/readcon-core/", None),
 }
