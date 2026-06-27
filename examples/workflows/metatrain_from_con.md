@@ -6,8 +6,9 @@
 ## A. Optimizer CON → readcon-db (native)
 
 ```bash
-readcon-db ingest-dir /data/corpus /data/neb_runs/*.con
-readcon-db select /data/corpus --symbol Cu   # keys only; decode with readcon
+readcon-db ingest-dir /data/corpus /data/neb_runs
+readcon-db select /data/corpus --symbol Cu --require-forces \
+    --energy-min -50 --energy-max 0   # keys only; decode with readcon
 ```
 
 Python:
@@ -25,11 +26,19 @@ frames = readcon.read_all_frames("saddle.con")
 db = ConCorpus("/data/corpus")
 # prefer writing CON then ingest, or extend API to append frames directly later
 db.append_trajectory(1, "saddle.con")
-keys = db.select(symbol="Cu")
+keys = db.select(
+    symbol="Cu",
+    require_forces=True,
+    energy_min=-50.0,
+    energy_max=0.0,
+)
 text = db.get_frame_text(*keys[0])  # still CON
 ```
 
-Stay in CON for analysis that uses `readcon` / C / Fortran APIs.
+Stay in CON for analysis that uses `readcon` / C / Fortran APIs. Secondary
+indexes (`idx_natoms`, `idx_symbol`, `idx_energy`, `idx_flags`) are documented in
+[`docs/design.md`](../../docs/design.md) and in the companion
+[readcon-core](https://github.com/lode-org/readcon-core) README ecosystem table.
 
 ## B. Only if an external tool requires XYZ on disk
 

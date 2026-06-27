@@ -17,8 +17,10 @@ fn usage() -> ExitCode {
         "Usage:
   readcon-db ingest <corpus_dir> [--start-id N] <file.con>...
   readcon-db ingest-dir <corpus_dir> <dir_with_con_files>
-  readcon-db select <corpus_dir> [--traj N] [--symbol S] [--natoms-min A] [--natoms-max B] [--export out.xyz]
-  readcon-db dedup-export <corpus_dir> [--symbol S] -o out.xyz
+  readcon-db select <corpus_dir> [--traj N] [--symbol S] [--natoms-min A] [--natoms-max B]
+                     [--energy-min E] [--energy-max E] [--require-forces] [--require-velocities]
+                     [--require-energy] [--export out.xyz]
+  readcon-db dedup-export <corpus_dir> [--symbol S] [--require-forces] -o out.xyz
   readcon-db hash-file <file.con>   # print xxh3-128 hex of first frame (canonical)
 "
     );
@@ -69,6 +71,11 @@ fn main() -> ExitCode {
                 let mut symbol = None;
                 let mut nmin = 0u32;
                 let mut nmax = u32::MAX;
+                let mut emin: Option<f64> = None;
+                let mut emax: Option<f64> = None;
+                let mut req_forces = false;
+                let mut req_vels = false;
+                let mut req_energy = false;
                 let mut export = None;
                 let mut i = 1;
                 while i < args.len() {
@@ -89,6 +96,26 @@ fn main() -> ExitCode {
                             nmax = args.get(i + 1).ok_or("n")?.parse()?;
                             i += 2;
                         }
+                        "--energy-min" => {
+                            emin = Some(args.get(i + 1).ok_or("e")?.parse()?);
+                            i += 2;
+                        }
+                        "--energy-max" => {
+                            emax = Some(args.get(i + 1).ok_or("e")?.parse()?);
+                            i += 2;
+                        }
+                        "--require-forces" => {
+                            req_forces = true;
+                            i += 1;
+                        }
+                        "--require-velocities" => {
+                            req_vels = true;
+                            i += 1;
+                        }
+                        "--require-energy" => {
+                            req_energy = true;
+                            i += 1;
+                        }
                         "--export" | "-o" => {
                             export = Some(args.get(i + 1).ok_or("path")?.clone());
                             i += 2;
@@ -103,6 +130,21 @@ fn main() -> ExitCode {
                 }
                 if let Some(s) = symbol.clone() {
                     sel = sel.require_symbol(s);
+                }
+                if emin.is_some() || emax.is_some() {
+                    sel = sel.energy_range(
+                        emin.unwrap_or(f64::NEG_INFINITY),
+                        emax.unwrap_or(f64::INFINITY),
+                    );
+                }
+                if req_forces {
+                    sel = sel.require_forces();
+                }
+                if req_vels {
+                    sel = sel.require_velocities();
+                }
+                if req_energy {
+                    sel = sel.require_energy();
                 }
                 let keys = if cmd == "dedup-export" {
                     db.unique_frame_keys(&sel)?

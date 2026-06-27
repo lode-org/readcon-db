@@ -13,12 +13,13 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::export_xyz::write_frame_extxyz;
 use crate::keys::{
-    hash_frame_bytes, natoms_key, symbol_key, symbol_prefix, ContentHash, FrameKey, TrajId,
+    energy_bin_key, flag_key, hash_frame_bytes, natoms_key, symbol_key, symbol_prefix,
+    ContentHash, FrameKey, TrajId, FLAG_HAS_ENERGY, FLAG_HAS_FORCES, FLAG_HAS_VELOCITIES,
 };
 use crate::select::Select;
 
 const MAP_SIZE: usize = 2 * 1024 * 1024 * 1024;
-const MAX_DBS: u32 = 16;
+const MAX_DBS: u32 = 24;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TrajMeta {
@@ -33,8 +34,58 @@ pub struct ConCorpus {
     traj_meta: Database<Bytes, Str>,
     idx_natoms: Database<Bytes, Unit>,
     idx_symbol: Database<Bytes, Unit>,
+    /// Ordered energy bins (only finite energies).
+    idx_energy: Database<Bytes, Unit>,
+    /// Capability flags: forces / velocities / has_energy.
+    idx_flags: Database<Bytes, Unit>,
     frame_by_hash: Database<Bytes, Bytes>,
     hash_by_frame: Database<Bytes, Bytes>,
+}
+
+fn frame_has_forces(frame: &ConFrame) -> bool {
+    frame
+        .header
+        .sections
+        .iter()
+        .any(|s| s.eq_ignore_ascii_case("forces"))
+        || frame.atom_data.iter().any(|a| a.force.is_some())
+}
+
+fn frame_has_velocities(frame: &ConFrame) -> bool {
+    frame
+        .header
+        .sections
+        .iter()
+        .any(|s| s.eq_ignore_ascii_case("velocities"))
+        || frame.atom_data.iter().any(|a| a.velocity.is_some())
+}
+
+fn frame_energy(frame: &ConFrame) -> Option<f64> {
+    frame
+        .header
+        .energy()
+        .filter(|e| e.is_finite())
+        .or_else(|| {
+            frame
+                .header
+                .metadata
+                .get("energy")
+                .and_then(|v| v.as_f64())
+                .filter(|e| e.is_finite())
+        })
+}
+
+/// Order-preserving u64 key prefix for a finite energy (matches `energy_bin_key`).
+fn energy_ordered_bits(energy: f64) -> Option<u64> {
+    if !energy.is_finite() {
+        return None;
+    }
+    let bits = energy.to_bits();
+    Some(if energy.is_sign_negative() {
+        !bits
+    } else {
+        bits ^ (1u64 << 63)
+    })
 }
 
 impl ConCorpus {
@@ -51,6 +102,8 @@ impl ConCorpus {
         let traj_meta = env.create_database(&mut wtxn, Some("traj_meta"))?;
         let idx_natoms = env.create_database(&mut wtxn, Some("idx_natoms"))?;
         let idx_symbol = env.create_database(&mut wtxn, Some("idx_symbol"))?;
+        let idx_energy = env.create_database(&mut wtxn, Some("idx_energy"))?;
+        let idx_flags = env.create_database(&mut wtxn, Some("idx_flags"))?;
         let frame_by_hash = env.create_database(&mut wtxn, Some("frame_by_hash"))?;
         let hash_by_frame = env.create_database(&mut wtxn, Some("hash_by_frame"))?;
         wtxn.commit()?;
@@ -62,6 +115,8 @@ impl ConCorpus {
             traj_meta,
             idx_natoms,
             idx_symbol,
+            idx_energy,
+            idx_flags,
             frame_by_hash,
             hash_by_frame,
         })
@@ -127,6 +182,22 @@ impl ConCorpus {
             for s in &syms {
                 let sk = symbol_key(s, fk);
                 self.idx_symbol.put(&mut wtxn, &sk[..], &())?;
+            }
+
+            if let Some(e) = frame_energy(&frame) {
+                if let Some(ek) = energy_bin_key(e, fk) {
+                    self.idx_energy.put(&mut wtxn, &ek[..], &())?;
+                }
+                let fk_flag = flag_key(FLAG_HAS_ENERGY, fk);
+                self.idx_flags.put(&mut wtxn, &fk_flag[..], &())?;
+            }
+            if frame_has_forces(&frame) {
+                let fk_flag = flag_key(FLAG_HAS_FORCES, fk);
+                self.idx_flags.put(&mut wtxn, &fk_flag[..], &())?;
+            }
+            if frame_has_velocities(&frame) {
+                let fk_flag = flag_key(FLAG_HAS_VELOCITIES, fk);
+                self.idx_flags.put(&mut wtxn, &fk_flag[..], &())?;
             }
 
             frame_idx += 1;
@@ -265,6 +336,61 @@ impl ConCorpus {
                 }
             }
             sets.push(s);
+        }
+
+        if sel.energy_min.is_some() || sel.energy_max.is_some() {
+            let lo_e = sel.energy_min.unwrap_or(f64::NEG_INFINITY);
+            let hi_e = sel.energy_max.unwrap_or(f64::INFINITY);
+            let lo_bits = energy_ordered_bits(lo_e).unwrap_or(0);
+            let hi_bits = energy_ordered_bits(hi_e).unwrap_or(u64::MAX);
+            let mut s = BTreeSet::new();
+            let mut iter = self.idx_energy.iter(&rtxn)?;
+            while let Some(Ok((k, _))) = iter.next() {
+                if k.len() < 20 {
+                    continue;
+                }
+                let mut eb = [0u8; 8];
+                eb.copy_from_slice(&k[..8]);
+                let bits = u64::from_be_bytes(eb);
+                if bits > hi_bits {
+                    break;
+                }
+                if bits >= lo_bits {
+                    if let Some(fk) = FrameKey::from_bytes(&k[8..20]) {
+                        if sel.traj_id.is_none_or(|t| t == fk.traj_id) {
+                            s.insert(fk);
+                        }
+                    }
+                }
+            }
+            sets.push(s);
+        }
+
+        let mut push_flag = |flag: u8| -> Result<()> {
+            let mut s = BTreeSet::new();
+            let pref = [flag];
+            let mut iter = self.idx_flags.prefix_iter(&rtxn, &pref)?;
+            while let Some(Ok((k, _))) = iter.next() {
+                if k.len() < 13 {
+                    continue;
+                }
+                if let Some(fk) = FrameKey::from_bytes(&k[1..13]) {
+                    if sel.traj_id.is_none_or(|t| t == fk.traj_id) {
+                        s.insert(fk);
+                    }
+                }
+            }
+            sets.push(s);
+            Ok(())
+        };
+        if sel.require_forces {
+            push_flag(FLAG_HAS_FORCES)?;
+        }
+        if sel.require_velocities {
+            push_flag(FLAG_HAS_VELOCITIES)?;
+        }
+        if sel.require_energy {
+            push_flag(FLAG_HAS_ENERGY)?;
         }
 
         if sets.is_empty() {
@@ -461,5 +587,74 @@ mod tests {
         let uniq = db.unique_frame_keys(&Select::new()).unwrap();
         assert!(uniq.contains(&k1));
         assert!(!uniq.contains(&k2));
+    }
+
+    #[test]
+    fn metadata_indexes_forces_velocities_energy() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            .unwrap();
+        db.append_trajectory_path(2, fixture("tiny_cuh2_forces.con"))
+            .unwrap();
+        db.append_trajectory_path(3, fixture("tiny_cuh2.convel"))
+            .unwrap();
+        db.append_trajectory_path(4, fixture("tiny_cuh2_vel_forces.con"))
+            .unwrap();
+
+        let forces = db.select(&Select::new().require_forces()).unwrap();
+        assert!(forces.iter().any(|k| k.traj_id == 2));
+        assert!(forces.iter().any(|k| k.traj_id == 4));
+        assert!(!forces.iter().any(|k| k.traj_id == 1));
+
+        let vels = db.select(&Select::new().require_velocities()).unwrap();
+        assert!(vels.iter().any(|k| k.traj_id == 3));
+        assert!(vels.iter().any(|k| k.traj_id == 4));
+
+        let both = db
+            .select(&Select::new().require_forces().require_velocities())
+            .unwrap();
+        assert!(both.iter().any(|k| k.traj_id == 4));
+        assert!(!both.iter().any(|k| k.traj_id == 2));
+
+        // Fixture frames with energy=-42.5 in metadata.
+        let with_e = db.select(&Select::new().require_energy()).unwrap();
+        assert!(with_e.iter().any(|k| k.traj_id == 2));
+        assert!(with_e.iter().any(|k| k.traj_id == 4));
+        assert!(!with_e.iter().any(|k| k.traj_id == 1));
+
+        let in_range = db
+            .select(&Select::new().energy_range(-43.0, -42.0).require_forces())
+            .unwrap();
+        assert!(in_range.iter().any(|k| k.traj_id == 2));
+        let miss = db.select(&Select::new().energy_range(0.0, 1.0)).unwrap();
+        assert!(miss.is_empty());
+
+        // Distinct energy via synthetic rewrite.
+        let mut fr = db
+            .get_frame(FrameKey {
+                traj_id: 2,
+                frame_idx: 0,
+            })
+            .unwrap();
+        fr.header.set_energy(-12.5);
+        let mut buf = Cursor::new(Vec::new());
+        {
+            let mut w = ConFrameWriter::new(&mut buf);
+            w.write_frame(&fr).unwrap();
+        }
+        let text = String::from_utf8(buf.into_inner()).unwrap();
+        db.append_trajectory_str(10, &text, "synthetic-energy")
+            .unwrap();
+        let only_synth = db
+            .select(&Select::new().energy_range(-13.0, -12.0))
+            .unwrap();
+        assert_eq!(
+            only_synth,
+            vec![FrameKey {
+                traj_id: 10,
+                frame_idx: 0
+            }]
+        );
     }
 }

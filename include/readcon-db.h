@@ -21,6 +21,10 @@ int rkrdb_append_trajectory(size_t id, uint64_t traj_id, const char *path, uint3
 int rkrdb_select_basic(size_t id, int64_t traj_id, const char *symbol, uint32_t natoms_min,
                        uint32_t natoms_max, uint32_t limit);
 int rkrdb_select_hash(size_t id, const uint8_t *hash16);
+/* flags: bit0=forces, bit1=velocities, bit2=energy present; use_energy_range!=0 applies energy_min/max */
+int rkrdb_select_meta(size_t id, int64_t traj_id, const char *symbol, uint32_t natoms_min,
+                      uint32_t natoms_max, double energy_min, double energy_max,
+                      int use_energy_range, uint32_t flags, uint32_t limit);
 int rkrdb_result_count(size_t id);
 int rkrdb_result_key(size_t id, size_t i, uint64_t *out_traj, uint32_t *out_frame);
 int rkrdb_frame_hash(size_t id, uint64_t traj_id, uint32_t frame_idx, uint8_t *out_hash16);
@@ -59,6 +63,12 @@ public:
   int select_basic(int64_t traj_id, const char *symbol, uint32_t nmin, uint32_t nmax,
                    uint32_t limit) {
     return rkrdb_select_basic(id_, traj_id, symbol, nmin, nmax, limit);
+  }
+
+  int select_meta(int64_t traj_id, const char *symbol, uint32_t nmin, uint32_t nmax,
+                  double emin, double emax, int use_energy, uint32_t flags, uint32_t limit) {
+    return rkrdb_select_meta(id_, traj_id, symbol, nmin, nmax, emin, emax, use_energy, flags,
+                             limit);
   }
 
   int result_count() { return rkrdb_result_count(id_); }

@@ -201,6 +201,63 @@ pub unsafe extern "C" fn rkrdb_select_hash(id: usize, hash16: *const u8) -> c_in
     .unwrap_or(RKRDB_NULL)
 }
 
+/// Metadata / section filters. Pass `use_energy_range=0` to ignore energy bounds.
+/// Flags: bit0=require_forces, bit1=require_velocities, bit2=require_energy.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_select_meta(
+    id: usize,
+    traj_id: i64,
+    symbol: *const c_char,
+    natoms_min: u32,
+    natoms_max: u32,
+    energy_min: f64,
+    energy_max: f64,
+    use_energy_range: c_int,
+    flags: u32,
+    limit: u32,
+) -> c_int {
+    with_handle(id, |h| {
+        let mut sel = Select::new().natoms_range(natoms_min, natoms_max);
+        if traj_id >= 0 {
+            sel = sel.trajectory(traj_id as u64);
+        }
+        if !symbol.is_null() {
+            let s = unsafe { CStr::from_ptr(symbol) };
+            if let Ok(sym) = s.to_str() {
+                if !sym.is_empty() {
+                    sel = sel.require_symbol(sym);
+                }
+            }
+        }
+        if use_energy_range != 0 {
+            sel = sel.energy_range(energy_min, energy_max);
+        }
+        if flags & 1 != 0 {
+            sel = sel.require_forces();
+        }
+        if flags & 2 != 0 {
+            sel = sel.require_velocities();
+        }
+        if flags & 4 != 0 {
+            sel = sel.require_energy();
+        }
+        if limit > 0 {
+            sel = sel.limit(limit as usize);
+        }
+        match h.corpus.select(&sel) {
+            Ok(keys) => {
+                h.last_keys = keys;
+                Ok(RKRDB_OK)
+            }
+            Err(e) => {
+                set_err(h, e);
+                Ok(RKRDB_ERR)
+            }
+        }
+    })
+    .unwrap_or(RKRDB_NULL)
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_result_count(id: usize) -> c_int {
     with_handle(id, |h| Ok(h.last_keys.len() as c_int)).unwrap_or(RKRDB_NULL)

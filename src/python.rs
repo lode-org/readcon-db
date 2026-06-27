@@ -25,7 +25,19 @@ impl PyConCorpus {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
-    #[pyo3(signature = (traj_id=None, symbol=None, natoms_min=0, natoms_max=u32::MAX, exact_hash=None, limit=None))]
+    #[pyo3(signature = (
+        traj_id=None,
+        symbol=None,
+        natoms_min=0,
+        natoms_max=u32::MAX,
+        exact_hash=None,
+        energy_min=None,
+        energy_max=None,
+        require_forces=false,
+        require_velocities=false,
+        require_energy=false,
+        limit=None
+    ))]
     fn select(
         &self,
         traj_id: Option<u64>,
@@ -33,6 +45,11 @@ impl PyConCorpus {
         natoms_min: u32,
         natoms_max: u32,
         exact_hash: Option<Vec<u8>>,
+        energy_min: Option<f64>,
+        energy_max: Option<f64>,
+        require_forces: bool,
+        require_velocities: bool,
+        require_energy: bool,
         limit: Option<usize>,
     ) -> PyResult<Vec<(u64, u32)>> {
         let mut sel = Select::new().natoms_range(natoms_min, natoms_max);
@@ -49,6 +66,21 @@ impl PyConCorpus {
             let mut a = [0u8; 16];
             a.copy_from_slice(&h);
             sel = sel.exact_hash(a);
+        }
+        if energy_min.is_some() || energy_max.is_some() {
+            sel = sel.energy_range(
+                energy_min.unwrap_or(f64::NEG_INFINITY),
+                energy_max.unwrap_or(f64::INFINITY),
+            );
+        }
+        if require_forces {
+            sel = sel.require_forces();
+        }
+        if require_velocities {
+            sel = sel.require_velocities();
+        }
+        if require_energy {
+            sel = sel.require_energy();
         }
         if let Some(n) = limit {
             sel = sel.limit(n);
