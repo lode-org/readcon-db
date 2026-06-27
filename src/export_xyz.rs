@@ -1,5 +1,5 @@
-//! Minimal extended-XYZ writer for metatrain / ASE without depending on ASE at compile time.
-//! Energies/forces from CON frame metadata and atom sections when present.
+//! Extended-XYZ writer for optional on-disk handoff (no ASE).
+//! Prefer CON + readcon-core; chemfiles ingress for XYZ *input*.
 
 use std::io::{self, Write};
 

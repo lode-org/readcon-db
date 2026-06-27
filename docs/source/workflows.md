@@ -1,11 +1,22 @@
 # Workflows
 
-## metatrain / ASE training sets
+## CON-native (default)
 
-See [examples/workflows/metatrain_from_con.md](https://github.com/lode-org/readcon-db/blob/main/examples/workflows/metatrain_from_con.md) in the repository.
+Optimizers → **CON files** → `readcon-db` ingest → `select` / `get_frame` / C/`readcon` decode.
+No ASE on this path.
 
-Summary: `ingest-dir` → `dedup-export --symbol … -o train.xyz` → metatrain `training_set.systems.read_from: train.xyz`.
+## XYZ and other formats
 
-## Deduplication
+Use **readcon-core chemfiles ingress** (`read_chemfiles`, Rust/C equivalents) to obtain
+`ConFrame`s, write CON if needed, then ingest. Do **not** use ASE as the XYZ reader
+for this stack.
 
-Identical CON content (after canonical re-serialize) shares xxHash3-128. `unique_frame_keys` / CLI `dedup-export` keep the first representative key per hash — useful when the same saddle is written from multiple NEB restarts.
+## Optional XYZ *export*
+
+`export_extxyz` / CLI `dedup-export` only for external tools that demand XYZ on disk.
+Implementation does not call ASE.
+
+## ASE `.db` comparison
+
+See repository `examples/benchmarks/` and the CPC manuscript CSE section: mmap multi-reader
+CON store vs SQLite `Atoms` store—not “ASE cannot open CON.”

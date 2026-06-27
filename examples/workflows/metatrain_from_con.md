@@ -1,80 +1,52 @@
-# Workflow: CON campaign → readcon-db → metatrain XYZ
+# Workflows without ASE on the I/O path
 
-metatrain loads ASE systems from **extXYZ** (or ASE `.db`, DiskDataset, MemmapDataset).
-`readcon-db` sits **upstream**: keep optimizers’ CON checkpoints in an mmap corpus,
-filter/dedup, then export only the training subset.
+**Principle:** CON and XYZ (and other chemfiles formats) enter through
+**readcon-core / `readcon`**. ASE is optional for calculators only.
 
-## 1. Ingest optimizer outputs
-
-```bash
-cargo build --release
-./target/release/readcon-db ingest-dir /data/corpus /data/neb_runs/con_files
-# or per file:
-./target/release/readcon-db ingest /data/corpus --start-id 1 run_a.con run_b.convel
-```
-
-## 2. Select / dedup (common ML hygiene)
+## A. Optimizer CON → readcon-db (native)
 
 ```bash
-# all Cu-containing frames, write metatrain-ready XYZ
-./target/release/readcon-db dedup-export /data/corpus --symbol Cu -o train_cu.xyz
-
-# explicit select without dedup
-./target/release/readcon-db select /data/corpus --symbol H --natoms-max 200 --export val.xyz
+readcon-db ingest-dir /data/corpus /data/neb_runs/*.con
+readcon-db select /data/corpus --symbol Cu   # keys only; decode with readcon
 ```
 
-Exact geometry duplicates (re-ingested trajectories) share **xxHash3-128**;
-`dedup-export` keeps the **first** representative key per hash.
-
-## 3. Point metatrain at the XYZ
-
-Minimal `options.yaml` fragment (see metatrain docs for full schema):
-
-```yaml
-training_set:
-  systems:
-    read_from: train_cu.xyz
-    length_unit: angstrom
-  targets:
-    energy:
-      key: energy
-      unit: eV
-    # forces:
-    #   key: forces
-    #   unit: eV/A
-```
-
-If CON files lacked energies/forces, add them in ASE after export, or ingest
-`.con` files that include force sections (`tiny_cuh2_forces.con` style).
-
-## 4. Other database-shaped use cases
-
-| Use case | How |
-|----------|-----|
-| **Train/val split by trajectory** | `select --traj 1 --export train.xyz` vs `--traj 2` |
-| **Composition filter** | `--symbol Cu` (and chain symbols via repeated ingest filters in Rust API) |
-| **Size filter** | `--natoms-min` / `--natoms-max` (surface slabs vs clusters) |
-| **Exact dedup** | `unique_frame_keys` / `dedup-export` / `find_by_hash` |
-| **Cross-check blob** | `hash-file run.con` vs `frame_hash` in DB |
-| **ASE / analysis** | Export XYZ → `ase.io.read(..., index=':')` |
-| **LAMMPS / GROMACS** | Out of scope; export XYZ then convert with Atomsk/ASE |
-
-## 5. Python (optional extension module)
-
-```bash
-cd python && maturin develop --features python
-```
+Python:
 
 ```python
+import readcon
 from readcon_db import ConCorpus
+
+# CON
+frames = readcon.read_all_frames("saddle.con")
+
+# XYZ / PDB / … → ConFrame (requires chemfiles-linked readcon)
+# frames = readcon.read_chemfiles("structures.xyz")
+
 db = ConCorpus("/data/corpus")
+# prefer writing CON then ingest, or extend API to append frames directly later
+db.append_trajectory(1, "saddle.con")
 keys = db.select(symbol="Cu")
-# write XYZ via CLI or extend Py API to call export in a follow-up
+text = db.get_frame_text(*keys[0])  # still CON
 ```
 
-## 6. Why not ASE `.db` alone?
+Stay in CON for analysis that uses `readcon` / C / Fortran APIs.
 
-ASE databases are convenient for **small** sets metatrain already loads.
-`readcon-db` targets **optimizer-native CON** at campaign scale with mmap,
-content-addressed dedup, and multi-language ingest without forcing an ASE
-dependency in Fortran/C pipelines.
+## B. Only if an external tool requires XYZ on disk
+
+Some training front-ends (e.g. metatrain YAML `read_from: train.xyz`) want ASE-style
+extXYZ **files**. That is an **export** concern, not an import dependency on ASE:
+
+```bash
+readcon-db dedup-export /data/corpus --symbol Cu -o train_cu.xyz
+```
+
+Internally this uses `readcon-core` decode + a small XYZ writer in `readcon-db`
+(`export_extxyz`) — **no `ase.io`**. Prefer teaching consumers CON+`readcon`
+when you control the stack.
+
+## C. Why not ASE `.db` as the campaign store?
+
+Even though ASE can open many legacy `.con` files, `.db` is SQLite + `Atoms`:
+weaker multi-reader behavior, no CON-native symbol index, and forces/convel/spec
+v3 gaps on the ASE CON reader. CSE benchmarks (insert/extract/concurrency) are
+in `examples/benchmarks/` and the CPC paper § on ASE `.db` vs readcon-db.

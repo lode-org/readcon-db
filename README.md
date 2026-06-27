@@ -2,122 +2,54 @@
 
 **Mmap-backed CON/convel corpus store** (LMDB via [Heed](https://github.com/meilisearch/heed)), **non-SQL selection**, **xxHash3-128 exact match**, and **Rust / C / C++ / Python / Fortran** bindings.
 
-Companion to [`readcon-core`](https://github.com/lode-org/readcon-core): core owns **format fidelity**; this crate owns **corpus scale** (many trajectories, selective access, OS page-cache residency).
+Companion to [`readcon-core`](https://github.com/lode-org/readcon-core) / Python package **`readcon`**:
 
-## Features
+| Crate / package | Role |
+|-----------------|------|
+| **readcon-core** / **`readcon`** | CON interchange (parse/write/spec v2–v3). **XYZ/PDB/GRO → `ConFrame` via chemfiles** (`read_chemfiles*`), not ASE. Optional `to_ase` only for calculators. |
+| **readcon-db** / **`readcon_db`** | Campaign store: mmap, indexes, multi-reader, dedup. Blobs are **CON text** decoded with readcon-core. |
 
-| Layer | Capability |
-|-------|------------|
-| Storage | Heed/LMDB env: `frames`, `traj_meta`, `idx_natoms`, `idx_symbol`, `frame_by_hash`, `hash_by_frame` |
-| Exact match | **xxHash3-128** of canonical re-serialized CON blob (`xxhash-rust`) |
-| Selection | `Select` builder — trajectory, atom-count range, required symbols, exact hash, limit |
-| Concurrency | Many readers (`RoTxn`), **one writer** for ingest (LMDB) |
-| Rust | `ConCorpus` API |
-| C | `include/readcon-db.h` — `rkrdb_*` (`cdylib` / `staticlib`) |
-| C++ | RAII `readcon_db::Corpus` in the same header (`extern "C"` + thin class) |
-| Python | `maturin` / PyO3 feature `python` → module `readcon_db.ConCorpus` |
-| Fortran | `fortran/ReadConDb` `bind(C)` wrappers |
+ASE is **not** on the critical path for reading CON or XYZ in this stack. ASE `.db` is a comparison baseline for CSE metrics, not the recommended store.
 
-## Quick start (Rust)
+## Quick start
+
+```bash
+# Python (checkouts side-by-side)
+export VIRTUAL_ENV=... && source $VIRTUAL_ENV/bin/activate
+cd readcon-core && maturin develop --release --features python
+# optional foreign formats:
+# maturin develop --release --features python,chemfiles
+cd ../readcon-db && maturin develop --release --features python
+
+cargo test -p readcon-db
+cargo build --release   # libreadcon_db + CLI readcon-db
+```
 
 ```rust
 use readcon_db::{ConCorpus, Select};
-
-let db = ConCorpus::open("/tmp/my_corpus")?;
+let db = ConCorpus::open("/tmp/corpus")?;
 db.append_trajectory_path(1, "run.con")?;
-let keys = db.select(&Select::new().require_symbol("Cu").natoms_range(1, 500))?;
+// XYZ in: use readcon-core chemfiles → ConFrame → append (see workflows)
+let keys = db.select(&Select::new().require_symbol("Cu"))?;
 let h = db.frame_hash(keys[0])?;
-assert_eq!(db.find_by_hash(h)?, Some(keys[0]));
-// metatrain / ASE:
-db.export_extxyz(&keys, "train.xyz", "energy")?;
 ```
 
 ```bash
-cargo test
-cargo build --release          # lib + CLI `readcon-db`
-./target/release/readcon-db ingest-dir /tmp/corpus ./path/to/cons
-./target/release/readcon-db dedup-export /tmp/corpus --symbol Cu -o train_cu.xyz
+./target/release/readcon-db ingest-dir /tmp/corpus /path/to/con_files
+./target/release/readcon-db dedup-export /tmp/corpus --symbol Cu -o subset.xyz  # only if a tool demands XYZ on disk
 ```
 
-**metatrain:** point `training_set.systems.read_from` at the exported XYZ
-(see [`examples/workflows/metatrain_from_con.md`](examples/workflows/metatrain_from_con.md)
-and `options.metatrain.snippet.yaml`).
+Foreign trajectories: **`readcon.read_chemfiles("traj.xyz")` → frames → ingest into readcon-db** (chemfiles-enabled build), not `ase.io.read`.
 
-## C
+## Design
 
-```c
-#include "readcon-db.h"
-size_t id;
-rkrdb_open("/tmp/corpus", &id);
-uint32_t n;
-rkrdb_append_trajectory(id, 1, "run.con", &n);
-rkrdb_select_basic(id, 1, "Cu", 1, 100000, 0);
-int m = rkrdb_result_count(id);
-uint8_t hash[16];
-rkrdb_frame_hash(id, 1, 0, hash);
-rkrdb_close(id);
-```
-
-Link `-lreadcon_db` (and transitive deps from `cargo` staticlib as needed). Header: `include/readcon-db.h`.
-
-## Python
-
-```bash
-cd python && maturin develop --features python
-```
-
-```python
-from readcon_db import ConCorpus
-db = ConCorpus("/tmp/corpus")
-db.append_trajectory(1, "run.con")
-keys = db.select(traj_id=1, symbol="Cu")
-h = db.frame_hash(1, 0)
-assert db.find_by_hash(h) == (1, 0)
-```
-
-## Fortran
-
-Build the shared library first (`cargo build --release`), then point `fpm` / your compiler at `include/` and `target/release/libreadcon_db.so` (or static). Module: `fortran/ReadConDb/src/readcon_db.f90`.
-
-## Design notes
-
-- **No SQL** — access patterns are explicit indexes + in-process intersection.
+- **No SQL** — explicit indexes + in-process intersection.
 - **Decode via readcon-core** — CON semantics never fork.
-- **Dedup map** `frame_by_hash` keeps the **first** key for a given content hash (stable representative).
-- Default map size **2 GiB**; create a larger env or reopen with a bigger map for huge corpora.
+- **xxHash3-128** on canonical blobs — exact dedup / `find_by_hash`.
+- **Many readers, one writer** (LMDB).
+
+Full ABI table, logo, Sphinx docs, and site: see `docs/`, `website/`, `assets/logo/`, `CHANGELOG.md`.
 
 ## License
 
 MIT
-
-## Documentation & website
-
-| Artifact | Path |
-|----------|------|
-| **Logo (SVG)** | [`assets/logo/readcon-db-logo.svg`](assets/logo/readcon-db-logo.svg) |
-| **Wordmark** | [`assets/logo/readcon-db-wordmark.svg`](assets/logo/readcon-db-wordmark.svg) |
-| **Brand notes** | [`assets/logo/BRAND.md`](assets/logo/BRAND.md) |
-| **Marketing site** | open [`website/index.html`](website/index.html) (teal LODE-style landing) |
-| **Sphinx docs** | `docs/source/` — `cd docs && pip install -r requirements.txt && make html` |
-| **CI Pages** | `.github/workflows/pages.yml` publishes `website/` + Sphinx under `/docs` |
-
-Local preview:
-
-```bash
-cd docs && pip install -r requirements.txt && make html
-# open docs/_build/html/index.html
-python3 -m http.server 8765 --directory website   # marketing page
-```
-
-## ASE and CON
-
-ASE can `ase.io.read("file.con")` for many legacy coordinate files. **readcon** is still
-required for forces-section files, `.convel`, CON spec v2/v3 metadata, and non-Python
-ABIs. **readcon-db** is the campaign store (mmap, indexes, multi-reader)—not a claim that
-ASE has never seen CON. Install Python wheels:
-
-```bash
-# from checkouts (path dep on readcon-core)
-cd readcon-core && maturin develop --release --features python
-cd ../readcon-db && maturin develop --release --features python
-```
