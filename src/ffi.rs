@@ -258,6 +258,108 @@ pub unsafe extern "C" fn rkrdb_select_meta(
     .unwrap_or(RKRDB_NULL)
 }
 
+
+/// Rebuild secondary indexes from authoritative frame blobs.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_reindex(id: usize) -> c_int {
+    with_handle(id, |h| match h.corpus.reindex() {
+        Ok(_) => Ok(RKRDB_OK),
+        Err(e) => {
+            set_err(h, e);
+            Ok(RKRDB_ERR)
+        }
+    })
+    .unwrap_or(RKRDB_NULL)
+}
+
+/// Campaign select: composition formula (NUL-terminated, may be null), optional fmax window.
+/// `use_fmax_range` non-zero applies fmax_min/max. Flags: bit0 forces, bit1 velocities, bit2 energy.
+/// Element constraints: pass `elem_sym` + `elem_count` + `elem_exact` (1=exact, 0=min) for one pair (null skips).
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_select_campaign(
+    id: usize,
+    traj_id: i64,
+    symbol: *const c_char,
+    natoms_min: u32,
+    natoms_max: u32,
+    formula: *const c_char,
+    energy_min: f64,
+    energy_max: f64,
+    use_energy_range: c_int,
+    fmax_min: f64,
+    fmax_max: f64,
+    use_fmax_range: c_int,
+    elem_sym: *const c_char,
+    elem_count: u32,
+    elem_exact: c_int,
+    flags: u32,
+    limit: u32,
+) -> c_int {
+    with_handle(id, |h| {
+        let mut sel = Select::new().natoms_range(natoms_min, natoms_max);
+        if traj_id >= 0 {
+            sel = sel.trajectory(traj_id as u64);
+        }
+        if !symbol.is_null() {
+            let s = unsafe { CStr::from_ptr(symbol) };
+            if let Ok(sym) = s.to_str() {
+                if !sym.is_empty() {
+                    sel = sel.require_symbol(sym);
+                }
+            }
+        }
+        if !formula.is_null() {
+            let s = unsafe { CStr::from_ptr(formula) };
+            if let Ok(f) = s.to_str() {
+                if !f.is_empty() {
+                    sel = sel.exact_composition(f);
+                }
+            }
+        }
+        if use_energy_range != 0 {
+            sel = sel.energy_range(energy_min, energy_max);
+        }
+        if use_fmax_range != 0 {
+            sel = sel.fmax_range(fmax_min, fmax_max);
+        }
+        if !elem_sym.is_null() {
+            let s = unsafe { CStr::from_ptr(elem_sym) };
+            if let Ok(sym) = s.to_str() {
+                if !sym.is_empty() {
+                    if elem_exact != 0 {
+                        sel = sel.element_exact(sym, elem_count);
+                    } else {
+                        sel = sel.element_min(sym, elem_count);
+                    }
+                }
+            }
+        }
+        if flags & 1 != 0 {
+            sel = sel.require_forces();
+        }
+        if flags & 2 != 0 {
+            sel = sel.require_velocities();
+        }
+        if flags & 4 != 0 {
+            sel = sel.require_energy();
+        }
+        if limit > 0 {
+            sel = sel.limit(limit as usize);
+        }
+        match h.corpus.select(&sel) {
+            Ok(keys) => {
+                h.last_keys = keys;
+                Ok(RKRDB_OK)
+            }
+            Err(e) => {
+                set_err(h, e);
+                Ok(RKRDB_ERR)
+            }
+        }
+    })
+    .unwrap_or(RKRDB_NULL)
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_result_count(id: usize) -> c_int {
     with_handle(id, |h| Ok(h.last_keys.len() as c_int)).unwrap_or(RKRDB_NULL)

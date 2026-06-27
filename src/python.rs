@@ -33,6 +33,11 @@ impl PyConCorpus {
         exact_hash=None,
         energy_min=None,
         energy_max=None,
+        fmax_min=None,
+        fmax_max=None,
+        element_exact=None,
+        element_min=None,
+        formula=None,
         require_forces=false,
         require_velocities=false,
         require_energy=false,
@@ -47,6 +52,11 @@ impl PyConCorpus {
         exact_hash: Option<Vec<u8>>,
         energy_min: Option<f64>,
         energy_max: Option<f64>,
+        fmax_min: Option<f64>,
+        fmax_max: Option<f64>,
+        element_exact: Option<Vec<(String, u32)>>,
+        element_min: Option<Vec<(String, u32)>>,
+        formula: Option<String>,
         require_forces: bool,
         require_velocities: bool,
         require_energy: bool,
@@ -73,6 +83,22 @@ impl PyConCorpus {
                 energy_max.unwrap_or(f64::INFINITY),
             );
         }
+        if fmax_min.is_some() || fmax_max.is_some() {
+            sel = sel.fmax_range(fmax_min.unwrap_or(0.0), fmax_max.unwrap_or(f64::INFINITY));
+        }
+        if let Some(pairs) = element_exact {
+            for (sym, c) in pairs {
+                sel = sel.element_exact(sym, c);
+            }
+        }
+        if let Some(pairs) = element_min {
+            for (sym, c) in pairs {
+                sel = sel.element_min(sym, c);
+            }
+        }
+        if let Some(f) = formula {
+            sel = sel.exact_composition(f);
+        }
         if require_forces {
             sel = sel.require_forces();
         }
@@ -93,6 +119,21 @@ impl PyConCorpus {
             .into_iter()
             .map(|k| (k.traj_id, k.frame_idx))
             .collect())
+    }
+
+    fn reindex(&self) -> PyResult<u32> {
+        self.inner
+            .reindex()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    fn frame_formula(&self, traj_id: u64, frame_idx: u32) -> PyResult<String> {
+        self.inner
+            .frame_formula(FrameKey {
+                traj_id,
+                frame_idx,
+            })
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     fn frame_hash(&self, traj_id: u64, frame_idx: u32) -> PyResult<Vec<u8>> {

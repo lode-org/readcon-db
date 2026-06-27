@@ -19,6 +19,9 @@ Environment (Heed / LMDB)
 ├── idx_natoms      : (n_atoms BE, FrameKey) → ()
 ├── idx_symbol      : (symbol ‖ 0xFF ‖ FrameKey) → ()
 ├── idx_energy      : (ord(E) BE, FrameKey) → ()   # finite energy only
+├── idx_fmax        : (ord(fmax) BE, FrameKey) → ()  # forces present only
+├── idx_elem_count  : symbol ‖ 0xFF ‖ BE count ‖ FrameKey
+├── idx_formula     : `Cu:2|H:2` ‖ 0xFF ‖ FrameKey
 ├── idx_flags       : (flag_id ‖ FrameKey) → ()    # forces / velocities / has_energy
 ├── frame_by_hash   : xxh3-128 → FrameKey (first wins)
 └── hash_by_frame   : FrameKey → xxh3-128
@@ -27,16 +30,21 @@ Environment (Heed / LMDB)
 `FrameKey` is 12 bytes: `traj_id` (BE u64) + `frame_idx` (BE u32) so lexicographic order matches numeric order.
 
 **Flag ids** (u8): `1` = has forces, `2` = has velocities, `3` = has finite energy.
-Energy order uses an order-preserving map of finite `f64` bits so range scans
-match IEEE order. Energy comes from `FrameHeader::energy()` / metadata key
-`energy` (readcon-core constants). Forces/velocities from declared `sections`
+Energy / fmax use an order-preserving map of finite `f64` bits. Formula is
+sorted `Sym:count` joined by `|`. Forces/velocities from declared `sections`
 or per-atom data.
 
 ## Ingest path
 
-1. `ConFrameIterator::next_with_raw_span` over file text (readcon-core)—store the **original** substring when possible (no hot-path re-serialize).
-2. Parse once for indexes (natoms, symbols, energy, flags).
-3. Store blob; compute **xxHash3-128**; update hash maps and secondary B-trees.
+1. Path / CON text: `ConFrameIterator::next_with_raw_span` when possible.
+2. **In-memory** `append_trajectory_frames` / `extend_trajectory_frames` for chemfiles → corpus.
+3. Parse once for indexes (natoms, symbols, composition, energy, fmax, flags).
+4. Store blob; compute **xxHash3-128**; update secondary B-trees.
+
+## Reindex
+
+`ConCorpus::reindex` / CLI `readcon-db reindex` clears secondary DBs and rebuilds
+from authoritative `frames` (schema evolution without delete+re-ingest).
 
 ## Selection and query costs
 
@@ -46,8 +54,11 @@ Postings lists from secondary DBs are intersected in-process (`BTreeSet`):
 |-----------|-------|-------------|
 | `exact_hash` | `frame_by_hash` | Point lookup |
 | `require_symbol` | `idx_symbol` | Prefix walk for that element |
+| `element_exact` / `element_min` | `idx_elem_count` | Prefix + count filter |
+| `exact_composition` | `idx_formula` | Prefix on canonical formula |
 | `natoms_range` | `idx_natoms` | Ordered scan, early stop |
 | `energy_range` | `idx_energy` | Ordered scan on finite energies |
+| `fmax_range` | `idx_fmax` | Ordered scan (no forces ⇒ not indexed) |
 | `require_forces` / `require_velocities` / `require_energy` | `idx_flags` | Prefix walk on flag id |
 | traj filter alone | `frames` keys | Full key scan if no other index |
 

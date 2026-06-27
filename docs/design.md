@@ -13,27 +13,40 @@ Treat the corpus as an **embedded key-value database** with **hand-built seconda
 - Mmap-first; readers do not copy the whole DB into a heap arena.
 - Concurrent read transactions are first-class.
 - Predictable latency for point lookups and ordered scans.
-- We control indexes (natoms, symbols, energy bins, section flags) for exact access patterns of MD post-processing.
-- SQL would invite ad hoc joins (frames ⨝ trajectories ⨝ species) that encourage copies and planner variance.
+- We control indexes (natoms, symbols, energy, composition, fmax, section flags) for exact access patterns of MD post-processing.
+- SQL would invite ad hoc joins that encourage copies and planner variance.
 
-## Secondary indexes (v1)
+## Secondary indexes
 
 | DB name | Key layout | Select predicates |
 |---------|------------|-------------------|
 | `idx_natoms` | BE `u32` n_atoms ‖ `FrameKey` | `natoms_range` |
-| `idx_symbol` | symbol UTF-8 ‖ `0xff` ‖ `FrameKey` | `require_symbol` (AND over symbols) |
+| `idx_symbol` | symbol UTF-8 ‖ `0xff` ‖ `FrameKey` | `require_symbol` |
+| `idx_elem_count` | symbol ‖ `0xff` ‖ BE count ‖ `FrameKey` | `element_exact` / `element_min` |
+| `idx_formula` | canonical `Sym:count\|...` ‖ `0xff` ‖ `FrameKey` | `exact_composition` |
 | `idx_energy` | order-preserving BE bits of finite energy ‖ `FrameKey` | `energy_range` |
+| `idx_fmax` | order-preserving max \(\|F_i\|\) ‖ `FrameKey` (forces only) | `fmax_range` |
 | `idx_flags` | `flag_id` (u8) ‖ `FrameKey` | `require_forces` / `require_velocities` / `require_energy` |
 | `frame_by_hash` / `hash_by_frame` | xxHash3-128 | `exact_hash`, dedup |
 
-Energy is taken from `FrameHeader::energy()` (spec key `energy`). Forces/velocities from declared `sections` or per-atom data. Finite energies only enter `idx_energy`; missing energy is not a range miss—use `require_energy` when presence matters.
+Formula encoding: sorted non-empty symbols, `Sym:count` joined by `|` (e.g. `Cu:2|H:2`). Finite energies and fmax only; frames without forces never satisfy a finite `fmax_range`.
 
-**Query cost model:** each predicate materializes a `BTreeSet<FrameKey>` from one index scan (or hash point lookup). Final result is set intersection, then sort + optional `limit`. Cost is proportional to the **smallest** selective index when predicates are independent—not to full corpus decode. Full-table fallback only when no predicate uses an index (traj filter alone still scans `frames` keys).
+**Query cost model:** each predicate materializes a `BTreeSet<FrameKey>` from one index scan (or hash point lookup). Final result is set intersection, then sort + optional `limit`. Cost tracks selective indexes—not full corpus decode. Full-table fallback only when no indexed predicate is set.
+
+## Ingest paths
+
+1. Path / multi-frame CON text (`append_trajectory_path` / `append_trajectory_str`) with `next_with_raw_span` when possible.
+2. **In-memory frames** (`append_trajectory_frames` / `extend_trajectory_frames`) for chemfiles → `ConFrame` → corpus without a temp file.
+3. Directory ingest (`ingest_directory`).
+
+## Reindex
+
+`ConCorpus::reindex` (CLI: `readcon-db reindex <corpus_dir>`) clears secondary DBs and rebuilds them from authoritative `frames` blobs—**schema upgrade path** after adding indexes. Safe to run twice (idempotent key sets). Frames and `traj_meta` are not deleted.
 
 ## Invariants
 
 1. **Frame blob is authoritative** for fidelity; indexes are derived and rebuildable.
-2. **Single writer** for ingest; analysis is read-only.
+2. **Single writer** for ingest/reindex; analysis is read-only.
 3. **Decode with `readcon-core`** so CON semantics never fork.
 4. **Selection returns keys first**; callers decode lazily.
 
@@ -42,23 +55,15 @@ Energy is taken from `FrameHeader::energy()` (spec key `energy`). Forces/velocit
 | Crate | Responsibility |
 |-------|----------------|
 | [readcon-core](https://github.com/lode-org/readcon-core) | CON/convel interchange, chemfiles ingress, multi-language hourglass ABI |
-| **readcon-db** (this repo) | Campaign corpora, indexes, mmap multi-reader, exact dedup |
+| **readcon-db** (this repo) | Campaign corpora, indexes, mmap multi-reader, exact dedup, reindex |
 
-Foreign formats (XYZ/PDB/…) enter via **readcon-core chemfiles → `ConFrame` → ingest**; ASE is optional for calculators only.
-
-## Rebuild indexes
-
-`readcon-db reindex` (planned) walks `frames` and regenerates secondary DBs — required after corruption or schema evolution. Until then, recreate the corpus directory from source CON files.
+ASE is calculator-only; not the campaign store.
 
 ## Security / multi-tenant
 
-Single trusted user on local disk for v1 (same threat model as CON files on a workstation). No network protocol in v1.
+Single trusted user on local disk for v1. No network protocol in v1.
 
-## Status / roadmap
+## Status
 
-1. ~~Heed env + `frames` + `traj_meta` + ingest from path.~~
-2. ~~`idx_natoms` + `idx_symbol` + `Select` intersection.~~
-3. ~~`idx_energy` + `idx_flags` (forces/velocities/energy presence).~~
-4. Optional cooked SoA blobs.
-5. Python / C / Fortran bindings returning keys; decode in `readcon` Python package.
-6. Parallel reindex with rayon (still one writer txn at a time, chunked commits).
+Shipped: frames, traj_meta, composition/energy/fmax/flags/natoms/symbol/hash indexes, `Select`, reindex, append frames, CLI/Python/C campaign select.
+Roadmap: optional cooked SoA blobs; parallel chunked reindex.

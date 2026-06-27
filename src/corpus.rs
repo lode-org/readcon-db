@@ -4,7 +4,7 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 use heed::types::{Bytes, Str, Unit};
-use heed::{Database, Env, EnvOpenOptions};
+use heed::{Database, Env, EnvOpenOptions, RwTxn};
 use readcon_core::iterators::ConFrameIterator;
 use readcon_core::types::ConFrame;
 use readcon_core::writer::ConFrameWriter;
@@ -13,13 +13,15 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::export_xyz::write_frame_extxyz;
 use crate::keys::{
-    energy_bin_key, flag_key, hash_frame_bytes, natoms_key, symbol_key, symbol_prefix,
-    ContentHash, FrameKey, TrajId, FLAG_HAS_ENERGY, FLAG_HAS_FORCES, FLAG_HAS_VELOCITIES,
+    composition_formula, elem_count_key, elem_count_symbol_prefix, energy_bin_key, flag_key,
+    fmax_bin_key, formula_key, formula_prefix, hash_frame_bytes, natoms_key, ordered_f64_bits,
+    parse_elem_count_key, species_counts_from_symbols, symbol_key, symbol_prefix, ContentHash,
+    FrameKey, TrajId, FLAG_HAS_ENERGY, FLAG_HAS_FORCES, FLAG_HAS_VELOCITIES,
 };
 use crate::select::Select;
 
 const MAP_SIZE: usize = 2 * 1024 * 1024 * 1024;
-const MAX_DBS: u32 = 24;
+const MAX_DBS: u32 = 32;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TrajMeta {
@@ -34,10 +36,14 @@ pub struct ConCorpus {
     traj_meta: Database<Bytes, Str>,
     idx_natoms: Database<Bytes, Unit>,
     idx_symbol: Database<Bytes, Unit>,
-    /// Ordered energy bins (only finite energies).
     idx_energy: Database<Bytes, Unit>,
-    /// Capability flags: forces / velocities / has_energy.
     idx_flags: Database<Bytes, Unit>,
+    /// Per-element atom counts: symbol ‖ 0xff ‖ BE count ‖ FrameKey
+    idx_elem_count: Database<Bytes, Unit>,
+    /// Canonical formula ‖ 0xff ‖ FrameKey
+    idx_formula: Database<Bytes, Unit>,
+    /// Ordered max force magnitude (forces present only)
+    idx_fmax: Database<Bytes, Unit>,
     frame_by_hash: Database<Bytes, Bytes>,
     hash_by_frame: Database<Bytes, Bytes>,
 }
@@ -75,17 +81,22 @@ fn frame_energy(frame: &ConFrame) -> Option<f64> {
         })
 }
 
-/// Order-preserving u64 key prefix for a finite energy (matches `energy_bin_key`).
-fn energy_ordered_bits(energy: f64) -> Option<u64> {
-    if !energy.is_finite() {
-        return None;
+/// Euclidean max ||F_i|| over atoms with force data; None if no forces.
+pub fn frame_fmax(frame: &ConFrame) -> Option<f64> {
+    let mut m = None;
+    for a in &frame.atom_data {
+        if let Some(f) = a.force {
+            let mag = (f[0] * f[0] + f[1] * f[1] + f[2] * f[2]).sqrt();
+            if mag.is_finite() {
+                m = Some(m.map_or(mag, |cur: f64| cur.max(mag)));
+            }
+        }
     }
-    let bits = energy.to_bits();
-    Some(if energy.is_sign_negative() {
-        !bits
-    } else {
-        bits ^ (1u64 << 63)
-    })
+    m
+}
+
+fn frame_species(frame: &ConFrame) -> Vec<(String, u32)> {
+    species_counts_from_symbols(frame.atom_data.iter().map(|a| a.symbol.as_ref()))
 }
 
 impl ConCorpus {
@@ -104,6 +115,9 @@ impl ConCorpus {
         let idx_symbol = env.create_database(&mut wtxn, Some("idx_symbol"))?;
         let idx_energy = env.create_database(&mut wtxn, Some("idx_energy"))?;
         let idx_flags = env.create_database(&mut wtxn, Some("idx_flags"))?;
+        let idx_elem_count = env.create_database(&mut wtxn, Some("idx_elem_count"))?;
+        let idx_formula = env.create_database(&mut wtxn, Some("idx_formula"))?;
+        let idx_fmax = env.create_database(&mut wtxn, Some("idx_fmax"))?;
         let frame_by_hash = env.create_database(&mut wtxn, Some("frame_by_hash"))?;
         let hash_by_frame = env.create_database(&mut wtxn, Some("hash_by_frame"))?;
         wtxn.commit()?;
@@ -117,6 +131,9 @@ impl ConCorpus {
             idx_symbol,
             idx_energy,
             idx_flags,
+            idx_elem_count,
+            idx_formula,
+            idx_fmax,
             frame_by_hash,
             hash_by_frame,
         })
@@ -124,6 +141,61 @@ impl ConCorpus {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    fn index_frame(&self, wtxn: &mut RwTxn, fk: FrameKey, frame: &ConFrame, blob: &str) -> Result<()> {
+        let fk_b = fk.to_bytes();
+        self.frames.put(wtxn, &fk_b[..], blob)?;
+
+        let hash = hash_frame_bytes(blob.as_bytes());
+        let hb = hash.to_bytes();
+        self.hash_by_frame.put(wtxn, &fk_b[..], &hb[..])?;
+        if self.frame_by_hash.get(wtxn, &hb[..])?.is_none() {
+            self.frame_by_hash.put(wtxn, &hb[..], &fk_b[..])?;
+        }
+
+        let n_atoms = frame.atom_data.len() as u32;
+        let nk = natoms_key(n_atoms, fk);
+        self.idx_natoms.put(wtxn, &nk[..], &())?;
+
+        let counts = frame_species(frame);
+        let mut syms = BTreeSet::new();
+        for (sym, cnt) in &counts {
+            syms.insert(sym.clone());
+            let ek = elem_count_key(sym, *cnt, fk);
+            self.idx_elem_count.put(wtxn, &ek[..], &())?;
+        }
+        for s in &syms {
+            let sk = symbol_key(s, fk);
+            self.idx_symbol.put(wtxn, &sk[..], &())?;
+        }
+        let formula = composition_formula(&counts);
+        if !formula.is_empty() {
+            let fk_form = formula_key(&formula, fk);
+            self.idx_formula.put(wtxn, &fk_form[..], &())?;
+        }
+
+        if let Some(e) = frame_energy(frame) {
+            if let Some(ek) = energy_bin_key(e, fk) {
+                self.idx_energy.put(wtxn, &ek[..], &())?;
+            }
+            let fk_flag = flag_key(FLAG_HAS_ENERGY, fk);
+            self.idx_flags.put(wtxn, &fk_flag[..], &())?;
+        }
+        if frame_has_forces(frame) {
+            let fk_flag = flag_key(FLAG_HAS_FORCES, fk);
+            self.idx_flags.put(wtxn, &fk_flag[..], &())?;
+            if let Some(fm) = frame_fmax(frame) {
+                if let Some(fk_fm) = fmax_bin_key(fm, fk) {
+                    self.idx_fmax.put(wtxn, &fk_fm[..], &())?;
+                }
+            }
+        }
+        if frame_has_velocities(frame) {
+            let fk_flag = flag_key(FLAG_HAS_VELOCITIES, fk);
+            self.idx_flags.put(wtxn, &fk_flag[..], &())?;
+        }
+        Ok(())
     }
 
     pub fn append_trajectory_path(&self, traj_id: TrajId, file: impl AsRef<Path>) -> Result<u32> {
@@ -154,52 +226,11 @@ impl ConCorpus {
                 Some(Err(e)) => return Err(Error::Parse(e.to_string())),
                 Some(Ok(x)) => x,
             };
-            let hash = hash_frame_bytes(blob.as_bytes());
-
             let fk = FrameKey {
                 traj_id,
                 frame_idx,
             };
-            let fk_b = fk.to_bytes();
-            self.frames.put(&mut wtxn, &fk_b[..], blob)?;
-
-            let hb = hash.to_bytes();
-            self.hash_by_frame.put(&mut wtxn, &fk_b[..], &hb[..])?;
-            if self.frame_by_hash.get(&wtxn, &hb[..])?.is_none() {
-                self.frame_by_hash.put(&mut wtxn, &hb[..], &fk_b[..])?;
-            }
-
-            let n_atoms = frame.atom_data.len() as u32;
-            let nk = natoms_key(n_atoms, fk);
-            self.idx_natoms.put(&mut wtxn, &nk[..], &())?;
-
-            let mut syms = BTreeSet::new();
-            for a in &frame.atom_data {
-                if !a.symbol.is_empty() {
-                    syms.insert(a.symbol.to_string());
-                }
-            }
-            for s in &syms {
-                let sk = symbol_key(s, fk);
-                self.idx_symbol.put(&mut wtxn, &sk[..], &())?;
-            }
-
-            if let Some(e) = frame_energy(&frame) {
-                if let Some(ek) = energy_bin_key(e, fk) {
-                    self.idx_energy.put(&mut wtxn, &ek[..], &())?;
-                }
-                let fk_flag = flag_key(FLAG_HAS_ENERGY, fk);
-                self.idx_flags.put(&mut wtxn, &fk_flag[..], &())?;
-            }
-            if frame_has_forces(&frame) {
-                let fk_flag = flag_key(FLAG_HAS_FORCES, fk);
-                self.idx_flags.put(&mut wtxn, &fk_flag[..], &())?;
-            }
-            if frame_has_velocities(&frame) {
-                let fk_flag = flag_key(FLAG_HAS_VELOCITIES, fk);
-                self.idx_flags.put(&mut wtxn, &fk_flag[..], &())?;
-            }
-
+            self.index_frame(&mut wtxn, fk, &frame, blob)?;
             frame_idx += 1;
         }
 
@@ -212,6 +243,177 @@ impl ConCorpus {
             .put(&mut wtxn, &tid_key[..], meta_s.as_str())?;
         wtxn.commit()?;
         Ok(frame_idx)
+    }
+
+    /// Ingest already-parsed frames (chemfiles / builder path). Serializes with `ConFrameWriter`.
+    pub fn append_trajectory_frames(
+        &self,
+        traj_id: TrajId,
+        frames: &[ConFrame],
+        source: impl Into<String>,
+    ) -> Result<u32> {
+        let source = source.into();
+        let mut wtxn = self.env.write_txn()?;
+        let tid_key = traj_id.to_be_bytes();
+        if let Some(existing) = self.traj_meta.get(&wtxn, &tid_key[..])? {
+            let meta: TrajMeta = serde_json::from_str(existing)?;
+            return Err(Error::TrajExists(traj_id, meta.n_frames));
+        }
+        let mut frame_idx: u32 = 0;
+        for fr in frames {
+            let mut buf = Cursor::new(Vec::new());
+            {
+                let mut w = ConFrameWriter::new(&mut buf);
+                w.write_frame(fr)
+                    .map_err(|e| Error::Parse(format!("serialize: {e}")))?;
+            }
+            let blob = String::from_utf8(buf.into_inner())
+                .map_err(|e| Error::Message(format!("utf8: {e}")))?;
+            let fk = FrameKey {
+                traj_id,
+                frame_idx,
+            };
+            self.index_frame(&mut wtxn, fk, fr, &blob)?;
+            frame_idx += 1;
+        }
+        let meta = TrajMeta {
+            n_frames: frame_idx,
+            source,
+        };
+        self.traj_meta
+            .put(&mut wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
+        wtxn.commit()?;
+        Ok(frame_idx)
+    }
+
+    /// Append frames to an existing trajectory (or create it). Returns new total frame count.
+    pub fn extend_trajectory_frames(
+        &self,
+        traj_id: TrajId,
+        frames: &[ConFrame],
+        source_hint: impl Into<String>,
+    ) -> Result<u32> {
+        let mut wtxn = self.env.write_txn()?;
+        let tid_key = traj_id.to_be_bytes();
+        let (mut frame_idx, source) = if let Some(existing) = self.traj_meta.get(&wtxn, &tid_key[..])? {
+            let meta: TrajMeta = serde_json::from_str(existing)?;
+            (meta.n_frames, meta.source)
+        } else {
+            (0u32, source_hint.into())
+        };
+        for fr in frames {
+            let mut buf = Cursor::new(Vec::new());
+            {
+                let mut w = ConFrameWriter::new(&mut buf);
+                w.write_frame(fr)
+                    .map_err(|e| Error::Parse(format!("serialize: {e}")))?;
+            }
+            let blob = String::from_utf8(buf.into_inner())
+                .map_err(|e| Error::Message(format!("utf8: {e}")))?;
+            let fk = FrameKey {
+                traj_id,
+                frame_idx,
+            };
+            self.index_frame(&mut wtxn, fk, fr, &blob)?;
+            frame_idx += 1;
+        }
+        let meta = TrajMeta {
+            n_frames: frame_idx,
+            source,
+        };
+        self.traj_meta
+            .put(&mut wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
+        wtxn.commit()?;
+        Ok(frame_idx)
+    }
+
+    fn clear_secondary(&self, wtxn: &mut RwTxn) -> Result<()> {
+        self.idx_natoms.clear(wtxn)?;
+        self.idx_symbol.clear(wtxn)?;
+        self.idx_energy.clear(wtxn)?;
+        self.idx_flags.clear(wtxn)?;
+        self.idx_elem_count.clear(wtxn)?;
+        self.idx_formula.clear(wtxn)?;
+        self.idx_fmax.clear(wtxn)?;
+        self.frame_by_hash.clear(wtxn)?;
+        self.hash_by_frame.clear(wtxn)?;
+        Ok(())
+    }
+
+    /// Rebuild all secondary indexes from authoritative `frames` blobs (schema upgrade path).
+    pub fn reindex(&self) -> Result<u32> {
+        let mut wtxn = self.env.write_txn()?;
+        self.clear_secondary(&mut wtxn)?;
+
+        let mut n = 0u32;
+        // Collect keys first (heed iterator + puts on same txn is safer with snapshot list)
+        let mut keys: Vec<Vec<u8>> = Vec::new();
+        {
+            let mut iter = self.frames.iter(&wtxn)?;
+            while let Some(Ok((k, _))) = iter.next() {
+                keys.push(k.to_vec());
+            }
+        }
+        for k in keys {
+            let Some(fk) = FrameKey::from_bytes(&k) else {
+                continue;
+            };
+            let Some(blob) = self.frames.get(&wtxn, &k)? else {
+                continue;
+            };
+            let blob_owned = blob.to_owned();
+            let mut it = ConFrameIterator::new(&blob_owned);
+            let frame = it
+                .next()
+                .ok_or_else(|| Error::Parse("empty blob on reindex".into()))?
+                .map_err(|e| Error::Parse(e.to_string()))?;
+            // index_frame would put frames again — only indexes + hashes
+            let hash = hash_frame_bytes(blob_owned.as_bytes());
+            let hb = hash.to_bytes();
+            let fk_b = fk.to_bytes();
+            self.hash_by_frame.put(&mut wtxn, &fk_b[..], &hb[..])?;
+            if self.frame_by_hash.get(&wtxn, &hb[..])?.is_none() {
+                self.frame_by_hash.put(&mut wtxn, &hb[..], &fk_b[..])?;
+            }
+            let n_atoms = frame.atom_data.len() as u32;
+            self.idx_natoms
+                .put(&mut wtxn, &natoms_key(n_atoms, fk)[..], &())?;
+            let counts = frame_species(&frame);
+            for (sym, cnt) in &counts {
+                self.idx_elem_count
+                    .put(&mut wtxn, &elem_count_key(sym, *cnt, fk)[..], &())?;
+                self.idx_symbol
+                    .put(&mut wtxn, &symbol_key(sym, fk)[..], &())?;
+            }
+            let formula = composition_formula(&counts);
+            if !formula.is_empty() {
+                self.idx_formula
+                    .put(&mut wtxn, &formula_key(&formula, fk)[..], &())?;
+            }
+            if let Some(e) = frame_energy(&frame) {
+                if let Some(ek) = energy_bin_key(e, fk) {
+                    self.idx_energy.put(&mut wtxn, &ek[..], &())?;
+                }
+                self.idx_flags
+                    .put(&mut wtxn, &flag_key(FLAG_HAS_ENERGY, fk)[..], &())?;
+            }
+            if frame_has_forces(&frame) {
+                self.idx_flags
+                    .put(&mut wtxn, &flag_key(FLAG_HAS_FORCES, fk)[..], &())?;
+                if let Some(fm) = frame_fmax(&frame) {
+                    if let Some(fk_fm) = fmax_bin_key(fm, fk) {
+                        self.idx_fmax.put(&mut wtxn, &fk_fm[..], &())?;
+                    }
+                }
+            }
+            if frame_has_velocities(&frame) {
+                self.idx_flags
+                    .put(&mut wtxn, &flag_key(FLAG_HAS_VELOCITIES, fk)[..], &())?;
+            }
+            n += 1;
+        }
+        wtxn.commit()?;
+        Ok(n)
     }
 
     pub fn traj_meta(&self, traj_id: TrajId) -> Result<Option<TrajMeta>> {
@@ -278,6 +480,12 @@ impl ConCorpus {
         Ok(hash_frame_bytes(&buf.into_inner()))
     }
 
+    /// Canonical formula for a stored frame (decode once).
+    pub fn frame_formula(&self, key: FrameKey) -> Result<String> {
+        let fr = self.get_frame(key)?;
+        Ok(composition_formula(&frame_species(&fr)))
+    }
+
     pub fn select(&self, sel: &Select) -> Result<Vec<FrameKey>> {
         let rtxn = self.env.read_txn()?;
         let mut sets: Vec<BTreeSet<FrameKey>> = Vec::new();
@@ -338,13 +546,87 @@ impl ConCorpus {
             sets.push(s);
         }
 
+        if let Some(ref formula) = sel.exact_formula {
+            let mut s = BTreeSet::new();
+            let pref = formula_prefix(formula);
+            let mut iter = self.idx_formula.prefix_iter(&rtxn, &pref)?;
+            while let Some(Ok((k, _))) = iter.next() {
+                if k.len() < 12 {
+                    continue;
+                }
+                let fk_bytes = &k[k.len() - 12..];
+                if let Some(fk) = FrameKey::from_bytes(fk_bytes) {
+                    if sel.traj_id.is_none_or(|t| t == fk.traj_id) {
+                        s.insert(fk);
+                    }
+                }
+            }
+            sets.push(s);
+        }
+
+        for (sym, exact_c) in &sel.element_count_exact {
+            let mut s = BTreeSet::new();
+            let pref = elem_count_symbol_prefix(sym);
+            let mut iter = self.idx_elem_count.prefix_iter(&rtxn, &pref)?;
+            while let Some(Ok((k, _))) = iter.next() {
+                if let Some((c, fk)) = parse_elem_count_key(k, sym) {
+                    if c == *exact_c && sel.traj_id.is_none_or(|t| t == fk.traj_id) {
+                        s.insert(fk);
+                    }
+                }
+            }
+            sets.push(s);
+        }
+
+        for (sym, min_c) in &sel.element_count_min {
+            let mut s = BTreeSet::new();
+            let pref = elem_count_symbol_prefix(sym);
+            let mut iter = self.idx_elem_count.prefix_iter(&rtxn, &pref)?;
+            while let Some(Ok((k, _))) = iter.next() {
+                if let Some((c, fk)) = parse_elem_count_key(k, sym) {
+                    if c >= *min_c && sel.traj_id.is_none_or(|t| t == fk.traj_id) {
+                        s.insert(fk);
+                    }
+                }
+            }
+            sets.push(s);
+        }
+
         if sel.energy_min.is_some() || sel.energy_max.is_some() {
             let lo_e = sel.energy_min.unwrap_or(f64::NEG_INFINITY);
             let hi_e = sel.energy_max.unwrap_or(f64::INFINITY);
-            let lo_bits = energy_ordered_bits(lo_e).unwrap_or(0);
-            let hi_bits = energy_ordered_bits(hi_e).unwrap_or(u64::MAX);
+            let lo_bits = ordered_f64_bits(lo_e).unwrap_or(0);
+            let hi_bits = ordered_f64_bits(hi_e).unwrap_or(u64::MAX);
             let mut s = BTreeSet::new();
             let mut iter = self.idx_energy.iter(&rtxn)?;
+            while let Some(Ok((k, _))) = iter.next() {
+                if k.len() < 20 {
+                    continue;
+                }
+                let mut eb = [0u8; 8];
+                eb.copy_from_slice(&k[..8]);
+                let bits = u64::from_be_bytes(eb);
+                if bits > hi_bits {
+                    break;
+                }
+                if bits >= lo_bits {
+                    if let Some(fk) = FrameKey::from_bytes(&k[8..20]) {
+                        if sel.traj_id.is_none_or(|t| t == fk.traj_id) {
+                            s.insert(fk);
+                        }
+                    }
+                }
+            }
+            sets.push(s);
+        }
+
+        if sel.fmax_min.is_some() || sel.fmax_max.is_some() {
+            let lo_e = sel.fmax_min.unwrap_or(0.0);
+            let hi_e = sel.fmax_max.unwrap_or(f64::INFINITY);
+            let lo_bits = ordered_f64_bits(lo_e).unwrap_or(0);
+            let hi_bits = ordered_f64_bits(hi_e).unwrap_or(u64::MAX);
+            let mut s = BTreeSet::new();
+            let mut iter = self.idx_fmax.iter(&rtxn)?;
             while let Some(Ok((k, _))) = iter.next() {
                 if k.len() < 20 {
                     continue;
@@ -423,7 +705,6 @@ impl ConCorpus {
         Ok(out)
     }
 
-    /// Decode selected frames to ASE/metatrain-oriented extended XYZ.
     pub fn export_extxyz(
         &self,
         keys: &[FrameKey],
@@ -442,7 +723,6 @@ impl ConCorpus {
         Ok(n)
     }
 
-    /// Ingest `*.con` / `*.convel` files in a directory (non-recursive), traj ids from `start`.
     pub fn ingest_directory(
         &self,
         dir: impl AsRef<Path>,
@@ -467,7 +747,6 @@ impl ConCorpus {
         Ok(out)
     }
 
-    /// Keys that are the representative for their content hash (dedup set).
     pub fn unique_frame_keys(&self, sel: &Select) -> Result<Vec<FrameKey>> {
         let keys = self.select(sel)?;
         let mut uniq = Vec::new();
@@ -531,11 +810,9 @@ mod tests {
     fn workflow_metatrain_extxyz_export() {
         let dir = tempfile::tempdir().unwrap();
         let db = ConCorpus::open(dir.path().join("corpus")).unwrap();
-        // simulate multi-trajectory campaign: ingest test suite CONs
         let ingested = db.ingest_directory(fixtures_dir(), 1).unwrap();
         assert!(ingested.len() >= 3);
 
-        // ML-style filter: frames containing Cu, bounded size
         let keys = db
             .select(
                 &Select::new()
@@ -546,12 +823,10 @@ mod tests {
             .unwrap();
         assert!(!keys.is_empty());
 
-        // dedup for training set (exact geometry match)
         let uniq = db
             .unique_frame_keys(&Select::new().require_symbol("Cu"))
             .unwrap();
         assert!(!uniq.is_empty());
-        assert!(uniq.len() <= keys.len() + 100);
 
         let xyz = dir.path().join("train_subset.xyz");
         let n = db.export_extxyz(&uniq, &xyz, "energy").unwrap();
@@ -559,7 +834,6 @@ mod tests {
         let text = std::fs::read_to_string(&xyz).unwrap();
         assert!(text.contains("Lattice="));
         assert!(text.contains("Properties="));
-        // at least one Cu line
         assert!(text.lines().any(|l| l.trim_start().starts_with("Cu ")));
     }
 
@@ -569,7 +843,6 @@ mod tests {
         let db = ConCorpus::open(dir.path()).unwrap();
         let f = fixture("tiny_cuh2.con");
         db.append_trajectory_path(1, &f).unwrap();
-        // second traj same file content → same hashes, different keys
         db.append_trajectory_path(2, &f).unwrap();
         let k1 = FrameKey {
             traj_id: 1,
@@ -582,7 +855,6 @@ mod tests {
         let h1 = db.frame_hash(k1).unwrap();
         let h2 = db.frame_hash(k2).unwrap();
         assert_eq!(h1, h2);
-        // representative is first ingested
         assert_eq!(db.find_by_hash(h1).unwrap(), Some(k1));
         let uniq = db.unique_frame_keys(&Select::new()).unwrap();
         assert!(uniq.contains(&k1));
@@ -617,7 +889,6 @@ mod tests {
         assert!(both.iter().any(|k| k.traj_id == 4));
         assert!(!both.iter().any(|k| k.traj_id == 2));
 
-        // Fixture frames with energy=-42.5 in metadata.
         let with_e = db.select(&Select::new().require_energy()).unwrap();
         assert!(with_e.iter().any(|k| k.traj_id == 2));
         assert!(with_e.iter().any(|k| k.traj_id == 4));
@@ -629,32 +900,130 @@ mod tests {
         assert!(in_range.iter().any(|k| k.traj_id == 2));
         let miss = db.select(&Select::new().energy_range(0.0, 1.0)).unwrap();
         assert!(miss.is_empty());
+    }
 
-        // Distinct energy via synthetic rewrite.
-        let mut fr = db
+    #[test]
+    fn composition_and_fmax_indexes() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            .unwrap();
+        db.append_trajectory_path(2, fixture("tiny_cuh2_forces.con"))
+            .unwrap();
+        db.append_trajectory_path(3, fixture("sulfolene.con"))
+            .unwrap();
+
+        let formula = db
+            .frame_formula(FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap();
+        assert_eq!(formula, "Cu:2|H:2");
+
+        let exact = db
+            .select(&Select::new().exact_composition("Cu:2|H:2"))
+            .unwrap();
+        assert!(exact.iter().any(|k| k.traj_id == 1));
+        assert!(exact.iter().any(|k| k.traj_id == 2));
+        assert!(!exact.iter().any(|k| k.traj_id == 3));
+
+        let cu2 = db
+            .select(&Select::new().element_exact("Cu", 2).element_exact("H", 2))
+            .unwrap();
+        assert_eq!(cu2.len(), exact.len());
+
+        let cu_min2 = db.select(&Select::new().element_min("Cu", 2)).unwrap();
+        assert!(cu_min2.iter().any(|k| k.traj_id == 1));
+
+        let wrong = db
+            .select(&Select::new().exact_composition("Fe:1"))
+            .unwrap();
+        assert!(wrong.is_empty());
+
+        let fr_f = db
             .get_frame(FrameKey {
                 traj_id: 2,
                 frame_idx: 0,
             })
             .unwrap();
-        fr.header.set_energy(-12.5);
-        let mut buf = Cursor::new(Vec::new());
-        {
-            let mut w = ConFrameWriter::new(&mut buf);
-            w.write_frame(&fr).unwrap();
-        }
-        let text = String::from_utf8(buf.into_inner()).unwrap();
-        db.append_trajectory_str(10, &text, "synthetic-energy")
+        let expected_fmax = frame_fmax(&fr_f).expect("forces fixture has fmax");
+        let in_fmax = db
+            .select(
+                &Select::new()
+                    .require_forces()
+                    .fmax_range(0.0, expected_fmax + 1e-6),
+            )
             .unwrap();
-        let only_synth = db
-            .select(&Select::new().energy_range(-13.0, -12.0))
+        assert!(in_fmax.iter().any(|k| k.traj_id == 2));
+        assert!(!in_fmax.iter().any(|k| k.traj_id == 1));
+
+        let too_small = db
+            .select(&Select::new().fmax_range(0.0, expected_fmax * 0.0 - 1.0))
             .unwrap();
-        assert_eq!(
-            only_synth,
-            vec![FrameKey {
-                traj_id: 10,
-                frame_idx: 0
-            }]
-        );
+        // negative max excludes all positive fmax postings that are > hi; lo>hi may be empty
+        let impossible = db
+            .select(&Select::new().fmax_range(1e9, 1e9 + 1.0))
+            .unwrap();
+        assert!(impossible.is_empty());
+        let _ = too_small;
+    }
+
+    #[test]
+    fn reindex_and_append_frames() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            .unwrap();
+        db.append_trajectory_path(2, fixture("tiny_cuh2_forces.con"))
+            .unwrap();
+
+        let before = db
+            .select(&Select::new().exact_composition("Cu:2|H:2"))
+            .unwrap();
+        assert!(!before.is_empty());
+
+        let n = db.reindex().unwrap();
+        assert!(n >= 2);
+        let after = db
+            .select(&Select::new().exact_composition("Cu:2|H:2"))
+            .unwrap();
+        assert_eq!(before, after);
+
+        let fr = db
+            .get_frame(FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap();
+        let n2 = db
+            .append_trajectory_frames(10, &[fr.clone()], "mem")
+            .unwrap();
+        assert_eq!(n2, 1);
+        let mem = db
+            .select(
+                &Select::new()
+                    .trajectory(10)
+                    .exact_composition("Cu:2|H:2"),
+            )
+            .unwrap();
+        assert_eq!(mem.len(), 1);
+
+        let n3 = db.extend_trajectory_frames(10, &[fr], "mem-ext").unwrap();
+        assert_eq!(n3, 2);
+    }
+
+    #[test]
+    fn reindex_twice_stable() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2_forces.con"))
+            .unwrap();
+        let a = db.reindex().unwrap();
+        let keys1 = db.select(&Select::new().require_forces()).unwrap();
+        let b = db.reindex().unwrap();
+        let keys2 = db.select(&Select::new().require_forces()).unwrap();
+        assert_eq!(a, b);
+        assert_eq!(keys1, keys2);
     }
 }

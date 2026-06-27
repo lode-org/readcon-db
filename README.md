@@ -34,6 +34,8 @@ let keys = db.select(
     &Select::new()
         .require_symbol("Cu")
         .require_forces()
+        .exact_composition("Cu:2|H:2")
+        .fmax_range(0.0, 1.0)
         .energy_range(-50.0, 0.0),
 )?;
 let h = db.frame_hash(keys[0])?;
@@ -41,8 +43,9 @@ let h = db.frame_hash(keys[0])?;
 
 ```bash
 ./target/release/readcon-db ingest-dir /tmp/corpus /path/to/con_files
-./target/release/readcon-db select /tmp/corpus --symbol Cu --require-forces \
-    --energy-min -50 --energy-max 0
+./target/release/readcon-db select /tmp/corpus --formula 'Cu:2|H:2' --require-forces \
+    --fmax-max 1.0 --energy-min -50 --energy-max 0
+./target/release/readcon-db reindex /tmp/corpus
 ./target/release/readcon-db dedup-export /tmp/corpus --symbol Cu -o subset.xyz  # only if a tool demands XYZ on disk
 ```
 

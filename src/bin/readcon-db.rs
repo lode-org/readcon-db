@@ -1,10 +1,12 @@
-//! CLI for corpus ingest / select / export (metatrain XYZ, etc.)
+//! CLI for corpus ingest / select / export / reindex
 //!
 //! ```text
 //! readcon-db ingest <corpus_dir> --start-id 1 <file.con>...
 //! readcon-db ingest-dir <corpus_dir> <con_directory>
-//! readcon-db select <corpus_dir> [--symbol Cu] [--traj N] [--export out.xyz]
-//! readcon-db dedup-export <corpus_dir> --symbol Cu -o train.xyz
+//! readcon-db select <corpus_dir> [filters...] [--export out.xyz]
+//! readcon-db dedup-export <corpus_dir> [filters...] -o train.xyz
+//! readcon-db reindex <corpus_dir>
+//! readcon-db hash-file <file.con>
 //! ```
 
 use std::env;
@@ -18,13 +20,23 @@ fn usage() -> ExitCode {
   readcon-db ingest <corpus_dir> [--start-id N] <file.con>...
   readcon-db ingest-dir <corpus_dir> <dir_with_con_files>
   readcon-db select <corpus_dir> [--traj N] [--symbol S] [--natoms-min A] [--natoms-max B]
-                     [--energy-min E] [--energy-max E] [--require-forces] [--require-velocities]
-                     [--require-energy] [--export out.xyz]
-  readcon-db dedup-export <corpus_dir> [--symbol S] [--require-forces] -o out.xyz
-  readcon-db hash-file <file.con>   # print xxh3-128 hex of first frame (canonical)
+                     [--energy-min E] [--energy-max E] [--fmax-min F] [--fmax-max F]
+                     [--elem SYM:COUNT] [--elem-min SYM:COUNT] [--formula Cu:2|H:2]
+                     [--require-forces] [--require-velocities] [--require-energy]
+                     [--export out.xyz]
+  readcon-db dedup-export <corpus_dir> [same filters as select] -o out.xyz
+  readcon-db reindex <corpus_dir>
+  readcon-db hash-file <file.con>
 "
     );
     ExitCode::from(2)
+}
+
+fn parse_sym_count(s: &str) -> Result<(String, u32), Box<dyn std::error::Error>> {
+    let (sym, cnt) = s
+        .split_once(':')
+        .ok_or("expected SYM:COUNT")?;
+    Ok((sym.to_string(), cnt.parse()?))
 }
 
 fn main() -> ExitCode {
@@ -65,6 +77,12 @@ fn main() -> ExitCode {
                     println!("traj {tid}: {n} frames <- {p}");
                 }
             }
+            "reindex" => {
+                let corpus = args.first().ok_or("corpus")?.clone();
+                let db = ConCorpus::open(&corpus)?;
+                let n = db.reindex()?;
+                println!("reindexed {n} frames");
+            }
             "select" | "dedup-export" => {
                 let corpus = args.first().ok_or("corpus")?.clone();
                 let mut traj = None;
@@ -73,6 +91,11 @@ fn main() -> ExitCode {
                 let mut nmax = u32::MAX;
                 let mut emin: Option<f64> = None;
                 let mut emax: Option<f64> = None;
+                let mut fmin: Option<f64> = None;
+                let mut fmax: Option<f64> = None;
+                let mut elem_exact = Vec::new();
+                let mut elem_min = Vec::new();
+                let mut formula = None;
                 let mut req_forces = false;
                 let mut req_vels = false;
                 let mut req_energy = false;
@@ -102,6 +125,26 @@ fn main() -> ExitCode {
                         }
                         "--energy-max" => {
                             emax = Some(args.get(i + 1).ok_or("e")?.parse()?);
+                            i += 2;
+                        }
+                        "--fmax-min" => {
+                            fmin = Some(args.get(i + 1).ok_or("f")?.parse()?);
+                            i += 2;
+                        }
+                        "--fmax-max" => {
+                            fmax = Some(args.get(i + 1).ok_or("f")?.parse()?);
+                            i += 2;
+                        }
+                        "--elem" => {
+                            elem_exact.push(parse_sym_count(args.get(i + 1).ok_or("SYM:COUNT")?)?);
+                            i += 2;
+                        }
+                        "--elem-min" => {
+                            elem_min.push(parse_sym_count(args.get(i + 1).ok_or("SYM:COUNT")?)?);
+                            i += 2;
+                        }
+                        "--formula" => {
+                            formula = Some(args.get(i + 1).ok_or("formula")?.clone());
                             i += 2;
                         }
                         "--require-forces" => {
@@ -136,6 +179,18 @@ fn main() -> ExitCode {
                         emin.unwrap_or(f64::NEG_INFINITY),
                         emax.unwrap_or(f64::INFINITY),
                     );
+                }
+                if fmin.is_some() || fmax.is_some() {
+                    sel = sel.fmax_range(fmin.unwrap_or(0.0), fmax.unwrap_or(f64::INFINITY));
+                }
+                for (sym, c) in elem_exact {
+                    sel = sel.element_exact(sym, c);
+                }
+                for (sym, c) in elem_min {
+                    sel = sel.element_min(sym, c);
+                }
+                if let Some(f) = formula {
+                    sel = sel.exact_composition(f);
                 }
                 if req_forces {
                     sel = sel.require_forces();

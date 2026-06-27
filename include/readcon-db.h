@@ -25,6 +25,12 @@ int rkrdb_select_hash(size_t id, const uint8_t *hash16);
 int rkrdb_select_meta(size_t id, int64_t traj_id, const char *symbol, uint32_t natoms_min,
                       uint32_t natoms_max, double energy_min, double energy_max,
                       int use_energy_range, uint32_t flags, uint32_t limit);
+int rkrdb_reindex(size_t id);
+int rkrdb_select_campaign(size_t id, int64_t traj_id, const char *symbol, uint32_t natoms_min,
+                          uint32_t natoms_max, const char *formula, double energy_min,
+                          double energy_max, int use_energy_range, double fmax_min, double fmax_max,
+                          int use_fmax_range, const char *elem_sym, uint32_t elem_count,
+                          int elem_exact, uint32_t flags, uint32_t limit);
 int rkrdb_result_count(size_t id);
 int rkrdb_result_key(size_t id, size_t i, uint64_t *out_traj, uint32_t *out_frame);
 int rkrdb_frame_hash(size_t id, uint64_t traj_id, uint32_t frame_idx, uint8_t *out_hash16);
