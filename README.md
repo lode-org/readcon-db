@@ -84,6 +84,14 @@ Implementation strategy: intersect postings lists from secondary DBs (sort-merge
 
 The CPC manuscript argues format fidelity and a multi-language ABI. **readcon-db** is deliberately a *second* repository so CPC scope stays “format + library,” while corpus-scale concerns (indexes, mmap, multi-reader) do not inflate the interchange story. Cite this design when discussing future work / large NEB ensembles.
 
-## Status
+## Status (v0.1.0)
 
-Design + skeleton only. Implementation proceeds behind feature flags; API is unstable until `readcon-core` 0.14+ ABI is frozen for blob decode.
+**Implemented:** `ConCorpus::open`, `append_trajectory_path` / `_str` (single writer txn per trajectory), `traj_meta`, `get_frame_text` / `get_frame` (decode via `readcon-core`), `select` with `trajectory`, `natoms_range`, `require_symbol` (intersection), `limit`. Integration test ingests `readcon-core` `tiny_cuh2.con` / `tiny_multi_cuh2.con`.
+
+**Not yet:** cooked SoA blobs, energy index, Python bindings, automatic map-size growth, concurrent multi-process writers (LMDB allows one writer by design).
+
+```bash
+cd readcon-db && cargo test
+```
+
+API is still unstable; key layout may change before 0.2.
