@@ -8,9 +8,6 @@ version = "0.1.2"
 description = "Mmap CON corpus store (LMDB/Heed) with xxHash exact match"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-readme = { file = "../README.md", content-type = "text/markdown" }
-urls = { Homepage = "https://lode-org.github.io/readcon-db/", Repository = "https://github.com/lode-org/readcon-db" }
-dependencies = ["readcon>=0.14"]
 
 [tool.maturin]
 manifest-path = "../Cargo.toml"
