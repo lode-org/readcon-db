@@ -684,7 +684,11 @@ impl ConCorpus {
             return Ok(c.positions);
         }
         let fr = self.get_frame(key)?;
-        Ok(fr.atom_data.iter().map(|a| a.coord).collect())
+        Ok(fr
+            .atom_data
+            .iter()
+            .map(|a| [a.x, a.y, a.z])
+            .collect())
     }
 
     /// Prefer cooked forces when present; else parse CON (`None` if no forces on frame).
@@ -1684,7 +1688,7 @@ mod tests {
         let fr = db.get_frame(key).unwrap();
         assert_eq!(pos_via_parse.len(), fr.atom_data.len());
         for (i, a) in fr.atom_data.iter().enumerate() {
-            assert_eq!(pos_via_parse[i], a.coord);
+            assert_eq!(pos_via_parse[i], [a.x, a.y, a.z]);
         }
 
         let text_before = db.get_frame_text(key).unwrap();
@@ -1694,7 +1698,7 @@ mod tests {
         let cooked = db.get_cooked_soa(key).unwrap().expect("cooked present");
         assert_eq!(cooked.natoms as usize, fr.atom_data.len());
         for (i, a) in fr.atom_data.iter().enumerate() {
-            assert_eq!(cooked.positions[i], a.coord);
+            assert_eq!(cooked.positions[i], [a.x, a.y, a.z]);
         }
         // CON authority unchanged
         assert_eq!(db.get_frame_text(key).unwrap(), text_before);
@@ -1754,7 +1758,10 @@ mod tests {
         assert!(db.get_cooked_soa(key).unwrap().is_none());
         let pos = db.get_positions(key).unwrap();
         assert_eq!(pos.len(), fr.atom_data.len());
-        assert_eq!(pos[0], fr.atom_data[0].coord);
+        assert_eq!(
+            pos[0],
+            [fr.atom_data[0].x, fr.atom_data[0].y, fr.atom_data[0].z]
+        );
     }
 
     #[test]
