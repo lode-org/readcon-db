@@ -26,8 +26,8 @@ html_theme_options = {
         "color-brand-content": "#00695C",
     },
     "dark_css_variables": {
-        "color-brand-primary": "#4DB6AC",
-        "color-brand-content": "#80CBC4",
+        "color-brand-primary": "#B2DFDB",
+        "color-brand-content": "#E0F2F1",
     },
     "sidebar_hide_name": False,
     "footer_icons": [
