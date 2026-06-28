@@ -26,8 +26,13 @@ use crate::keys::{
 };
 use crate::select::Select;
 
+/// Default mmap region (2 GiB). Raise via re-open with a larger map if the corpus grows.
 const MAP_SIZE: usize = 2 * 1024 * 1024 * 1024;
 const MAX_DBS: u32 = 48;
+/// LMDB multi-process reader slots (analysis farms / concurrent CLI processes).
+/// Classic embedded SOTA: one writer, many readers across OS processes sharing the mmap
+/// (Gray/Reuter MVCC; LMDB design notes — not a cluster consensus protocol).
+const MAX_READERS: u32 = 512;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TrajMeta {
@@ -118,6 +123,8 @@ impl ConCorpus {
         let mut opts = EnvOpenOptions::new();
         opts.map_size(MAP_SIZE);
         opts.max_dbs(MAX_DBS);
+        opts.max_readers(MAX_READERS);
+        // Mmap + MVCC: readers do not block writers beyond LMDB page COW; writers serialize.
         let env = unsafe { opts.open(&path)? };
 
         let mut wtxn = env.write_txn()?;

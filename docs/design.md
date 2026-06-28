@@ -8,6 +8,26 @@
 
 Treat the corpus as an **embedded key-value database** with **hand-built secondary indexes**, backed by **LMDB via Heed** so the OS page cache supplies RAM residency without a custom buffer pool.
 
+## Embedded multi-process SOTA patterns (what we implement)
+
+These are standard patterns for **local** high-performance multi-process KV stores
+(LMDB / Kyoto Cabinet / RocksDB-class embedded engines; Gray & Reuter MVCC lineage)—
+**not** distributed cluster consensus (Raft/Paxos), which is out of scope for a
+workstation campaign corpus.
+
+| Pattern | Chemistry-store gap (ASE.db / SQLite) | readcon-db |
+|---------|----------------------------------------|------------|
+| **Mmap primary storage** | Row pages + BLOB deserialize | OS page cache holds CON text |
+| **MVCC multi-reader, single-writer** | Writers/readers contend on SQLite locks | LMDB COW pages; `max_readers=512` |
+| **Cross-process shared env** | One connection model in Python | Separate OS processes each `open()` same dir |
+| **Authoritative value + secondary indexes** | Pickled `Atoms` + ad hoc KV | CON blob authoritative; B-tree indexes rebuild via `reindex` |
+| **Selective index scan + set intersection** | Often full table / formula scan | Smallest-first `BTreeSet` intersect |
+| **Batch read txn for trajectory extract** | Per-row `toatoms()` | `touch_trajectory_blobs` / `get_frame_texts` one `RoTxn` |
+| **Exact content addressing** | Row id / UUID | xxHash3-128 on stored blob |
+
+Cluster / network patterns (**not** implemented): multi-node sharding, Raft leader
+election, gRPC query plane. Those do not match the NEB-on-one-host threat model.
+
 ## Why Heed/LMDB (not SQL, not SQLite)
 
 - Mmap-first; readers do not copy the whole DB into a heap arena.
