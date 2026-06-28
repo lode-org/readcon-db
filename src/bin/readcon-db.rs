@@ -12,7 +12,7 @@
 use std::env;
 use std::process::ExitCode;
 
-use readcon_db::{ConCorpus, Select, ShardedConCorpus, DEFAULT_N_SHARDS};
+use readcon_db::{ConCorpus, FrameKey, Select, ShardedConCorpus, DEFAULT_N_SHARDS};
 
 fn usage() -> ExitCode {
     eprintln!(
@@ -37,7 +37,12 @@ fn usage() -> ExitCode {
   readcon-db compact-join <sharded_root> <single_dst>
   readcon-db compact-split <single_src> <sharded_dst> [--shards N]
   readcon-db compact-export-extxyz <corpus_or_shard_root> <out.xyz> [--sharded] [--symbol S]
+  readcon-db cook-frame <corpus_dir> --traj T --frame F
+  readcon-db recook-all <corpus_dir>
+  readcon-db delete-cooked <corpus_dir> --traj T --frame F
+  readcon-db positions <corpus_dir> --traj T --frame F
   readcon-db hash-file <file.con>
+  (RCSO cooked tier is opt-in; CON text in frames remains authority — docs/orgmode/cooked-soa.org)
 "
     );
     ExitCode::from(2)
@@ -475,6 +480,98 @@ fn main() -> ExitCode {
                     db.export_extxyz(&keys, &out, "energy")?
                 };
                 println!("wrote {n} frames extxyz -> {out} (analysis export)");
+            }
+            "cook-frame" => {
+                let corpus = args.first().ok_or("corpus")?.clone();
+                let mut traj = 0u64;
+                let mut frame = 0u32;
+                let mut i = 1;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "--traj" => {
+                            traj = args.get(i + 1).ok_or("traj")?.parse()?;
+                            i += 2;
+                        }
+                        "--frame" => {
+                            frame = args.get(i + 1).ok_or("frame")?.parse()?;
+                            i += 2;
+                        }
+                        _ => i += 1,
+                    }
+                }
+                let db = ConCorpus::open(&corpus)?;
+                let n = db.cook_frame(FrameKey {
+                    traj_id: traj,
+                    frame_idx: frame,
+                })?;
+                println!("cooked traj={traj} frame={frame} ({n} RCSO bytes); CON text unchanged");
+            }
+            "recook-all" => {
+                let corpus = args.first().ok_or("corpus")?.clone();
+                let db = ConCorpus::open(&corpus)?;
+                let n = db.recook_all()?;
+                println!("recooked {n} frames");
+            }
+            "delete-cooked" => {
+                let corpus = args.first().ok_or("corpus")?.clone();
+                let mut traj = 0u64;
+                let mut frame = 0u32;
+                let mut i = 1;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "--traj" => {
+                            traj = args.get(i + 1).ok_or("traj")?.parse()?;
+                            i += 2;
+                        }
+                        "--frame" => {
+                            frame = args.get(i + 1).ok_or("frame")?.parse()?;
+                            i += 2;
+                        }
+                        _ => i += 1,
+                    }
+                }
+                let db = ConCorpus::open(&corpus)?;
+                db.delete_cooked_soa(FrameKey {
+                    traj_id: traj,
+                    frame_idx: frame,
+                })?;
+                println!("deleted cooked traj={traj} frame={frame}");
+            }
+            "positions" => {
+                let corpus = args.first().ok_or("corpus")?.clone();
+                let mut traj = 0u64;
+                let mut frame = 0u32;
+                let mut i = 1;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "--traj" => {
+                            traj = args.get(i + 1).ok_or("traj")?.parse()?;
+                            i += 2;
+                        }
+                        "--frame" => {
+                            frame = args.get(i + 1).ok_or("frame")?.parse()?;
+                            i += 2;
+                        }
+                        _ => i += 1,
+                    }
+                }
+                let db = ConCorpus::open(&corpus)?;
+                let key = FrameKey {
+                    traj_id: traj,
+                    frame_idx: frame,
+                };
+                let cooked = db.has_valid_cooked_soa(key)?;
+                let pos = db.get_positions(key)?;
+                println!(
+                    "traj={traj} frame={frame} natoms={} valid_cooked={cooked}",
+                    pos.len()
+                );
+                for (i, row) in pos.iter().enumerate().take(5) {
+                    println!("  [{i}] {} {} {}", row[0], row[1], row[2]);
+                }
+                if pos.len() > 5 {
+                    println!("  ... ({} more)", pos.len() - 5);
+                }
             }
             "hash-file" => {
                 let f = args.first().ok_or("file")?;

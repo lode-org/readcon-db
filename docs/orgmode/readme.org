@@ -1,11 +1,22 @@
 #+title: readcon-db documentation map
 #+options: toc:2
 
-* Sources
-- Sphinx (MyST): =docs/source/= — build with =sphinx-build -b html source _build/html=
-- Marketing site: =website/index.html=
-- Logo SVGs: =assets/logo/readcon-db-logo.svg=, =readcon-db-wordmark.svg=
-- Crate README: repository root
+* User-facing sources (author in Org)
 
-* Design
-See also =docs/design.md= (Heed rationale) and architecture page in Sphinx.
+| Topic | Org source | Published |
+|-------+------------+-----------|
+| Dual tier / RCSO | [[file:cooked-soa.org][cooked-soa.org]] | Sphinx =architecture.md= + =api_*.md= summaries; this map |
+| Install / overview | Sphinx MyST under =docs/source/= (keep aligned with tier rules) | =sphinx-build= |
+| Marketing site | =website/index.html= | static |
+| Logo | =assets/logo/= | |
+
+* Tier rules (do not contradict in Sphinx)
+
+1. =frames= CON text is authoritative for hash, dedup, join/split, =reindex=.
+2. =frames_soa= RCSO is opt-in POD numerics only — not a full CON stand-in.
+3. Numeric getters prefer valid cooked (no CON parse on hit); corrupt/missing → parse CON.
+4. CPU DLPack / in-process SoA are not LMDB payloads.
+
+* Engineer notes
+
+=docs/design.md= expands Heed rationale and index tables; it must stay consistent with =cooked-soa.org= on authority.

@@ -37,6 +37,17 @@ int rkrdb_frame_hash(size_t id, uint64_t traj_id, uint32_t frame_idx, uint8_t *o
 int rkrdb_get_frame_text(size_t id, uint64_t traj_id, uint32_t frame_idx, char *buf, size_t buflen);
 /** Canonical multiset formula (Cu:2|H:2) via core index_proj; NUL-terminated into buf. */
 int rkrdb_frame_formula(size_t id, uint64_t traj_id, uint32_t frame_idx, char *buf, size_t buflen);
+/** Opt-in RCSO cook from CON text (frames stays authority). */
+int rkrdb_cook_frame(size_t id, uint64_t traj_id, uint32_t frame_idx);
+int rkrdb_delete_cooked(size_t id, uint64_t traj_id, uint32_t frame_idx);
+/** 1 = valid cooked, 0 = missing/corrupt, negative = error. */
+int rkrdb_has_valid_cooked(size_t id, uint64_t traj_id, uint32_t frame_idx);
+int rkrdb_recook_all(size_t id);
+/** Prefer frames_soa positions; fallback parse CON. out_xyz holds N*3 doubles. */
+int rkrdb_get_positions(size_t id, uint64_t traj_id, uint32_t frame_idx, double *out_xyz,
+                        uint32_t capacity_atoms, uint32_t *out_natoms);
+int rkrdb_get_forces(size_t id, uint64_t traj_id, uint32_t frame_idx, double *out_xyz,
+                     uint32_t capacity_atoms, uint32_t *out_natoms, uint8_t *out_has_forces);
 int rkrdb_xxh3_128(const uint8_t *data, size_t len, uint8_t *out_hash16);
 
 #ifdef __cplusplus
@@ -92,6 +103,21 @@ public:
     if (rkrdb_frame_formula(id_, traj_id, frame_idx, buf, sizeof(buf)) != RKRDB_OK)
       throw std::runtime_error("frame_formula");
     return std::string(buf);
+  }
+
+  void cook_frame(uint64_t traj_id, uint32_t frame_idx) {
+    if (rkrdb_cook_frame(id_, traj_id, frame_idx) != RKRDB_OK)
+      throw std::runtime_error("cook_frame");
+  }
+  void delete_cooked(uint64_t traj_id, uint32_t frame_idx) {
+    if (rkrdb_delete_cooked(id_, traj_id, frame_idx) != RKRDB_OK)
+      throw std::runtime_error("delete_cooked");
+  }
+  bool has_valid_cooked(uint64_t traj_id, uint32_t frame_idx) {
+    int v = rkrdb_has_valid_cooked(id_, traj_id, frame_idx);
+    if (v < 0)
+      throw std::runtime_error("has_valid_cooked");
+    return v == 1;
   }
 
   size_t id() const { return id_; }

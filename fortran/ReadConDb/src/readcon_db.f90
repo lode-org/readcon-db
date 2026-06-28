@@ -72,6 +72,33 @@ module readcon_db
       integer(c_size_t), value :: buflen
       integer(c_int) :: st
     end function
+
+    function rkrdb_cook_frame(id, traj_id, frame_idx) bind(C, name="rkrdb_cook_frame") result(st)
+      import :: c_int, c_size_t, c_int64_t, c_int32_t
+      integer(c_size_t), value :: id
+      integer(c_int64_t), value :: traj_id
+      integer(c_int32_t), value :: frame_idx
+      integer(c_int) :: st
+    end function
+    function rkrdb_delete_cooked(id, traj_id, frame_idx) bind(C, name="rkrdb_delete_cooked") result(st)
+      import :: c_int, c_size_t, c_int64_t, c_int32_t
+      integer(c_size_t), value :: id
+      integer(c_int64_t), value :: traj_id
+      integer(c_int32_t), value :: frame_idx
+      integer(c_int) :: st
+    end function
+    function rkrdb_has_valid_cooked(id, traj_id, frame_idx) bind(C, name="rkrdb_has_valid_cooked") result(st)
+      import :: c_int, c_size_t, c_int64_t, c_int32_t
+      integer(c_size_t), value :: id
+      integer(c_int64_t), value :: traj_id
+      integer(c_int32_t), value :: frame_idx
+      integer(c_int) :: st
+    end function
+    function rkrdb_recook_all(id) bind(C, name="rkrdb_recook_all") result(st)
+      import :: c_int, c_size_t
+      integer(c_size_t), value :: id
+      integer(c_int) :: st
+    end function
   end interface
 
 contains
@@ -174,6 +201,46 @@ contains
       n = n + 1
     end do
     if (n > 0) formula = transfer(buf(1:n), formula(1:n))
+  end subroutine
+
+
+  subroutine db_cook_frame(id, traj_id, frame_idx, status)
+    integer(c_size_t), intent(in) :: id
+    integer(c_int64_t), intent(in) :: traj_id
+    integer(c_int32_t), intent(in) :: frame_idx
+    integer(c_int), intent(out) :: status
+    status = rkrdb_cook_frame(id, traj_id, frame_idx)
+  end subroutine
+
+  subroutine db_delete_cooked(id, traj_id, frame_idx, status)
+    integer(c_size_t), intent(in) :: id
+    integer(c_int64_t), intent(in) :: traj_id
+    integer(c_int32_t), intent(in) :: frame_idx
+    integer(c_int), intent(out) :: status
+    status = rkrdb_delete_cooked(id, traj_id, frame_idx)
+  end subroutine
+
+  subroutine db_has_valid_cooked(id, traj_id, frame_idx, valid, status)
+    integer(c_size_t), intent(in) :: id
+    integer(c_int64_t), intent(in) :: traj_id
+    integer(c_int32_t), intent(in) :: frame_idx
+    logical, intent(out) :: valid
+    integer(c_int), intent(out) :: status
+    integer(c_int) :: v
+    v = rkrdb_has_valid_cooked(id, traj_id, frame_idx)
+    if (v < 0) then
+      status = v
+      valid = .false.
+    else
+      status = rkrdb_ok
+      valid = (v == 1)
+    end if
+  end subroutine
+
+  subroutine db_recook_all(id, status)
+    integer(c_size_t), intent(in) :: id
+    integer(c_int), intent(out) :: status
+    status = rkrdb_recook_all(id)
   end subroutine
 
 end module readcon_db

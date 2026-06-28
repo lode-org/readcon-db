@@ -36,3 +36,7 @@ db.append_trajectory(1, "run.con");
 db.select_basic(1, "Cu", 1, 100000, 0);
 db.select_meta(-1, "Cu", 1, 100000, -50.0, 0.0, 1, 1u, 0);
 ```
+
+## Cooked SoA (RCSO)
+
+See `docs/orgmode/cooked-soa.org`. Tier is opt-in; CON text remains authority. Bindings expose cook / delete / has-valid / positions (and forces on C/Python/Rust).

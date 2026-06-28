@@ -292,6 +292,176 @@ pub unsafe extern "C" fn rkrdb_reindex(id: usize) -> c_int {
     .unwrap_or(RKRDB_NULL)
 }
 
+/// Opt-in cook: derive RCSO into `frames_soa` from CON text in `frames` (CON remains authority).
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_cook_frame(id: usize, traj_id: u64, frame_idx: u32) -> c_int {
+    with_handle(id, |h| {
+        match h.corpus.cook_frame(crate::keys::FrameKey {
+            traj_id,
+            frame_idx,
+        }) {
+            Ok(_) => Ok(RKRDB_OK),
+            Err(e) => {
+                set_err(h, e);
+                Ok(RKRDB_ERR)
+            }
+        }
+    })
+    .unwrap_or(RKRDB_NULL)
+}
+
+/// Drop cooked tier only; CON text and indexes unchanged.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_delete_cooked(id: usize, traj_id: u64, frame_idx: u32) -> c_int {
+    with_handle(id, |h| {
+        match h.corpus.delete_cooked_soa(crate::keys::FrameKey {
+            traj_id,
+            frame_idx,
+        }) {
+            Ok(()) => Ok(RKRDB_OK),
+            Err(e) => {
+                set_err(h, e);
+                Ok(RKRDB_ERR)
+            }
+        }
+    })
+    .unwrap_or(RKRDB_NULL)
+}
+
+/// Returns 1 if valid RCSO present, 0 if missing/corrupt, negative on error.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_has_valid_cooked(id: usize, traj_id: u64, frame_idx: u32) -> c_int {
+    with_handle(id, |h| {
+        match h.corpus.has_valid_cooked_soa(crate::keys::FrameKey {
+            traj_id,
+            frame_idx,
+        }) {
+            Ok(true) => Ok(1),
+            Ok(false) => Ok(0),
+            Err(e) => {
+                set_err(h, e);
+                Ok(RKRDB_ERR)
+            }
+        }
+    })
+    .unwrap_or(RKRDB_NULL)
+}
+
+/// Prefer cooked positions (no CON parse on hit); else parse CON.
+/// Writes `*out_natoms * 3` doubles into `out_xyz` (row-major N×3). `capacity_atoms` is max N.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_get_positions(
+    id: usize,
+    traj_id: u64,
+    frame_idx: u32,
+    out_xyz: *mut f64,
+    capacity_atoms: u32,
+    out_natoms: *mut u32,
+) -> c_int {
+    if out_xyz.is_null() || out_natoms.is_null() {
+        return RKRDB_NULL;
+    }
+    with_handle(id, |h| {
+        match h.corpus.get_positions(crate::keys::FrameKey {
+            traj_id,
+            frame_idx,
+        }) {
+            Ok(pos) => {
+                let n = pos.len() as u32;
+                if n > capacity_atoms {
+                    set_err(
+                        h,
+                        crate::error::Error::Message("positions buffer too small".into()),
+                    );
+                    return Ok(RKRDB_ERR);
+                }
+                unsafe {
+                    *out_natoms = n;
+                    for (i, row) in pos.iter().enumerate() {
+                        *out_xyz.add(i * 3) = row[0];
+                        *out_xyz.add(i * 3 + 1) = row[1];
+                        *out_xyz.add(i * 3 + 2) = row[2];
+                    }
+                }
+                Ok(RKRDB_OK)
+            }
+            Err(e) => {
+                set_err(h, e);
+                Ok(RKRDB_ERR)
+            }
+        }
+    })
+    .unwrap_or(RKRDB_NULL)
+}
+
+/// Prefer cooked forces when present; writes N×3 doubles. Sets *out_has_forces 0/1.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_get_forces(
+    id: usize,
+    traj_id: u64,
+    frame_idx: u32,
+    out_xyz: *mut f64,
+    capacity_atoms: u32,
+    out_natoms: *mut u32,
+    out_has_forces: *mut u8,
+) -> c_int {
+    if out_xyz.is_null() || out_natoms.is_null() || out_has_forces.is_null() {
+        return RKRDB_NULL;
+    }
+    with_handle(id, |h| {
+        match h.corpus.get_forces(crate::keys::FrameKey {
+            traj_id,
+            frame_idx,
+        }) {
+            Ok(None) => {
+                unsafe {
+                    *out_has_forces = 0;
+                    *out_natoms = 0;
+                }
+                Ok(RKRDB_OK)
+            }
+            Ok(Some(frc)) => {
+                let n = frc.len() as u32;
+                if n > capacity_atoms {
+                    set_err(
+                        h,
+                        crate::error::Error::Message("forces buffer too small".into()),
+                    );
+                    return Ok(RKRDB_ERR);
+                }
+                unsafe {
+                    *out_has_forces = 1;
+                    *out_natoms = n;
+                    for (i, row) in frc.iter().enumerate() {
+                        *out_xyz.add(i * 3) = row[0];
+                        *out_xyz.add(i * 3 + 1) = row[1];
+                        *out_xyz.add(i * 3 + 2) = row[2];
+                    }
+                }
+                Ok(RKRDB_OK)
+            }
+            Err(e) => {
+                set_err(h, e);
+                Ok(RKRDB_ERR)
+            }
+        }
+    })
+    .unwrap_or(RKRDB_NULL)
+}
+
+/// Cook every frame that has CON text (`recook_all`).
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_recook_all(id: usize) -> c_int {
+    with_handle(id, |h| match h.corpus.recook_all() {
+        Ok(_) => Ok(RKRDB_OK),
+        Err(e) => {
+            set_err(h, e);
+            Ok(RKRDB_ERR)
+        }
+    })
+    .unwrap_or(RKRDB_NULL)
+}
+
 /// Canonical composition formula for a stored frame (same as core `index_proj`).
 /// Writes into `buf` (NUL-terminated). Returns RKRDB_OK, RKRDB_NOT_FOUND, RKRDB_ERR, or buffer size need as positive? 
 /// On success returns RKRDB_OK; if buflen too small returns RKRDB_ERR and sets last_error.

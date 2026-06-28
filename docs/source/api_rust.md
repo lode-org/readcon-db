@@ -29,3 +29,7 @@ let hits = db.select(&sel)?;
 ```
 
 See crate docs (`cargo doc --open`) for `Error` variants and `ContentHash::to_hex`.
+
+## Cooked SoA (RCSO)
+
+See `docs/orgmode/cooked-soa.org`. Tier is opt-in; CON text remains authority. Bindings expose cook / delete / has-valid / positions (and forces on C/Python/Rust).

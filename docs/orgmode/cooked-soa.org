@@ -1,0 +1,36 @@
+#+title: Cooked SoA tier (RCSO / frames_soa)
+#+options: toc:2
+
+* Summary
+
+=readcon-db= stores two tiers per frame key:
+
+| Tier | LMDB DB | Role |
+|------+---------+------|
+| Authority | =frames= | UTF-8 CON text (span at ingest when possible) |
+| Optional numerics | =frames_soa= | RCSO v1 little-endian POD (positions $N\times 3$ =f64=, optional forces/velocities) |
+
+*Default ingest does not cook.* Call =cook_frame= / =recook_all= / CLI =cook-frame= / =recook-all= (or =append_trajectory_path_cook(..., true)= in Rust) to populate RCSO. =delete_cooked_soa= drops only the cooked tier; CON text and indexes stay.
+
+* Why CON text is still required
+
+RCSO is *not* fully equivalent to CON: it omits element symbols, masses, cell/angles, constraints, JSON metadata, and exact on-disk bytes. Those are required for xxHash3 dedup, symbol/formula indexes, =reindex=, join/split, and CON export. Do *not* omit =frames= when cooked exists.
+
+* Numeric hot path
+
+=get_positions= / =get_forces= / =get_velocities= (Rust, Python, C =rkrdb_get_positions= / =rkrdb_get_forces=, CLI =positions=) prefer a *valid* RCSO blob and *skip CON parse* on a hit. Missing or corrupt cooked falls back to parsing CON text. Authority APIs (=frame_hash=, =find_by_hash=, =get_frame_text=, =reindex=, shard join) never read =frames_soa=.
+
+* Language surfaces
+
+| Surface | Cook / delete / has-valid | Positions / forces |
+|---------+---------------------------+--------------------|
+| Rust =ConCorpus= | full | full |
+| Python =Corpus= | =cook_frame=, =delete_cooked_soa=, =has_valid_cooked_soa=, =recook_all= | =get_positions=, =get_forces= |
+| C / C++ | =rkrdb_cook_frame=, =rkrdb_delete_cooked=, =rkrdb_has_valid_cooked=, =rkrdb_recook_all= | =rkrdb_get_positions=, =rkrdb_get_forces= |
+| Fortran | =db_cook_frame=, =db_delete_cooked=, =db_has_valid_cooked=, =db_recook_all= | via C =rkrdb_get_positions= (buffer API; not wrapped as high-level array yet) |
+| CLI | =cook-frame=, =delete-cooked=, =recook-all= | =positions= |
+
+* See also
+
+- Internal design notes: =docs/design.md= (engineer-facing; mirrors this contract)
+- Architecture Sphinx page (synced summary from this org)

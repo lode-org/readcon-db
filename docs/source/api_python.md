@@ -29,3 +29,7 @@ raw = ConCorpus.xxh3_128(b"blob")
 
 Optional `select` kwargs: `exact_hash=` (16-byte LE xxh3-128), `energy_min` /
 `energy_max`, `require_forces`, `require_velocities`, `require_energy`, `limit`.
+
+## Cooked SoA (RCSO)
+
+See `docs/orgmode/cooked-soa.org`. Tier is opt-in; CON text remains authority. Bindings expose cook / delete / has-valid / positions (and forces on C/Python/Rust).

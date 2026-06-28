@@ -28,8 +28,13 @@ Environment (Heed / LMDB)
 ├── idx_formula     : `Cu:2|H:2` ‖ 0xFF ‖ FrameKey
 ├── idx_flags       : (flag_id ‖ FrameKey) → ()    # forces / velocities / has_energy
 ├── frame_by_hash   : xxh3-128 → FrameKey (first wins)
+├── frames_soa      : FrameKey → RCSO cooked numerics (optional, derived)
+├── frame_by_hash   : xxh3-128 → FrameKey (first wins)
 └── hash_by_frame   : FrameKey → xxh3-128
 ```
+
+**Cooked SoA tier:** optional RCSO in `frames_soa` accelerates `get_positions` / `get_forces` without CON parse when valid; CON text in `frames` remains sole authority for hash/dedup/join/reindex. RCSO is not fully equivalent (no symbols/metadata/exact bytes). See `docs/orgmode/cooked-soa.org`.
+
 
 `FrameKey` is 12 bytes: `traj_id` (BE u64) + `frame_idx` (BE u32) so lexicographic order matches numeric order.
 

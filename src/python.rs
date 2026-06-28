@@ -164,6 +164,63 @@ impl PyConCorpus {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// Opt-in RCSO cook; CON text in `frames` remains authority.
+    fn cook_frame(&self, traj_id: u64, frame_idx: u32) -> PyResult<usize> {
+        self.inner
+            .cook_frame(FrameKey {
+                traj_id,
+                frame_idx,
+            })
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    fn delete_cooked_soa(&self, traj_id: u64, frame_idx: u32) -> PyResult<()> {
+        self.inner
+            .delete_cooked_soa(FrameKey {
+                traj_id,
+                frame_idx,
+            })
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    fn has_valid_cooked_soa(&self, traj_id: u64, frame_idx: u32) -> PyResult<bool> {
+        self.inner
+            .has_valid_cooked_soa(FrameKey {
+                traj_id,
+                frame_idx,
+            })
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    fn recook_all(&self) -> PyResult<u32> {
+        self.inner
+            .recook_all()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Prefer frames_soa; fallback parse CON. List of (x,y,z).
+    fn get_positions(&self, traj_id: u64, frame_idx: u32) -> PyResult<Vec<(f64, f64, f64)>> {
+        let v = self
+            .inner
+            .get_positions(FrameKey {
+                traj_id,
+                frame_idx,
+            })
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(v.into_iter().map(|r| (r[0], r[1], r[2])).collect())
+    }
+
+    fn get_forces(&self, traj_id: u64, frame_idx: u32) -> PyResult<Option<Vec<(f64, f64, f64)>>> {
+        let v = self
+            .inner
+            .get_forces(FrameKey {
+                traj_id,
+                frame_idx,
+            })
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(v.map(|rows| rows.into_iter().map(|r| (r[0], r[1], r[2])).collect()))
+    }
+
     fn frame_hash(&self, traj_id: u64, frame_idx: u32) -> PyResult<Vec<u8>> {
         let h = self
             .inner

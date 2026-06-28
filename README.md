@@ -64,3 +64,7 @@ Full ABI table, logo, Sphinx docs, and site: see `docs/`, `website/`, `assets/lo
 ## License
 
 MIT
+
+## Cooked SoA tier
+
+Optional RCSO numerics in `frames_soa` (opt-in cook). CON text in `frames` stays authoritative. User doc: [`docs/orgmode/cooked-soa.org`](docs/orgmode/cooked-soa.org).
