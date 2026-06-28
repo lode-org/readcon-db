@@ -105,10 +105,32 @@ def bench_readcon_db(con_path: Path, n_frames: int, corpus_dir: Path) -> dict:
     select_natoms_s = (time.perf_counter() - t2b) / sel_rounds
 
     # energy if any frames have it — may be 0 hits on tiny_cuh2 without energy
-    t2c = time.perf_counter()
+    # Mass / volume windows derived from first frame (all ladder frames identical).
+    fr0 = readcon.read_con(str(con_path))[0]
+    atoms0 = frame_to_atoms(fr0)
+    mass0 = float(atoms0.info["mass"])
+    vol0 = float(atoms0.info["volume"])
+    mass_lo, mass_hi = mass0 * 0.99, mass0 * 1.01
+    vol_lo, vol_hi = vol0 * 0.99, vol0 * 1.01
+
+    t2m = time.perf_counter()
     for _ in range(sel_rounds):
-        _ = db.select(energy_min=-1e9, energy_max=1e9, require_energy=True)
-    select_energy_s = (time.perf_counter() - t2c) / sel_rounds
+        _ = db.select(mass_min=mass_lo, mass_max=mass_hi)
+    select_mass_s = (time.perf_counter() - t2m) / sel_rounds
+
+    t2v = time.perf_counter()
+    for _ in range(sel_rounds):
+        _ = db.select(volume_min=vol_lo, volume_max=vol_hi)
+    select_volume_s = (time.perf_counter() - t2v) / sel_rounds
+
+    # Energy timing only if corpus has energy metadata (tiny_cuh2 has none → omit, not full-scan).
+    has_energy = any(fr.energy is not None for fr in readcon.read_con(str(con_path))[:1])
+    select_energy_s = None
+    if has_energy:
+        t2c = time.perf_counter()
+        for _ in range(sel_rounds):
+            _ = db.select(energy_min=-1e9, energy_max=1e9, require_energy=True)
+        select_energy_s = (time.perf_counter() - t2c) / sel_rounds
 
     # Multi-reader: share one ConCorpus (Heed forbids a second Env open in-process).
     # Threads issue concurrent get_frame_text on the shared handle — CSE-style load.
@@ -127,6 +149,8 @@ def bench_readcon_db(con_path: Path, n_frames: int, corpus_dir: Path) -> dict:
     hit_cu = len(db.select(symbol="Cu"))
     hit_natoms = len(db.select(natoms_min=1, natoms_max=10_000))
     hit_formula = len(db.select(formula="Cu:2|H:2"))
+    hit_mass = len(db.select(mass_min=mass_lo, mass_max=mass_hi))
+    hit_volume = len(db.select(volume_min=vol_lo, volume_max=vol_hi))
 
     return {
         "backend": "readcon-db",
@@ -135,13 +159,20 @@ def bench_readcon_db(con_path: Path, n_frames: int, corpus_dir: Path) -> dict:
         "extract_all_mean_s": extract_s,
         "select_cu_mean_s": select_cu_s,
         "select_natoms_mean_s": select_natoms_s,
+        "select_mass_mean_s": select_mass_s,
+        "select_volume_mean_s": select_volume_s,
         "select_energy_present_mean_s": select_energy_s,
+        "energy_select_skipped": not has_energy,
+        "mass_window": [mass_lo, mass_hi],
+        "volume_window": [vol_lo, vol_hi],
         "concurrent_8readers_extract_s": concurrent_s,
         "insert_frames_per_s": n_frames / insert_s if insert_s else None,
         "extract_frames_per_s": n_frames / extract_s if extract_s else None,
         "hit_symbol_Cu": hit_cu,
         "hit_natoms_1_10000": hit_natoms,
         "hit_formula_Cu2H2": hit_formula,
+        "hit_mass_window": hit_mass,
+        "hit_volume_window": hit_volume,
         "methodology": "CON ladder append; Select via indexes; 8 threads share one ConCorpus (LMDB multi-reader)",
     }
 
@@ -183,14 +214,29 @@ def bench_ase_db(con_path: Path, n_frames: int, db_path: Path) -> dict:
         list(db.select("natoms>=1,natoms<=10000"))
     select_natoms_s = (time.perf_counter() - t2b) / sel_rounds
 
-    t2c = time.perf_counter()
+    mass0 = float(atoms_list[0].info["mass"])
+    vol0 = float(atoms_list[0].info["volume"])
+    mass_lo, mass_hi = mass0 * 0.99, mass0 * 1.01
+    vol_lo, vol_hi = vol0 * 0.99, vol0 * 1.01
+
+    t2m = time.perf_counter()
     for _ in range(sel_rounds):
-        # only rows with energy key; may be empty for no-energy CON
-        try:
+        list(db.select(f"mass>={mass_lo},mass<={mass_hi}"))
+    select_mass_s = (time.perf_counter() - t2m) / sel_rounds
+
+    t2v = time.perf_counter()
+    for _ in range(sel_rounds):
+        list(db.select(f"volume>={vol_lo},volume<={vol_hi}"))
+    select_volume_s = (time.perf_counter() - t2v) / sel_rounds
+
+    # Energy: only time a fixed no-hit or real energy query — never fall back to full scan.
+    has_energy = any("energy" in a.info for a in atoms_list[:1])
+    select_energy_s = None
+    if has_energy:
+        t2c = time.perf_counter()
+        for _ in range(sel_rounds):
             list(db.select("energy"))
-        except Exception:
-            list(db.select())
-    select_energy_s = (time.perf_counter() - t2c) / sel_rounds
+        select_energy_s = (time.perf_counter() - t2c) / sel_rounds
 
     # Share one ASE connection for threaded reads (SQLite serializes; still CSE-comparable load).
     def reader():
@@ -209,6 +255,8 @@ def bench_ase_db(con_path: Path, n_frames: int, db_path: Path) -> dict:
     hit_natoms = len(list(db.select("natoms>=1,natoms<=10000")))
     # formula: ASE uses reduced formula e.g. CuH
     hit_formula = len(list(db.select(formula="CuH")))
+    hit_mass = len(list(db.select(f"mass>={mass_lo},mass<={mass_hi}")))
+    hit_volume = len(list(db.select(f"volume>={vol_lo},volume<={vol_hi}")))
 
     return {
         "backend": "ase.db",
@@ -217,14 +265,21 @@ def bench_ase_db(con_path: Path, n_frames: int, db_path: Path) -> dict:
         "extract_all_mean_s": extract_s,
         "select_cu_mean_s": select_cu_s,
         "select_natoms_mean_s": select_natoms_s,
+        "select_mass_mean_s": select_mass_s,
+        "select_volume_mean_s": select_volume_s,
         "select_energy_present_mean_s": select_energy_s,
+        "energy_select_skipped": not has_energy,
+        "mass_window": [mass_lo, mass_hi],
+        "volume_window": [vol_lo, vol_hi],
         "concurrent_8readers_extract_s": concurrent_s,
         "insert_frames_per_s": n_frames / insert_s if insert_s else None,
         "extract_frames_per_s": n_frames / extract_s if extract_s else None,
         "hit_symbol_Cu": hit_cu,
         "hit_natoms_1_10000": hit_natoms,
         "hit_formula_CuH_ase": hit_formula,
-        "hit_formula_note": "ASE reduced formula CuH vs readcon multiset Cu:2|H:2 — count agreement uses symbol+natoms",
+        "hit_mass_window": hit_mass,
+        "hit_volume_window": hit_volume,
+        "hit_formula_note": "ASE reduced formula CuH vs readcon multiset Cu:2|H:2 — count agreement uses symbol+natoms+mass+volume",
         "methodology": "Same CON frames via readcon→Atoms (no Cu2 stand-in); 8 threads share one ase.db connection",
     }
 
@@ -289,7 +344,7 @@ def run_campaign(fixture: Path, ladder: list[int], out_dir: Path, run_id: int) -
         ase = bench_ase_db(con_path, n, work / f"ase_n{n}.db")
         rdb_results.append(rdb)
         ase_results.append(ase)
-        # Agreement: symbol Cu and natoms range (formula encoding differs ASE vs readcon)
+        # Agreement: Cu, natoms, mass window, volume window (both sides carry scalars)
         parity_rows.append(
             {
                 "n_frames": n,
@@ -299,11 +354,24 @@ def run_campaign(fixture: Path, ladder: list[int], out_dir: Path, run_id: int) -
                 "hit_natoms_rdb": rdb["hit_natoms_1_10000"],
                 "hit_natoms_ase": ase["hit_natoms_1_10000"],
                 "natoms_agree": rdb["hit_natoms_1_10000"] == ase["hit_natoms_1_10000"],
+                "hit_mass_rdb": rdb["hit_mass_window"],
+                "hit_mass_ase": ase["hit_mass_window"],
+                "mass_agree": rdb["hit_mass_window"] == ase["hit_mass_window"],
+                "hit_volume_rdb": rdb["hit_volume_window"],
+                "hit_volume_ase": ase["hit_volume_window"],
+                "volume_agree": rdb["hit_volume_window"] == ase["hit_volume_window"],
             }
         )
 
     interchange = interchange_parse(fixture, n_frames=min(100, max(ladder)), repeats=5)
 
+    all_agree = all(
+        r["symbol_Cu_agree"]
+        and r["natoms_agree"]
+        and r["mass_agree"]
+        and r["volume_agree"]
+        for r in parity_rows
+    )
     payload = {
         "run_id": run_id,
         "fixture": str(fixture),
@@ -314,9 +382,8 @@ def run_campaign(fixture: Path, ladder: list[int], out_dir: Path, run_id: int) -
         "ase_db": ase_results,
         "select_parity": parity_rows,
         "interchange": interchange,
-        "all_symbol_natoms_agree": all(
-            r["symbol_Cu_agree"] and r["natoms_agree"] for r in parity_rows
-        ),
+        "all_symbol_natoms_agree": all_agree,  # name kept; includes mass+volume
+        "all_competitive_selects_agree": all_agree,
     }
     out_json = out_dir / f"ase_fair_campaign_{run_id}.json"
     out_json.write_text(json.dumps(payload, indent=2))
@@ -348,7 +415,12 @@ def write_markdown_table(payload: dict, path: Path) -> None:
                 asc=a["select_cu_mean_s"],
                 r8=r["concurrent_8readers_extract_s"],
                 a8=a["concurrent_8readers_extract_s"],
-                ag="yes" if p["symbol_Cu_agree"] and p["natoms_agree"] else "NO",
+                ag="yes"
+                if p["symbol_Cu_agree"]
+                and p["natoms_agree"]
+                and p.get("mass_agree", True)
+                and p.get("volume_agree", True)
+                else "NO",
             )
         )
     lines.append("")
@@ -373,8 +445,17 @@ def main() -> None:
     ladder = [int(x) for x in args.ladder.split(",") if x.strip()]
     payload = run_campaign(args.fixture, ladder, args.out, args.run_id)
     write_markdown_table(payload, args.out / f"fair_db_vs_ase_table_run{args.run_id}.md")
-    print(json.dumps({"run_id": args.run_id, "all_agree": payload["all_symbol_natoms_agree"], "out": str(args.out)}, indent=2))
-    if not payload["all_symbol_natoms_agree"]:
+    print(
+        json.dumps(
+            {
+                "run_id": args.run_id,
+                "all_agree": payload["all_competitive_selects_agree"],
+                "out": str(args.out),
+            },
+            indent=2,
+        )
+    )
+    if not payload["all_competitive_selects_agree"]:
         raise SystemExit("select hit counts disagree — see JSON select_parity")
 
 
