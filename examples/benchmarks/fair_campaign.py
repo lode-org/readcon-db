@@ -110,10 +110,11 @@ def bench_readcon_db(con_path: Path, n_frames: int, corpus_dir: Path) -> dict:
         _ = db.select(energy_min=-1e9, energy_max=1e9, require_energy=True)
     select_energy_s = (time.perf_counter() - t2c) / sel_rounds
 
+    # Multi-reader: share one ConCorpus (Heed forbids a second Env open in-process).
+    # Threads issue concurrent get_frame_text on the shared handle — CSE-style load.
     def reader():
-        d = ConCorpus(str(corpus_dir))
         for i in range(n_frames):
-            _ = len(d.get_frame_text(1, i))
+            _ = len(db.get_frame_text(1, i))
 
     t3 = time.perf_counter()
     threads = [threading.Thread(target=reader) for _ in range(8)]
@@ -141,7 +142,7 @@ def bench_readcon_db(con_path: Path, n_frames: int, corpus_dir: Path) -> dict:
         "hit_symbol_Cu": hit_cu,
         "hit_natoms_1_10000": hit_natoms,
         "hit_formula_Cu2H2": hit_formula,
-        "methodology": "CON ladder append; Select via indexes; multi-reader separate ConCorpus opens",
+        "methodology": "CON ladder append; Select via indexes; 8 threads share one ConCorpus (LMDB multi-reader)",
     }
 
 
@@ -191,9 +192,9 @@ def bench_ase_db(con_path: Path, n_frames: int, db_path: Path) -> dict:
             list(db.select())
     select_energy_s = (time.perf_counter() - t2c) / sel_rounds
 
+    # Share one ASE connection for threaded reads (SQLite serializes; still CSE-comparable load).
     def reader():
-        d = connect(str(db_path))
-        for row in d.select():
+        for row in db.select():
             _ = row.toatoms().positions.sum()
 
     t3 = time.perf_counter()
@@ -224,7 +225,7 @@ def bench_ase_db(con_path: Path, n_frames: int, db_path: Path) -> dict:
         "hit_natoms_1_10000": hit_natoms,
         "hit_formula_CuH_ase": hit_formula,
         "hit_formula_note": "ASE reduced formula CuH vs readcon multiset Cu:2|H:2 — count agreement uses symbol+natoms",
-        "methodology": "Same CON frames via readcon→Atoms (no Cu2 stand-in); ASE SQLite select strings",
+        "methodology": "Same CON frames via readcon→Atoms (no Cu2 stand-in); 8 threads share one ase.db connection",
     }
 
 
