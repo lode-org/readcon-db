@@ -86,13 +86,14 @@ def bench_readcon_db(con_path: Path, n_frames: int, corpus_dir: Path) -> dict:
     # extract: materialize every CON blob (owned copy + byte fold) in one txn per pass
     rounds = 20
     t1 = time.perf_counter()
-    ck_acc = 0
+    last_ck = 0
+    last_total = 0
     for _ in range(rounds):
         total, ck = db.touch_trajectory(1, n_frames)
-        assert total > 0
-        ck_acc ^= ck
+        assert total > 0 and ck != 0  # payload fold; not length-only
+        last_total, last_ck = total, ck
     extract_s = (time.perf_counter() - t1) / rounds
-    assert ck_acc != 0 or n_frames == 0
+    assert last_total > 0 and last_ck != 0
 
     # competitive selects (mean over rounds)
     sel_rounds = 50
