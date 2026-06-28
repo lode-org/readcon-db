@@ -116,3 +116,8 @@ Speed only matters if filters users already have in ASE.db exist. Architecture s
 | SQL `SELECT` | — | **N/A (architecture)**; use `Select` / CLI / Python |
 
 `reindex` rebuilds **all** secondary indexes including mass/volume/pbc/meta.
+
+## Writer concurrency
+
+CPU-bound prepare (parse CON spans / serialize ConFrames) runs **outside** the exclusive LMDB `write_txn`. Concurrent threads may prepare in parallel; only commits serialize at the engine (single active write txn). FFI handle-table locks do not cover ingest.
+

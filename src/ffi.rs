@@ -5,7 +5,7 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::ptr;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::corpus::ConCorpus;
 use crate::keys::{hash_frame_bytes, ContentHash, FrameKey};
@@ -17,7 +17,8 @@ pub const RKRDB_NOT_FOUND: c_int = -2;
 pub const RKRDB_NULL: c_int = -3;
 
 struct Handle {
-    corpus: ConCorpus,
+    /// Shared so ingest runs **outside** the handle-table mutex (no app-level writer serialize).
+    corpus: Arc<ConCorpus>,
     last_keys: Vec<FrameKey>,
     last_error: String,
 }
@@ -36,6 +37,7 @@ fn push_handle(h: Handle) -> usize {
     g.len() - 1
 }
 
+/// Brief table lock for bookkeeping only — not held across ingest/select CPU or LMDB work.
 fn with_handle<F, T>(id: usize, f: F) -> Result<T, c_int>
 where
     F: FnOnce(&mut Handle) -> Result<T, c_int>,
@@ -44,6 +46,20 @@ where
     let slot = g.get_mut(id).ok_or(RKRDB_NULL)?;
     let h = slot.as_mut().ok_or(RKRDB_NULL)?;
     f(h)
+}
+
+fn corpus_arc(id: usize) -> Result<Arc<ConCorpus>, c_int> {
+    let g = HANDLES.lock().unwrap();
+    let slot = g.get(id).ok_or(RKRDB_NULL)?;
+    let h = slot.as_ref().ok_or(RKRDB_NULL)?;
+    Ok(Arc::clone(&h.corpus))
+}
+
+fn set_err_id(id: usize, e: impl ToString) {
+    let mut g = HANDLES.lock().unwrap();
+    if let Some(Some(h)) = g.get_mut(id) {
+        h.last_error = e.to_string();
+    }
 }
 
 fn set_err(h: &mut Handle, e: impl ToString) {
@@ -65,7 +81,7 @@ pub unsafe extern "C" fn rkrdb_open(path: *const c_char, out_id: *mut usize) -> 
     match ConCorpus::open(path) {
         Ok(corpus) => {
             let id = push_handle(Handle {
-                corpus,
+                corpus: Arc::new(corpus),
                 last_keys: Vec::new(),
                 last_error: String::new(),
             });
@@ -121,19 +137,23 @@ pub unsafe extern "C" fn rkrdb_append_trajectory(
         Ok(s) => s,
         Err(_) => return RKRDB_ERR,
     };
-    with_handle(id, |h| match h.corpus.append_trajectory_path(traj_id, path) {
+    // Prepare+commit on Arc corpus **outside** handle mutex (concurrent writers on distinct handles).
+    let corpus = match corpus_arc(id) {
+        Ok(c) => c,
+        Err(c) => return c,
+    };
+    match corpus.append_trajectory_path(traj_id, path) {
         Ok(n) => {
             if !out_n_frames.is_null() {
                 unsafe { *out_n_frames = n };
             }
-            Ok(RKRDB_OK)
+            RKRDB_OK
         }
         Err(e) => {
-            set_err(h, e);
-            Ok(RKRDB_ERR)
+            set_err_id(id, e);
+            RKRDB_ERR
         }
-    })
-    .unwrap_or(RKRDB_NULL)
+    }
 }
 
 /// Select by required symbol (optional) and natoms range (use 0, UINT32_MAX for any).

@@ -40,6 +40,13 @@ pub struct TrajMeta {
     pub source: String,
 }
 
+/// Prepared ingest record: CPU parse/serialize finished **before** exclusive write_txn.
+struct PreparedFrameRec {
+    fk: FrameKey,
+    blob: String,
+    frame: ConFrame,
+}
+
 pub struct ConCorpus {
     path: PathBuf,
     env: Env,
@@ -254,6 +261,96 @@ impl ConCorpus {
         Ok(())
     }
 
+    /// Parse path/string CON into owned blobs + frames (no exclusive LMDB write section).
+    fn prepare_trajectory_str(
+        traj_id: TrajId,
+        file_contents: &str,
+    ) -> Result<Vec<PreparedFrameRec>> {
+        let mut out = Vec::new();
+        let mut frame_idx: u32 = 0;
+        let mut iter = ConFrameIterator::new(file_contents);
+        loop {
+            let (frame, blob) = match iter.next_with_raw_span(file_contents) {
+                None => break,
+                Some(Err(e)) => return Err(Error::Parse(e.to_string())),
+                Some(Ok(x)) => x,
+            };
+            out.push(PreparedFrameRec {
+                fk: FrameKey {
+                    traj_id,
+                    frame_idx,
+                },
+                blob: blob.to_owned(),
+                frame,
+            });
+            frame_idx += 1;
+        }
+        Ok(out)
+    }
+
+    /// Serialize ConFrames to CON text **outside** write_txn (in-memory ingress path).
+    fn prepare_trajectory_frames(
+        traj_id: TrajId,
+        frames: &[ConFrame],
+        start_idx: u32,
+    ) -> Result<Vec<PreparedFrameRec>> {
+        let mut out = Vec::with_capacity(frames.len());
+        let mut frame_idx = start_idx;
+        for fr in frames {
+            let mut buf = Cursor::new(Vec::new());
+            {
+                let mut w = ConFrameWriter::new(&mut buf);
+                w.write_frame(fr)
+                    .map_err(|e| Error::Parse(format!("serialize: {e}")))?;
+            }
+            let blob = String::from_utf8(buf.into_inner())
+                .map_err(|e| Error::Message(format!("utf8: {e}")))?;
+            out.push(PreparedFrameRec {
+                fk: FrameKey {
+                    traj_id,
+                    frame_idx,
+                },
+                blob,
+                frame: fr.clone(),
+            });
+            frame_idx += 1;
+        }
+        Ok(out)
+    }
+
+    /// Short exclusive commit: traj_meta guard + puts only (no parse / no ConFrameWriter).
+    fn commit_prepared(
+        &self,
+        traj_id: TrajId,
+        prepared: &[PreparedFrameRec],
+        source: String,
+        replace_meta: bool,
+    ) -> Result<u32> {
+        let mut wtxn = self.env.write_txn()?;
+        let tid_key = traj_id.to_be_bytes();
+        if !replace_meta {
+            if let Some(existing) = self.traj_meta.get(&wtxn, &tid_key[..])? {
+                let meta: TrajMeta = serde_json::from_str(existing)?;
+                return Err(Error::TrajExists(traj_id, meta.n_frames));
+            }
+        }
+        for p in prepared {
+            self.index_frame(&mut wtxn, p.fk, &p.frame, &p.blob)?;
+        }
+        let n_frames = prepared
+            .last()
+            .map(|p| p.fk.frame_idx + 1)
+            .unwrap_or(0);
+        let meta = TrajMeta {
+            n_frames,
+            source,
+        };
+        self.traj_meta
+            .put(&mut wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
+        wtxn.commit()?;
+        Ok(n_frames)
+    }
+
     pub fn append_trajectory_path(&self, traj_id: TrajId, file: impl AsRef<Path>) -> Result<u32> {
         let text = fs::read_to_string(file.as_ref())?;
         self.append_trajectory_str(traj_id, &text, file.as_ref().display().to_string())
@@ -266,42 +363,12 @@ impl ConCorpus {
         source: impl Into<String>,
     ) -> Result<u32> {
         let source = source.into();
-        let mut wtxn = self.env.write_txn()?;
-
-        let tid_key = traj_id.to_be_bytes();
-        if let Some(existing) = self.traj_meta.get(&wtxn, &tid_key[..])? {
-            let meta: TrajMeta = serde_json::from_str(existing)?;
-            return Err(Error::TrajExists(traj_id, meta.n_frames));
-        }
-
-        let mut frame_idx: u32 = 0;
-        let mut iter = ConFrameIterator::new(file_contents);
-        loop {
-            let (frame, blob) = match iter.next_with_raw_span(file_contents) {
-                None => break,
-                Some(Err(e)) => return Err(Error::Parse(e.to_string())),
-                Some(Ok(x)) => x,
-            };
-            let fk = FrameKey {
-                traj_id,
-                frame_idx,
-            };
-            self.index_frame(&mut wtxn, fk, &frame, blob)?;
-            frame_idx += 1;
-        }
-
-        let meta = TrajMeta {
-            n_frames: frame_idx,
-            source,
-        };
-        let meta_s = serde_json::to_string(&meta)?;
-        self.traj_meta
-            .put(&mut wtxn, &tid_key[..], meta_s.as_str())?;
-        wtxn.commit()?;
-        Ok(frame_idx)
+        // Prepare outside exclusive write section (parallel writers can parse concurrently).
+        let prepared = Self::prepare_trajectory_str(traj_id, file_contents)?;
+        self.commit_prepared(traj_id, &prepared, source, false)
     }
 
-    /// Ingest already-parsed frames (chemfiles / builder path). Serializes with `ConFrameWriter`.
+    /// Ingest already-parsed frames (chemfiles / builder path). Serialize in prepare, not under write_txn.
     pub fn append_trajectory_frames(
         &self,
         traj_id: TrajId,
@@ -309,37 +376,8 @@ impl ConCorpus {
         source: impl Into<String>,
     ) -> Result<u32> {
         let source = source.into();
-        let mut wtxn = self.env.write_txn()?;
-        let tid_key = traj_id.to_be_bytes();
-        if let Some(existing) = self.traj_meta.get(&wtxn, &tid_key[..])? {
-            let meta: TrajMeta = serde_json::from_str(existing)?;
-            return Err(Error::TrajExists(traj_id, meta.n_frames));
-        }
-        let mut frame_idx: u32 = 0;
-        for fr in frames {
-            let mut buf = Cursor::new(Vec::new());
-            {
-                let mut w = ConFrameWriter::new(&mut buf);
-                w.write_frame(fr)
-                    .map_err(|e| Error::Parse(format!("serialize: {e}")))?;
-            }
-            let blob = String::from_utf8(buf.into_inner())
-                .map_err(|e| Error::Message(format!("utf8: {e}")))?;
-            let fk = FrameKey {
-                traj_id,
-                frame_idx,
-            };
-            self.index_frame(&mut wtxn, fk, fr, &blob)?;
-            frame_idx += 1;
-        }
-        let meta = TrajMeta {
-            n_frames: frame_idx,
-            source,
-        };
-        self.traj_meta
-            .put(&mut wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
-        wtxn.commit()?;
-        Ok(frame_idx)
+        let prepared = Self::prepare_trajectory_frames(traj_id, frames, 0)?;
+        self.commit_prepared(traj_id, &prepared, source, false)
     }
 
     /// Append frames to an existing trajectory (or create it). Returns new total frame count.
@@ -349,38 +387,43 @@ impl ConCorpus {
         frames: &[ConFrame],
         source_hint: impl Into<String>,
     ) -> Result<u32> {
+        // Read start index under a short read txn (not a writer lock for CPU serialize).
+        let (start_idx, source) = {
+            let rtxn = self.env.read_txn()?;
+            let tid_key = traj_id.to_be_bytes();
+            if let Some(existing) = self.traj_meta.get(&rtxn, &tid_key[..])? {
+                let meta: TrajMeta = serde_json::from_str(existing)?;
+                (meta.n_frames, meta.source)
+            } else {
+                (0u32, source_hint.into())
+            }
+        };
+        let prepared = Self::prepare_trajectory_frames(traj_id, frames, start_idx)?;
+        // Commit with replace_meta: always rewrite traj_meta to new n_frames.
         let mut wtxn = self.env.write_txn()?;
         let tid_key = traj_id.to_be_bytes();
-        let (mut frame_idx, source) = if let Some(existing) = self.traj_meta.get(&wtxn, &tid_key[..])? {
-            let meta: TrajMeta = serde_json::from_str(existing)?;
-            (meta.n_frames, meta.source)
-        } else {
-            (0u32, source_hint.into())
-        };
-        for fr in frames {
-            let mut buf = Cursor::new(Vec::new());
-            {
-                let mut w = ConFrameWriter::new(&mut buf);
-                w.write_frame(fr)
-                    .map_err(|e| Error::Parse(format!("serialize: {e}")))?;
+        // Re-check existence race: if another writer created same traj_id as new, fail if we expected create.
+        if start_idx == 0 {
+            if let Some(existing) = self.traj_meta.get(&wtxn, &tid_key[..])? {
+                let meta: TrajMeta = serde_json::from_str(existing)?;
+                return Err(Error::TrajExists(traj_id, meta.n_frames));
             }
-            let blob = String::from_utf8(buf.into_inner())
-                .map_err(|e| Error::Message(format!("utf8: {e}")))?;
-            let fk = FrameKey {
-                traj_id,
-                frame_idx,
-            };
-            self.index_frame(&mut wtxn, fk, fr, &blob)?;
-            frame_idx += 1;
         }
+        for p in &prepared {
+            self.index_frame(&mut wtxn, p.fk, &p.frame, &p.blob)?;
+        }
+        let n_frames = prepared
+            .last()
+            .map(|p| p.fk.frame_idx + 1)
+            .unwrap_or(start_idx);
         let meta = TrajMeta {
-            n_frames: frame_idx,
+            n_frames,
             source,
         };
         self.traj_meta
             .put(&mut wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
         wtxn.commit()?;
-        Ok(frame_idx)
+        Ok(n_frames)
     }
 
     fn clear_secondary(&self, wtxn: &mut RwTxn) -> Result<()> {
@@ -1302,6 +1345,42 @@ mod tests {
 
     /// Multi-process: N OS processes each open the same env via CLI and select.
     #[test]
+
+    /// Concurrent threads append distinct traj IDs; prepare runs in parallel, LMDB commits serialize only.
+    #[test]
+    fn concurrent_writers_distinct_traj() {
+        use std::sync::Arc;
+        use std::thread;
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(ConCorpus::open(dir.path()).unwrap());
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let mut handles = Vec::new();
+        for tid in 1u64..=8 {
+            let db = Arc::clone(&db);
+            let text = text.clone();
+            handles.push(thread::spawn(move || {
+                db.append_trajectory_str(tid, &text, format!("t{tid}")).unwrap()
+            }));
+        }
+        let mut counts = Vec::new();
+        for h in handles {
+            counts.push(h.join().unwrap());
+        }
+        assert!(counts.iter().all(|&c| c >= 1));
+        for tid in 1u64..=8 {
+            let meta = db.traj_meta(tid).unwrap().expect("meta");
+            assert_eq!(meta.n_frames, counts[(tid - 1) as usize]);
+            let _ = db
+                .get_frame_text(FrameKey {
+                    traj_id: tid,
+                    frame_idx: 0,
+                })
+                .unwrap();
+        }
+        let cu = db.select(&Select::new().require_symbol("Cu")).unwrap();
+        assert_eq!(cu.len(), 8);
+    }
+
     fn multiproc_cli_concurrent_select() {
         use std::process::Command;
         let dir = tempfile::tempdir().unwrap();
