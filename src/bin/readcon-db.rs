@@ -23,9 +23,10 @@ fn usage() -> ExitCode {
                      [--energy-min E] [--energy-max E] [--fmax-min F] [--fmax-max F]
                      [--elem SYM:COUNT] [--elem-min SYM:COUNT] [--formula Cu:2|H:2]
                      [--mass-min M] [--mass-max M] [--volume-min V] [--volume-max V]
-                     [--pbc X,Y,Z] [--time-min T] [--time-max T] [--frame-index-min I] [--frame-index-max I]
-                     [--neb-bead-min N] [--neb-bead-max N] [--charge-min C] [--charge-max C]
-                     [--magmom-min M] [--magmom-max M]
+                     [--pbc X,Y,Z] [--time-min T] [--time-max T] [--timestep-min DT] [--timestep-max DT]
+                     [--frame-index-min I] [--frame-index-max I]
+                     [--neb-bead-min N] [--neb-bead-max N] [--neb-band-min B] [--neb-band-max B]
+                     [--charge-min C] [--charge-max C] [--magmom-min M] [--magmom-max M]
                      [--require-forces] [--require-velocities] [--require-energy]
                      [--export out.xyz]
   readcon-db dedup-export <corpus_dir> [same filters as select] -o out.xyz
@@ -104,10 +105,14 @@ fn main() -> ExitCode {
                 let mut pbc: Option<[bool; 3]> = None;
                 let mut time_min: Option<f64> = None;
                 let mut time_max: Option<f64> = None;
+                let mut timestep_min: Option<f64> = None;
+                let mut timestep_max: Option<f64> = None;
                 let mut fi_min: Option<f64> = None;
                 let mut fi_max: Option<f64> = None;
                 let mut bead_min: Option<f64> = None;
                 let mut bead_max: Option<f64> = None;
+                let mut band_min: Option<f64> = None;
+                let mut band_max: Option<f64> = None;
                 let mut charge_min: Option<f64> = None;
                 let mut charge_max: Option<f64> = None;
                 let mut mag_min: Option<f64> = None;
@@ -183,10 +188,14 @@ fn main() -> ExitCode {
                         }
                         "--time-min" => { time_min = Some(args.get(i + 1).ok_or("t")?.parse()?); i += 2; }
                         "--time-max" => { time_max = Some(args.get(i + 1).ok_or("t")?.parse()?); i += 2; }
+                        "--timestep-min" => { timestep_min = Some(args.get(i + 1).ok_or("dt")?.parse()?); i += 2; }
+                        "--timestep-max" => { timestep_max = Some(args.get(i + 1).ok_or("dt")?.parse()?); i += 2; }
                         "--frame-index-min" => { fi_min = Some(args.get(i + 1).ok_or("i")?.parse()?); i += 2; }
                         "--frame-index-max" => { fi_max = Some(args.get(i + 1).ok_or("i")?.parse()?); i += 2; }
                         "--neb-bead-min" => { bead_min = Some(args.get(i + 1).ok_or("n")?.parse()?); i += 2; }
                         "--neb-bead-max" => { bead_max = Some(args.get(i + 1).ok_or("n")?.parse()?); i += 2; }
+                        "--neb-band-min" => { band_min = Some(args.get(i + 1).ok_or("b")?.parse()?); i += 2; }
+                        "--neb-band-max" => { band_max = Some(args.get(i + 1).ok_or("b")?.parse()?); i += 2; }
                         "--charge-min" => { charge_min = Some(args.get(i + 1).ok_or("c")?.parse()?); i += 2; }
                         "--charge-max" => { charge_max = Some(args.get(i + 1).ok_or("c")?.parse()?); i += 2; }
                         "--magmom-min" => { mag_min = Some(args.get(i + 1).ok_or("m")?.parse()?); i += 2; }
@@ -239,11 +248,23 @@ fn main() -> ExitCode {
                 if time_min.is_some() || time_max.is_some() {
                     sel = sel.time_range(time_min.unwrap_or(f64::NEG_INFINITY), time_max.unwrap_or(f64::INFINITY));
                 }
+                if timestep_min.is_some() || timestep_max.is_some() {
+                    sel = sel.timestep_range(
+                        timestep_min.unwrap_or(f64::NEG_INFINITY),
+                        timestep_max.unwrap_or(f64::INFINITY),
+                    );
+                }
                 if fi_min.is_some() || fi_max.is_some() {
                     sel = sel.frame_index_range(fi_min.unwrap_or(f64::NEG_INFINITY), fi_max.unwrap_or(f64::INFINITY));
                 }
                 if bead_min.is_some() || bead_max.is_some() {
                     sel = sel.neb_bead_range(bead_min.unwrap_or(f64::NEG_INFINITY), bead_max.unwrap_or(f64::INFINITY));
+                }
+                if band_min.is_some() || band_max.is_some() {
+                    sel = sel.neb_band_range(
+                        band_min.unwrap_or(f64::NEG_INFINITY),
+                        band_max.unwrap_or(f64::INFINITY),
+                    );
                 }
                 if charge_min.is_some() || charge_max.is_some() {
                     sel = sel.charge_range(charge_min.unwrap_or(f64::NEG_INFINITY), charge_max.unwrap_or(f64::INFINITY));

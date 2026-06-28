@@ -1233,10 +1233,9 @@ mod tests {
         let mut fr2 = fr1.clone();
         fr2.header.set_frame_index(7);
         fr2.header.set_time(1.5);
+        fr2.header.set_timestep(0.25);
         fr2.header.set_neb_bead(2);
-        fr2.header
-            .metadata
-            .insert("neb_band".into(), serde_json::json!(1));
+        fr2.header.set_neb_band(1);
         fr2.header.set_pbc([true, true, false]);
         fr2.header
             .metadata
@@ -1281,6 +1280,36 @@ mod tests {
         let t = db.select(&Select::new().time_range(1.4, 1.6)).unwrap();
         assert_eq!(t.len(), 1);
 
+        let dt = db
+            .select(&Select::new().timestep_range(0.25, 0.25))
+            .unwrap();
+        assert_eq!(
+            dt,
+            vec![FrameKey {
+                traj_id: 2,
+                frame_idx: 0
+            }]
+        );
+        let dt_miss = db
+            .select(&Select::new().timestep_range(9.0, 10.0))
+            .unwrap();
+        assert!(dt_miss.is_empty());
+        // traj 1 has no timestep metadata → must not satisfy a finite timestep window
+        assert!(!dt.iter().any(|k| k.traj_id == 1));
+
+        let band = db.select(&Select::new().neb_band_range(1.0, 1.0)).unwrap();
+        assert_eq!(
+            band,
+            vec![FrameKey {
+                traj_id: 2,
+                frame_idx: 0
+            }]
+        );
+        let band_miss = db
+            .select(&Select::new().neb_band_range(99.0, 100.0))
+            .unwrap();
+        assert!(band_miss.is_empty());
+
         let ch = db.select(&Select::new().charge_range(-1.0, -1.0)).unwrap();
         assert_eq!(ch.len(), 1);
         let mm = db.select(&Select::new().magmom_range(2.0, 2.0)).unwrap();
@@ -1294,6 +1323,12 @@ mod tests {
             .select(&Select::new().frame_index_range(7.0, 7.0))
             .unwrap();
         assert_eq!(after.len(), 1);
+        let after_dt = db
+            .select(&Select::new().timestep_range(0.25, 0.25))
+            .unwrap();
+        assert_eq!(after_dt.len(), 1);
+        let after_band = db.select(&Select::new().neb_band_range(1.0, 1.0)).unwrap();
+        assert_eq!(after_band.len(), 1);
 
         // still composition
         let form = db
