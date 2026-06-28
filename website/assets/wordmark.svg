@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 96" role="img" aria-label="readcon-db">
   <text x="8" y="64" font-family="ui-sans-serif, system-ui, Segoe UI, sans-serif" font-size="48" font-weight="700" fill="#004D40">readcon</text>
-  <text x="248" y="64" font-family="ui-sans-serif, system-ui, Segoe UI, sans-serif" font-size="48" font-weight="600" fill="#00897B">-db</text>
+  <text x="248" y="64" font-family="ui-sans-serif, system-ui, Segoe UI, sans-serif" font-size="48" font-weight="600" fill="#00695C">-db</text>
   <rect x="8" y="76" width="200" height="6" rx="3" fill="#26A69A"/>
 </svg>
