@@ -12,7 +12,7 @@
 use std::env;
 use std::process::ExitCode;
 
-use readcon_db::{ConCorpus, Select, ShardedConCorpus, DEFAULT_N_SHARDS};
+use readcon_db::{join_corpus_dirs, ConCorpus, Select, ShardedConCorpus, DEFAULT_N_SHARDS};
 
 fn usage() -> ExitCode {
     eprintln!(
@@ -34,6 +34,9 @@ fn usage() -> ExitCode {
   readcon-db shard-init <root> [--shards N]
   readcon-db shard-ingest <root> --shard S --start-id T <file.con>...
   readcon-db shard-select <root> [--symbol S] ...
+  readcon-db compact-join <sharded_root> <single_dst>
+  readcon-db compact-split <single_src> <sharded_dst> [--shards N]
+  readcon-db compact-export-extxyz <corpus_or_shard_root> <out.xyz> [--sharded] [--symbol S]
   readcon-db hash-file <file.con>
 "
     );
@@ -404,6 +407,69 @@ fn main() -> ExitCode {
                 for k in keys.iter().take(20) {
                     println!("  traj={} frame={}", k.traj_id, k.frame_idx);
                 }
+            }
+
+            "compact-join" => {
+                let src = args.first().ok_or("sharded_root")?.clone();
+                let dst = args.get(1).ok_or("single_dst")?.clone();
+                let mut s = ShardedConCorpus::open(&src, DEFAULT_N_SHARDS)?;
+                let n = s.join_to_single_env(&dst)?;
+                println!("joined {n} frames -> {dst} (single-env-lmdb)");
+            }
+            "compact-split" => {
+                let src = args.first().ok_or("single_src")?.clone();
+                let dst = args.get(1).ok_or("sharded_dst")?.clone();
+                let mut ns = DEFAULT_N_SHARDS;
+                let mut i = 2;
+                while i < args.len() {
+                    if args[i] == "--shards" {
+                        ns = args.get(i + 1).ok_or("n")?.parse()?;
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                let single = ConCorpus::open(&src)?;
+                let n = ShardedConCorpus::split_single_to_sharded(&single, &dst, ns)?;
+                println!("split {n} frames -> {dst} ({ns} shards, sharded-lmdb)");
+            }
+            "compact-export-extxyz" => {
+                let src = args.first().ok_or("src")?.clone();
+                let out = args.get(1).ok_or("out.xyz")?.clone();
+                let mut sharded = false;
+                let mut symbol = None;
+                let mut i = 2;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "--sharded" => {
+                            sharded = true;
+                            i += 1;
+                        }
+                        "--symbol" => {
+                            symbol = Some(args.get(i + 1).ok_or("sym")?.clone());
+                            i += 2;
+                        }
+                        _ => i += 1,
+                    }
+                }
+                let mut sel = Select::new();
+                if let Some(s) = symbol {
+                    sel = sel.require_symbol(s);
+                }
+                let n = if sharded {
+                    let tmp = tempfile::tempdir()?;
+                    let joined = tmp.path().join("j");
+                    let mut sc2 = ShardedConCorpus::open(&src, DEFAULT_N_SHARDS)?;
+                    sc2.join_to_single_env(&joined)?;
+                    let db = ConCorpus::open(&joined)?;
+                    let keys = db.select(&sel)?;
+                    db.export_extxyz(&keys, &out, "energy")?
+                } else {
+                    let db = ConCorpus::open(&src)?;
+                    let keys = db.select(&sel)?;
+                    db.export_extxyz(&keys, &out, "energy")?
+                };
+                println!("wrote {n} frames extxyz -> {out} (analysis export)");
             }
             "hash-file" => {
                 let f = args.first().ok_or("file")?;

@@ -188,6 +188,27 @@ impl ConCorpus {
         &self.path
     }
 
+    /// All frame keys in this env (for compaction / export pipelines).
+    pub fn list_frame_keys(&self) -> Result<Vec<FrameKey>> {
+        let rtxn = self.env.read_txn()?;
+        let mut out = Vec::new();
+        let mut iter = self.frames.iter(&rtxn)?;
+        while let Some(Ok((k, _))) = iter.next() {
+            if let Some(fk) = FrameKey::from_bytes(k) {
+                out.push(fk);
+            }
+        }
+        out.sort();
+        Ok(out)
+    }
+
+    /// Copy one frame blob+indexes from this corpus into `dst` (same FrameKey).
+    /// Used by join compaction; prepare keys outside dst exclusive section via append path on text.
+    pub fn export_frame_blob(&self, key: FrameKey) -> Result<String> {
+        self.get_frame_text(key)
+    }
+
+
     /// CPU-only: derive every secondary key for one frame (call **outside** write_txn).
     fn build_index_puts(fk: FrameKey, frame: &ConFrame, blob: String) -> PreparedIndexPuts {
         let hash = hash_frame_bytes(blob.as_bytes()).to_bytes();

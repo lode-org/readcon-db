@@ -20,7 +20,7 @@ pub use keys::{
     FrameKey, TrajId,
 };
 pub use select::Select;
-pub use shard::{ShardedConCorpus, ShardManifest, DEFAULT_N_SHARDS};
+pub use shard::{join_corpus_dirs, CorpusExportKind, ShardedConCorpus, ShardManifest, DEFAULT_N_SHARDS};
 
 pub mod ffi;
 

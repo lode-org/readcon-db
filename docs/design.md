@@ -149,3 +149,15 @@ see decision artifact from the storage-model review (session SCRATCH
 `lmdb-model-decision.md`) or regenerate from team notes. Do **not** interpret
 “one write_txn per env” as “LMDB cannot do multi-process writes”—only that
 **partitioning is mandatory** for concurrent commits.
+
+## Compaction: reversible join / split for analysis
+
+| Mode | CLI | Use |
+|------|-----|-----|
+| **sharded-lmdb** | `shard-init` / `compact-split` | HPC multi-writer; parallel rank ingest |
+| **single-env-lmdb** | `compact-join` / ordinary `ingest` | Laptop analysis; one `ConCorpus::open` |
+| **extxyz** | `compact-export-extxyz` [--sharded] | External ML tools (non-LMDB) |
+
+Join copies CON blobs by traj (ids preserved; duplicate traj across shards errors).
+Split routes `traj_id % n_shards` into a new manifest root. Membership is reversible
+under that routing (indexes rebuilt via normal prepare/commit ingest).
