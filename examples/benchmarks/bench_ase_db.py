@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""LEGACY UNEQUAL WORKLOAD: Cu2 stand-in only. Prefer fair_campaign.py for proper comparison."""
 """ASE .db insert/extract/select timings — compare to readcon-db JSON."""
 from __future__ import annotations
 import json, sys, time

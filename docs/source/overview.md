@@ -12,3 +12,6 @@ Long-timescale and NEB campaigns produce **corpora**: many trajectories × many 
 **Day-to-day path:** CON (or chemfiles→`ConFrame` in core) → ingest CON blobs → `Select` / CLI / `rkrdb_select_meta`. ASE is **not** on the I/O path; optional `to_ase` is only for calculators. ASE `.db` timings in the CPC paper are **unequal-workload CSE baselines**, not a product recommendation.
 
 Selection is an explicit Rust/`Select` builder (or `rkrdb_select_*` / `rkrdb_select_meta` in C), not SQL. See [architecture](architecture.md) for the query-cost model.
+
+
+**Benchmarks:** fair ASE comparison → `examples/benchmarks/fair_campaign.py` (same CON ladder; not Cu2 stand-ins).
