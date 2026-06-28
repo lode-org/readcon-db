@@ -21,7 +21,7 @@ capi = []
 
 [dependencies]
 heed = "0.21"
-readcon-core = { version = "0.14", path = "../readcon-core" }
+readcon-core = "0.14"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
