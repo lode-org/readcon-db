@@ -35,6 +35,14 @@ impl PyConCorpus {
         energy_max=None,
         fmax_min=None,
         fmax_max=None,
+        mass_min=None,
+        mass_max=None,
+        volume_min=None,
+        volume_max=None,
+        frame_index_min=None,
+        frame_index_max=None,
+        charge_min=None,
+        charge_max=None,
         element_exact=None,
         element_min=None,
         formula=None,
@@ -54,6 +62,14 @@ impl PyConCorpus {
         energy_max: Option<f64>,
         fmax_min: Option<f64>,
         fmax_max: Option<f64>,
+        mass_min: Option<f64>,
+        mass_max: Option<f64>,
+        volume_min: Option<f64>,
+        volume_max: Option<f64>,
+        frame_index_min: Option<f64>,
+        frame_index_max: Option<f64>,
+        charge_min: Option<f64>,
+        charge_max: Option<f64>,
         element_exact: Option<Vec<(String, u32)>>,
         element_min: Option<Vec<(String, u32)>>,
         formula: Option<String>,
@@ -85,6 +101,18 @@ impl PyConCorpus {
         }
         if fmax_min.is_some() || fmax_max.is_some() {
             sel = sel.fmax_range(fmax_min.unwrap_or(0.0), fmax_max.unwrap_or(f64::INFINITY));
+        }
+        if mass_min.is_some() || mass_max.is_some() {
+            sel = sel.mass_range(mass_min.unwrap_or(f64::NEG_INFINITY), mass_max.unwrap_or(f64::INFINITY));
+        }
+        if volume_min.is_some() || volume_max.is_some() {
+            sel = sel.volume_range(volume_min.unwrap_or(f64::NEG_INFINITY), volume_max.unwrap_or(f64::INFINITY));
+        }
+        if frame_index_min.is_some() || frame_index_max.is_some() {
+            sel = sel.frame_index_range(frame_index_min.unwrap_or(f64::NEG_INFINITY), frame_index_max.unwrap_or(f64::INFINITY));
+        }
+        if charge_min.is_some() || charge_max.is_some() {
+            sel = sel.charge_range(charge_min.unwrap_or(f64::NEG_INFINITY), charge_max.unwrap_or(f64::INFINITY));
         }
         if let Some(pairs) = element_exact {
             for (sym, c) in pairs {

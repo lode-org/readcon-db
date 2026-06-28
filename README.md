@@ -53,7 +53,7 @@ Foreign trajectories: **`readcon.read_chemfiles("traj.xyz")` → frames → inge
 
 ## Design
 
-- **No SQL** — explicit indexes + in-process intersection ([query cost model](docs/design.md)).
+- **No SQL engine** — explicit indexes + in-process intersection, with **ASE.db-competitive screening fields** (mass, volume, PBC, reserved metadata, charge/magmom; see [design matrix](docs/design.md)).
 - **Decode via readcon-core** — CON semantics never fork.
 - **Metadata indexes** — finite `energy` bins; flags for forces, velocities, energy presence.
 - **xxHash3-128** on stored blobs — exact dedup / `find_by_hash`.

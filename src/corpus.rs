@@ -12,16 +12,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::export_xyz::write_frame_extxyz;
+use crate::frame_scalars::{
+    frame_cell_volume, frame_charge, frame_frame_index, frame_magmom, frame_neb_band, frame_neb_bead,
+    frame_pbc_mask, frame_time, frame_timestep, frame_total_mass,
+};
 use crate::keys::{
     composition_formula, elem_count_key, elem_count_symbol_prefix, energy_bin_key, flag_key,
-    fmax_bin_key, formula_key, formula_prefix, hash_frame_bytes, natoms_key, ordered_f64_bits,
-    parse_elem_count_key, species_counts_from_symbols, symbol_key, symbol_prefix, ContentHash,
-    FrameKey, TrajId, FLAG_HAS_ENERGY, FLAG_HAS_FORCES, FLAG_HAS_VELOCITIES,
+    fmax_bin_key, formula_key, formula_prefix, hash_frame_bytes, mass_bin_key, meta_scalar_key,
+    natoms_key, ordered_f64_bits, parse_elem_count_key, pbc_key, pbc_mask_from_bools,
+    species_counts_from_symbols, symbol_key, symbol_prefix, volume_bin_key, ContentHash, FrameKey,
+    TrajId, FLAG_HAS_ENERGY, FLAG_HAS_FORCES, FLAG_HAS_VELOCITIES, META_CHARGE, META_FRAME_INDEX,
+    META_MAGMOM, META_NEB_BAND, META_NEB_BEAD, META_TIME, META_TIMESTEP,
 };
 use crate::select::Select;
 
 const MAP_SIZE: usize = 2 * 1024 * 1024 * 1024;
-const MAX_DBS: u32 = 32;
+const MAX_DBS: u32 = 48;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TrajMeta {
@@ -44,6 +50,12 @@ pub struct ConCorpus {
     idx_formula: Database<Bytes, Unit>,
     /// Ordered max force magnitude (forces present only)
     idx_fmax: Database<Bytes, Unit>,
+    idx_mass: Database<Bytes, Unit>,
+    idx_volume: Database<Bytes, Unit>,
+    /// PBC mask (metadata present only)
+    idx_pbc: Database<Bytes, Unit>,
+    /// Meta scalars: channel || ord(value) || FrameKey
+    idx_meta: Database<Bytes, Unit>,
     frame_by_hash: Database<Bytes, Bytes>,
     hash_by_frame: Database<Bytes, Bytes>,
 }
@@ -118,6 +130,10 @@ impl ConCorpus {
         let idx_elem_count = env.create_database(&mut wtxn, Some("idx_elem_count"))?;
         let idx_formula = env.create_database(&mut wtxn, Some("idx_formula"))?;
         let idx_fmax = env.create_database(&mut wtxn, Some("idx_fmax"))?;
+        let idx_mass = env.create_database(&mut wtxn, Some("idx_mass"))?;
+        let idx_volume = env.create_database(&mut wtxn, Some("idx_volume"))?;
+        let idx_pbc = env.create_database(&mut wtxn, Some("idx_pbc"))?;
+        let idx_meta = env.create_database(&mut wtxn, Some("idx_meta"))?;
         let frame_by_hash = env.create_database(&mut wtxn, Some("frame_by_hash"))?;
         let hash_by_frame = env.create_database(&mut wtxn, Some("hash_by_frame"))?;
         wtxn.commit()?;
@@ -134,6 +150,10 @@ impl ConCorpus {
             idx_elem_count,
             idx_formula,
             idx_fmax,
+            idx_mass,
+            idx_volume,
+            idx_pbc,
+            idx_meta,
             frame_by_hash,
             hash_by_frame,
         })
@@ -194,6 +214,35 @@ impl ConCorpus {
         if frame_has_velocities(frame) {
             let fk_flag = flag_key(FLAG_HAS_VELOCITIES, fk);
             self.idx_flags.put(wtxn, &fk_flag[..], &())?;
+        }
+        if let Some(m) = frame_total_mass(frame) {
+            if let Some(k) = mass_bin_key(m, fk) {
+                self.idx_mass.put(wtxn, &k[..], &())?;
+            }
+        }
+        if let Some(v) = frame_cell_volume(frame) {
+            if let Some(k) = volume_bin_key(v, fk) {
+                self.idx_volume.put(wtxn, &k[..], &())?;
+            }
+        }
+        if let Some(mask) = frame_pbc_mask(frame) {
+            self.idx_pbc.put(wtxn, &pbc_key(mask, fk)[..], &())?;
+        }
+        let meta_puts: [(u8, Option<f64>); 7] = [
+            (META_TIME, frame_time(frame)),
+            (META_TIMESTEP, frame_timestep(frame)),
+            (META_FRAME_INDEX, frame_frame_index(frame)),
+            (META_NEB_BEAD, frame_neb_bead(frame)),
+            (META_NEB_BAND, frame_neb_band(frame)),
+            (META_CHARGE, frame_charge(frame)),
+            (META_MAGMOM, frame_magmom(frame)),
+        ];
+        for (ch, val) in meta_puts {
+            if let Some(x) = val {
+                if let Some(k) = meta_scalar_key(ch, x, fk) {
+                    self.idx_meta.put(wtxn, &k[..], &())?;
+                }
+            }
         }
         Ok(())
     }
@@ -335,6 +384,10 @@ impl ConCorpus {
         self.idx_elem_count.clear(wtxn)?;
         self.idx_formula.clear(wtxn)?;
         self.idx_fmax.clear(wtxn)?;
+        self.idx_mass.clear(wtxn)?;
+        self.idx_volume.clear(wtxn)?;
+        self.idx_pbc.clear(wtxn)?;
+        self.idx_meta.clear(wtxn)?;
         self.frame_by_hash.clear(wtxn)?;
         self.hash_by_frame.clear(wtxn)?;
         Ok(())
@@ -409,6 +462,35 @@ impl ConCorpus {
             if frame_has_velocities(&frame) {
                 self.idx_flags
                     .put(&mut wtxn, &flag_key(FLAG_HAS_VELOCITIES, fk)[..], &())?;
+            }
+            if let Some(m) = frame_total_mass(&frame) {
+                if let Some(k) = mass_bin_key(m, fk) {
+                    self.idx_mass.put(&mut wtxn, &k[..], &())?;
+                }
+            }
+            if let Some(v) = frame_cell_volume(&frame) {
+                if let Some(k) = volume_bin_key(v, fk) {
+                    self.idx_volume.put(&mut wtxn, &k[..], &())?;
+                }
+            }
+            if let Some(mask) = frame_pbc_mask(&frame) {
+                self.idx_pbc.put(&mut wtxn, &pbc_key(mask, fk)[..], &())?;
+            }
+            let meta_puts: [(u8, Option<f64>); 7] = [
+                (META_TIME, frame_time(&frame)),
+                (META_TIMESTEP, frame_timestep(&frame)),
+                (META_FRAME_INDEX, frame_frame_index(&frame)),
+                (META_NEB_BEAD, frame_neb_bead(&frame)),
+                (META_NEB_BAND, frame_neb_band(&frame)),
+                (META_CHARGE, frame_charge(&frame)),
+                (META_MAGMOM, frame_magmom(&frame)),
+            ];
+            for (ch, val) in meta_puts {
+                if let Some(x) = val {
+                    if let Some(k) = meta_scalar_key(ch, x, fk) {
+                        self.idx_meta.put(&mut wtxn, &k[..], &())?;
+                    }
+                }
             }
             n += 1;
         }
@@ -646,6 +728,110 @@ impl ConCorpus {
                 }
             }
             sets.push(s);
+        }
+
+        let scan_ord = |db: Database<Bytes, Unit>, lo: Option<f64>, hi: Option<f64>| -> Result<BTreeSet<FrameKey>> {
+            let lo_e = lo.unwrap_or(f64::NEG_INFINITY);
+            let hi_e = hi.unwrap_or(f64::INFINITY);
+            let lo_bits = ordered_f64_bits(lo_e).unwrap_or(0);
+            let hi_bits = ordered_f64_bits(hi_e).unwrap_or(u64::MAX);
+            let mut s = BTreeSet::new();
+            let mut iter = db.iter(&rtxn)?;
+            while let Some(Ok((k, _))) = iter.next() {
+                if k.len() < 20 {
+                    continue;
+                }
+                let mut eb = [0u8; 8];
+                eb.copy_from_slice(&k[..8]);
+                let bits = u64::from_be_bytes(eb);
+                if bits > hi_bits {
+                    break;
+                }
+                if bits >= lo_bits {
+                    if let Some(fk) = FrameKey::from_bytes(&k[8..20]) {
+                        if sel.traj_id.is_none_or(|t| t == fk.traj_id) {
+                            s.insert(fk);
+                        }
+                    }
+                }
+            }
+            Ok(s)
+        };
+
+        if sel.mass_min.is_some() || sel.mass_max.is_some() {
+            sets.push(scan_ord(self.idx_mass, sel.mass_min, sel.mass_max)?);
+        }
+        if sel.volume_min.is_some() || sel.volume_max.is_some() {
+            sets.push(scan_ord(self.idx_volume, sel.volume_min, sel.volume_max)?);
+        }
+
+        if let Some(pbc) = sel.pbc_exact {
+            let mask = pbc_mask_from_bools(pbc);
+            let mut s = BTreeSet::new();
+            let pref = [mask];
+            let mut iter = self.idx_pbc.prefix_iter(&rtxn, &pref)?;
+            while let Some(Ok((k, _))) = iter.next() {
+                if k.len() < 13 {
+                    continue;
+                }
+                if let Some(fk) = FrameKey::from_bytes(&k[1..13]) {
+                    if sel.traj_id.is_none_or(|t| t == fk.traj_id) {
+                        s.insert(fk);
+                    }
+                }
+            }
+            sets.push(s);
+        }
+
+        let scan_meta = |ch: u8, lo: Option<f64>, hi: Option<f64>| -> Result<BTreeSet<FrameKey>> {
+            let lo_e = lo.unwrap_or(f64::NEG_INFINITY);
+            let hi_e = hi.unwrap_or(f64::INFINITY);
+            let lo_bits = ordered_f64_bits(lo_e).unwrap_or(0);
+            let hi_bits = ordered_f64_bits(hi_e).unwrap_or(u64::MAX);
+            let mut s = BTreeSet::new();
+            let pref = [ch];
+            let mut iter = self.idx_meta.prefix_iter(&rtxn, &pref)?;
+            while let Some(Ok((k, _))) = iter.next() {
+                if k.len() < 21 {
+                    continue;
+                }
+                let mut eb = [0u8; 8];
+                eb.copy_from_slice(&k[1..9]);
+                let bits = u64::from_be_bytes(eb);
+                if bits > hi_bits {
+                    continue; // prefix iter not fully ordered across all, but within channel it is
+                }
+                if bits >= lo_bits {
+                    if let Some(fk) = FrameKey::from_bytes(&k[9..21]) {
+                        if sel.traj_id.is_none_or(|t| t == fk.traj_id) {
+                            s.insert(fk);
+                        }
+                    }
+                }
+            }
+            Ok(s)
+        };
+
+        if sel.time_min.is_some() || sel.time_max.is_some() {
+            sets.push(scan_meta(META_TIME, sel.time_min, sel.time_max)?);
+        }
+        if sel.timestep_min.is_some() || sel.timestep_max.is_some() {
+            sets.push(scan_meta(META_TIMESTEP, sel.timestep_min, sel.timestep_max)?);
+        }
+        if sel.frame_index_min.is_some() || sel.frame_index_max.is_some() {
+            sets.push(scan_meta(META_FRAME_INDEX, sel.frame_index_min, sel.frame_index_max)?);
+        }
+        if sel.neb_bead_min.is_some() || sel.neb_bead_max.is_some() {
+            sets.push(scan_meta(META_NEB_BEAD, sel.neb_bead_min, sel.neb_bead_max)?);
+        }
+        if sel.neb_band_min.is_some() || sel.neb_band_max.is_some() {
+            sets.push(scan_meta(META_NEB_BAND, sel.neb_band_min, sel.neb_band_max)?);
+        }
+        if sel.charge_min.is_some() || sel.charge_max.is_some() {
+            sets.push(scan_meta(META_CHARGE, sel.charge_min, sel.charge_max)?);
+        }
+        if sel.magmom_min.is_some() || sel.magmom_max.is_some() {
+            sets.push(scan_meta(META_MAGMOM, sel.magmom_min, sel.magmom_max)?);
         }
 
         let mut push_flag = |flag: u8| -> Result<()> {
@@ -1025,5 +1211,94 @@ mod tests {
         let keys2 = db.select(&Select::new().require_forces()).unwrap();
         assert_eq!(a, b);
         assert_eq!(keys1, keys2);
+    }
+    #[test]
+    fn ase_competitive_mass_volume_pbc_meta_charge() {
+        use readcon_core::types::ConFrameBuilder;
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+
+        // Frame A: Cu2H2 default cell from fixture path
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con")).unwrap();
+        let fr1 = db
+            .get_frame(FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap();
+        let mass1 = frame_total_mass(&fr1).expect("mass");
+        let vol1 = frame_cell_volume(&fr1).expect("vol");
+
+        // Frame B: inject metadata via rewrite
+        let mut fr2 = fr1.clone();
+        fr2.header.set_frame_index(7);
+        fr2.header.set_time(1.5);
+        fr2.header.set_neb_bead(2);
+        fr2.header
+            .metadata
+            .insert("neb_band".into(), serde_json::json!(1));
+        fr2.header.set_pbc([true, true, false]);
+        fr2.header
+            .metadata
+            .insert("charge".into(), serde_json::json!(-1.0));
+        fr2.header
+            .metadata
+            .insert("magmom".into(), serde_json::json!(2.0));
+        // larger cell → larger volume
+        fr2.header.boxl = [20.0, 20.0, 20.0];
+        db.append_trajectory_frames(2, &[fr2], "meta").unwrap();
+
+        let by_mass = db
+            .select(&Select::new().mass_range(mass1 - 1e-6, mass1 + 1e-6))
+            .unwrap();
+        assert!(by_mass.iter().any(|k| k.traj_id == 1));
+
+        let by_vol_small = db
+            .select(&Select::new().volume_range(vol1 - 1.0, vol1 + 1.0))
+            .unwrap();
+        assert!(by_vol_small.iter().any(|k| k.traj_id == 1));
+        assert!(!by_vol_small.iter().any(|k| k.traj_id == 2));
+
+        let pbc_match = db
+            .select(&Select::new().pbc([true, true, false]))
+            .unwrap();
+        assert_eq!(pbc_match.len(), 1);
+        assert_eq!(pbc_match[0].traj_id, 2);
+        let pbc_miss = db.select(&Select::new().pbc([true, true, true])).unwrap();
+        assert!(pbc_miss.is_empty());
+
+        let fi = db
+            .select(&Select::new().frame_index_range(7.0, 7.0))
+            .unwrap();
+        assert_eq!(fi, vec![FrameKey { traj_id: 2, frame_idx: 0 }]);
+        let fi_miss = db
+            .select(&Select::new().frame_index_range(99.0, 100.0))
+            .unwrap();
+        assert!(fi_miss.is_empty());
+
+        let bead = db.select(&Select::new().neb_bead_range(2.0, 2.0)).unwrap();
+        assert_eq!(bead.len(), 1);
+        let t = db.select(&Select::new().time_range(1.4, 1.6)).unwrap();
+        assert_eq!(t.len(), 1);
+
+        let ch = db.select(&Select::new().charge_range(-1.0, -1.0)).unwrap();
+        assert_eq!(ch.len(), 1);
+        let mm = db.select(&Select::new().magmom_range(2.0, 2.0)).unwrap();
+        assert_eq!(mm.len(), 1);
+        let ch_miss = db.select(&Select::new().charge_range(0.0, 0.0)).unwrap();
+        assert!(ch_miss.is_empty());
+
+        let n = db.reindex().unwrap();
+        assert!(n >= 2);
+        let after = db
+            .select(&Select::new().frame_index_range(7.0, 7.0))
+            .unwrap();
+        assert_eq!(after.len(), 1);
+
+        // still composition
+        let form = db
+            .select(&Select::new().exact_composition("Cu:2|H:2"))
+            .unwrap();
+        assert!(form.len() >= 2);
     }
 }

@@ -1,31 +1,42 @@
 use crate::keys::TrajId;
 
-/// Non-SQL selection builder (filters composed in process, executed via indexes).
+/// Non-SQL selection builder (ASE.db-competitive campaign filters via secondary indexes).
 #[derive(Clone, Debug, Default)]
 pub struct Select {
     pub traj_id: Option<TrajId>,
     pub natoms_min: Option<u32>,
     pub natoms_max: Option<u32>,
     pub symbols_all: Vec<String>,
-    /// Exact content match (xxHash3 of stored blob).
     pub content_hash: Option<[u8; 16]>,
-    /// Inclusive energy range on `header.energy()` / metadata `energy` (finite only).
     pub energy_min: Option<f64>,
     pub energy_max: Option<f64>,
-    /// Inclusive max-force magnitude range (only frames with forces are indexed).
     pub fmax_min: Option<f64>,
     pub fmax_max: Option<f64>,
-    /// Minimum atom count per element (AND across entries). Exact when min==max.
+    pub mass_min: Option<f64>,
+    pub mass_max: Option<f64>,
+    pub volume_min: Option<f64>,
+    pub volume_max: Option<f64>,
+    /// Exact PBC mask from metadata (`pbc`); frames without `pbc` key never match.
+    pub pbc_exact: Option<[bool; 3]>,
+    pub time_min: Option<f64>,
+    pub time_max: Option<f64>,
+    pub timestep_min: Option<f64>,
+    pub timestep_max: Option<f64>,
+    pub frame_index_min: Option<f64>,
+    pub frame_index_max: Option<f64>,
+    pub neb_bead_min: Option<f64>,
+    pub neb_bead_max: Option<f64>,
+    pub neb_band_min: Option<f64>,
+    pub neb_band_max: Option<f64>,
+    pub charge_min: Option<f64>,
+    pub charge_max: Option<f64>,
+    pub magmom_min: Option<f64>,
+    pub magmom_max: Option<f64>,
     pub element_count_min: Vec<(String, u32)>,
-    /// Exact atom count per element (AND). Prefer over min when equality is intended.
     pub element_count_exact: Vec<(String, u32)>,
-    /// Exact whole-frame composition (canonical `Sym:count|...` formula).
     pub exact_formula: Option<String>,
-    /// Require forces section or per-atom force data.
     pub require_forces: bool,
-    /// Require velocities section or per-atom velocity data.
     pub require_velocities: bool,
-    /// Require finite energy in frame metadata.
     pub require_energy: bool,
     pub limit: Option<usize>,
 }
@@ -51,29 +62,73 @@ impl Select {
         self.content_hash = Some(hash);
         self
     }
-    /// Inclusive energy window (uses ordered `idx_energy` bins).
     pub fn energy_range(mut self, min: f64, max: f64) -> Self {
         self.energy_min = Some(min);
         self.energy_max = Some(max);
         self
     }
-    /// Inclusive fmax window; frames without forces are never in `idx_fmax`.
     pub fn fmax_range(mut self, min: f64, max: f64) -> Self {
         self.fmax_min = Some(min);
         self.fmax_max = Some(max);
         self
     }
-    /// At least `count` atoms of `symbol` (uses `idx_elem_count` postings).
+    pub fn mass_range(mut self, min: f64, max: f64) -> Self {
+        self.mass_min = Some(min);
+        self.mass_max = Some(max);
+        self
+    }
+    pub fn volume_range(mut self, min: f64, max: f64) -> Self {
+        self.volume_min = Some(min);
+        self.volume_max = Some(max);
+        self
+    }
+    pub fn pbc(mut self, xyz: [bool; 3]) -> Self {
+        self.pbc_exact = Some(xyz);
+        self
+    }
+    pub fn time_range(mut self, min: f64, max: f64) -> Self {
+        self.time_min = Some(min);
+        self.time_max = Some(max);
+        self
+    }
+    pub fn timestep_range(mut self, min: f64, max: f64) -> Self {
+        self.timestep_min = Some(min);
+        self.timestep_max = Some(max);
+        self
+    }
+    pub fn frame_index_range(mut self, min: f64, max: f64) -> Self {
+        self.frame_index_min = Some(min);
+        self.frame_index_max = Some(max);
+        self
+    }
+    pub fn neb_bead_range(mut self, min: f64, max: f64) -> Self {
+        self.neb_bead_min = Some(min);
+        self.neb_bead_max = Some(max);
+        self
+    }
+    pub fn neb_band_range(mut self, min: f64, max: f64) -> Self {
+        self.neb_band_min = Some(min);
+        self.neb_band_max = Some(max);
+        self
+    }
+    pub fn charge_range(mut self, min: f64, max: f64) -> Self {
+        self.charge_min = Some(min);
+        self.charge_max = Some(max);
+        self
+    }
+    pub fn magmom_range(mut self, min: f64, max: f64) -> Self {
+        self.magmom_min = Some(min);
+        self.magmom_max = Some(max);
+        self
+    }
     pub fn element_min(mut self, symbol: impl Into<String>, count: u32) -> Self {
         self.element_count_min.push((symbol.into(), count));
         self
     }
-    /// Exactly `count` atoms of `symbol`.
     pub fn element_exact(mut self, symbol: impl Into<String>, count: u32) -> Self {
         self.element_count_exact.push((symbol.into(), count));
         self
     }
-    /// Exact composition formula (`composition_formula` encoding, e.g. `Cu:2|H:2`).
     pub fn exact_composition(mut self, formula: impl Into<String>) -> Self {
         self.exact_formula = Some(formula.into());
         self

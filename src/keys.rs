@@ -224,3 +224,47 @@ mod tests {
         assert_eq!(fk2, fk);
     }
 }
+
+/// Meta scalar channel ids for `idx_meta` (u8 prefix).
+pub(crate) const META_TIME: u8 = 1;
+pub(crate) const META_TIMESTEP: u8 = 2;
+pub(crate) const META_FRAME_INDEX: u8 = 3;
+pub(crate) const META_NEB_BEAD: u8 = 4;
+pub(crate) const META_NEB_BAND: u8 = 5;
+pub(crate) const META_CHARGE: u8 = 6;
+pub(crate) const META_MAGMOM: u8 = 7;
+
+/// Ordered scalar bin: channel_id || ord(f64) BE || FrameKey (21 bytes)
+pub(crate) fn meta_scalar_key(channel: u8, value: f64, fk: FrameKey) -> Option<[u8; 21]> {
+    let ordered = ordered_f64_bits(value)?;
+    let mut out = [0u8; 21];
+    out[0] = channel;
+    out[1..9].copy_from_slice(&ordered.to_be_bytes());
+    out[9..].copy_from_slice(&fk.to_bytes());
+    Some(out)
+}
+
+pub(crate) fn meta_channel_prefix(channel: u8) -> [u8; 1] {
+    [channel]
+}
+
+/// PBC mask key: bit0=x, bit1=y, bit2=z (true=1); only written when metadata has pbc.
+pub(crate) fn pbc_key(mask: u8, fk: FrameKey) -> [u8; 13] {
+    let mut out = [0u8; 13];
+    out[0] = mask & 0x07;
+    out[1..].copy_from_slice(&fk.to_bytes());
+    out
+}
+
+pub(crate) fn pbc_mask_from_bools(p: [bool; 3]) -> u8 {
+    (p[0] as u8) | ((p[1] as u8) << 1) | ((p[2] as u8) << 2)
+}
+
+/// Mass / volume use same layout as energy (20 bytes, no channel).
+pub(crate) fn mass_bin_key(mass: f64, fk: FrameKey) -> Option<[u8; 20]> {
+    energy_bin_key(mass, fk)
+}
+
+pub(crate) fn volume_bin_key(vol: f64, fk: FrameKey) -> Option<[u8; 20]> {
+    energy_bin_key(vol, fk)
+}

@@ -22,6 +22,10 @@ fn usage() -> ExitCode {
   readcon-db select <corpus_dir> [--traj N] [--symbol S] [--natoms-min A] [--natoms-max B]
                      [--energy-min E] [--energy-max E] [--fmax-min F] [--fmax-max F]
                      [--elem SYM:COUNT] [--elem-min SYM:COUNT] [--formula Cu:2|H:2]
+                     [--mass-min M] [--mass-max M] [--volume-min V] [--volume-max V]
+                     [--pbc X,Y,Z] [--time-min T] [--time-max T] [--frame-index-min I] [--frame-index-max I]
+                     [--neb-bead-min N] [--neb-bead-max N] [--charge-min C] [--charge-max C]
+                     [--magmom-min M] [--magmom-max M]
                      [--require-forces] [--require-velocities] [--require-energy]
                      [--export out.xyz]
   readcon-db dedup-export <corpus_dir> [same filters as select] -o out.xyz
@@ -93,6 +97,21 @@ fn main() -> ExitCode {
                 let mut emax: Option<f64> = None;
                 let mut fmin: Option<f64> = None;
                 let mut fmax: Option<f64> = None;
+                let mut mass_min: Option<f64> = None;
+                let mut mass_max: Option<f64> = None;
+                let mut vol_min: Option<f64> = None;
+                let mut vol_max: Option<f64> = None;
+                let mut pbc: Option<[bool; 3]> = None;
+                let mut time_min: Option<f64> = None;
+                let mut time_max: Option<f64> = None;
+                let mut fi_min: Option<f64> = None;
+                let mut fi_max: Option<f64> = None;
+                let mut bead_min: Option<f64> = None;
+                let mut bead_max: Option<f64> = None;
+                let mut charge_min: Option<f64> = None;
+                let mut charge_max: Option<f64> = None;
+                let mut mag_min: Option<f64> = None;
+                let mut mag_max: Option<f64> = None;
                 let mut elem_exact = Vec::new();
                 let mut elem_min = Vec::new();
                 let mut formula = None;
@@ -147,6 +166,31 @@ fn main() -> ExitCode {
                             formula = Some(args.get(i + 1).ok_or("formula")?.clone());
                             i += 2;
                         }
+
+                        "--mass-min" => { mass_min = Some(args.get(i + 1).ok_or("m")?.parse()?); i += 2; }
+                        "--mass-max" => { mass_max = Some(args.get(i + 1).ok_or("m")?.parse()?); i += 2; }
+                        "--volume-min" => { vol_min = Some(args.get(i + 1).ok_or("v")?.parse()?); i += 2; }
+                        "--volume-max" => { vol_max = Some(args.get(i + 1).ok_or("v")?.parse()?); i += 2; }
+                        "--pbc" => {
+                            let s = args.get(i + 1).ok_or("x,y,z")?;
+                            let parts: Vec<_> = s.split(',').collect();
+                            if parts.len() != 3 { return Err("pbc needs X,Y,Z as 0/1 or true/false".into()); }
+                            let parse_b = |x: &str| -> Result<bool, Box<dyn std::error::Error>> {
+                                Ok(matches!(x.trim().to_ascii_lowercase().as_str(), "1" | "true" | "t" | "yes"))
+                            };
+                            pbc = Some([parse_b(parts[0])?, parse_b(parts[1])?, parse_b(parts[2])?]);
+                            i += 2;
+                        }
+                        "--time-min" => { time_min = Some(args.get(i + 1).ok_or("t")?.parse()?); i += 2; }
+                        "--time-max" => { time_max = Some(args.get(i + 1).ok_or("t")?.parse()?); i += 2; }
+                        "--frame-index-min" => { fi_min = Some(args.get(i + 1).ok_or("i")?.parse()?); i += 2; }
+                        "--frame-index-max" => { fi_max = Some(args.get(i + 1).ok_or("i")?.parse()?); i += 2; }
+                        "--neb-bead-min" => { bead_min = Some(args.get(i + 1).ok_or("n")?.parse()?); i += 2; }
+                        "--neb-bead-max" => { bead_max = Some(args.get(i + 1).ok_or("n")?.parse()?); i += 2; }
+                        "--charge-min" => { charge_min = Some(args.get(i + 1).ok_or("c")?.parse()?); i += 2; }
+                        "--charge-max" => { charge_max = Some(args.get(i + 1).ok_or("c")?.parse()?); i += 2; }
+                        "--magmom-min" => { mag_min = Some(args.get(i + 1).ok_or("m")?.parse()?); i += 2; }
+                        "--magmom-max" => { mag_max = Some(args.get(i + 1).ok_or("m")?.parse()?); i += 2; }
                         "--require-forces" => {
                             req_forces = true;
                             i += 1;
@@ -183,6 +227,31 @@ fn main() -> ExitCode {
                 if fmin.is_some() || fmax.is_some() {
                     sel = sel.fmax_range(fmin.unwrap_or(0.0), fmax.unwrap_or(f64::INFINITY));
                 }
+                if mass_min.is_some() || mass_max.is_some() {
+                    sel = sel.mass_range(mass_min.unwrap_or(f64::NEG_INFINITY), mass_max.unwrap_or(f64::INFINITY));
+                }
+                if vol_min.is_some() || vol_max.is_some() {
+                    sel = sel.volume_range(vol_min.unwrap_or(f64::NEG_INFINITY), vol_max.unwrap_or(f64::INFINITY));
+                }
+                if let Some(p) = pbc {
+                    sel = sel.pbc(p);
+                }
+                if time_min.is_some() || time_max.is_some() {
+                    sel = sel.time_range(time_min.unwrap_or(f64::NEG_INFINITY), time_max.unwrap_or(f64::INFINITY));
+                }
+                if fi_min.is_some() || fi_max.is_some() {
+                    sel = sel.frame_index_range(fi_min.unwrap_or(f64::NEG_INFINITY), fi_max.unwrap_or(f64::INFINITY));
+                }
+                if bead_min.is_some() || bead_max.is_some() {
+                    sel = sel.neb_bead_range(bead_min.unwrap_or(f64::NEG_INFINITY), bead_max.unwrap_or(f64::INFINITY));
+                }
+                if charge_min.is_some() || charge_max.is_some() {
+                    sel = sel.charge_range(charge_min.unwrap_or(f64::NEG_INFINITY), charge_max.unwrap_or(f64::INFINITY));
+                }
+                if mag_min.is_some() || mag_max.is_some() {
+                    sel = sel.magmom_range(mag_min.unwrap_or(f64::NEG_INFINITY), mag_max.unwrap_or(f64::INFINITY));
+                }
+
                 for (sym, c) in elem_exact {
                     sel = sel.element_exact(sym, c);
                 }

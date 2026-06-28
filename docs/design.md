@@ -67,3 +67,32 @@ Single trusted user on local disk for v1. No network protocol in v1.
 
 Shipped: frames, traj_meta, composition/energy/fmax/flags/natoms/symbol/hash indexes, `Select`, reindex, append frames, CLI/Python/C campaign select.
 Roadmap: optional cooked SoA blobs; parallel chunked reindex.
+
+## ASE.db column ↔ readcon-db (competitive screening set)
+
+Speed only matters if filters users already have in ASE.db exist. Architecture stays **non-SQL** (secondary LMDB DBs + intersection); the **feature claim** is campaign-column parity for CON-derivable fields.
+
+| ASE.db / common filter | CON source | readcon-db predicate / index |
+|------------------------|------------|------------------------------|
+| `natoms` | atom count | `natoms_range` / `idx_natoms` |
+| `formula` / species | multiset | `exact_composition`, `element_*` / `idx_formula`, `idx_elem_count` |
+| symbol presence | symbols | `require_symbol` / `idx_symbol` |
+| `energy` | metadata `energy` | `energy_range` / `idx_energy` |
+| forces present / `fmax` | forces section / ‖F‖ | `require_forces`, `fmax_range` / `idx_flags`, `idx_fmax` |
+| velocities | section / data | `require_velocities` |
+| total mass | `masses_per_type` × counts | `mass_range` / `idx_mass` |
+| cell volume | `lattice_vectors` or `boxl`+`angles` | `volume_range` / `idx_volume` |
+| `pbc` | metadata `pbc` (explicit only; missing ≠ match) | `pbc([x,y,z])` / `idx_pbc` |
+| `time`, `timestep` | reserved metadata | `time_range`, `timestep_range` / `idx_meta` |
+| `frame_index` | reserved metadata | `frame_index_range` / `idx_meta` |
+| NEB bead/band | `neb_bead`, `neb_band` | `neb_bead_range`, `neb_band_range` / `idx_meta` |
+| `charge`, `magmom` | optional JSON numbers | `charge_range`, `magmom_range` / `idx_meta` |
+| exact structure id | CON blob | `exact_hash` / xxHash3 |
+| `id` / row id | — | `FrameKey` (traj_id, frame_idx) |
+| `unique_id` UUID | — | **N/A (ASE bookkeeping)**; use content hash |
+| `ctime` / `mtime` / `age` | — | **N/A (ASE bookkeeping)** |
+| `user` / `calculator` | — | **N/A** unless stored in CON metadata (not competitive set) |
+| arbitrary `key_value_pairs` DSL | — | **N/A (no SQL DSL)**; reserved + charge/magmom cover screening |
+| SQL `SELECT` | — | **N/A (architecture)**; use `Select` / CLI / Python |
+
+`reindex` rebuilds **all** secondary indexes including mass/volume/pbc/meta.

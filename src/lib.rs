@@ -4,12 +4,14 @@
 //! `cdylib`/`staticlib` (`src/ffi.rs`).
 
 mod corpus;
+mod frame_scalars;
 mod error;
 mod export_xyz;
 mod keys;
 mod select;
 
 pub use corpus::{frame_fmax, ConCorpus};
+pub use frame_scalars::{frame_cell_volume, frame_total_mass};
 pub use error::{Error, Result};
 pub use export_xyz::{write_frame_extxyz, write_frames_extxyz};
 pub use keys::{

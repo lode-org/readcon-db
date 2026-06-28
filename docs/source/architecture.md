@@ -20,6 +20,10 @@ Environment (Heed / LMDB)
 ├── idx_symbol      : (symbol ‖ 0xFF ‖ FrameKey) → ()
 ├── idx_energy      : (ord(E) BE, FrameKey) → ()   # finite energy only
 ├── idx_fmax        : (ord(fmax) BE, FrameKey) → ()  # forces present only
+├── idx_mass        : (ord(mass) BE, FrameKey) → ()
+├── idx_volume      : (ord(V) BE, FrameKey) → ()
+├── idx_pbc         : mask ‖ FrameKey  # metadata pbc only
+├── idx_meta        : channel ‖ ord(value) ‖ FrameKey  # time, NEB, charge, …
 ├── idx_elem_count  : symbol ‖ 0xFF ‖ BE count ‖ FrameKey
 ├── idx_formula     : `Cu:2|H:2` ‖ 0xFF ‖ FrameKey
 ├── idx_flags       : (flag_id ‖ FrameKey) → ()    # forces / velocities / has_energy
