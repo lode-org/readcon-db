@@ -1343,9 +1343,6 @@ mod tests {
         assert_eq!(checksum, expect);
     }
 
-    /// Multi-process: N OS processes each open the same env via CLI and select.
-    #[test]
-
     /// Concurrent threads append distinct traj IDs; prepare runs in parallel, LMDB commits serialize only.
     #[test]
     fn concurrent_writers_distinct_traj() {
@@ -1381,6 +1378,8 @@ mod tests {
         assert_eq!(cu.len(), 8);
     }
 
+    /// Multi-process: N OS processes each open the same env via CLI and select.
+    #[test]
     fn multiproc_cli_concurrent_select() {
         use std::process::Command;
         let dir = tempfile::tempdir().unwrap();
