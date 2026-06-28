@@ -9,6 +9,7 @@ mod error;
 mod export_xyz;
 mod keys;
 mod select;
+mod shard;
 
 pub use corpus::{frame_fmax, ConCorpus};
 pub use frame_scalars::{frame_cell_volume, frame_total_mass};
@@ -19,6 +20,7 @@ pub use keys::{
     FrameKey, TrajId,
 };
 pub use select::Select;
+pub use shard::{ShardedConCorpus, ShardManifest, DEFAULT_N_SHARDS};
 
 pub mod ffi;
 

@@ -121,3 +121,20 @@ Speed only matters if filters users already have in ASE.db exist. Architecture s
 
 CPU-bound prepare (parse CON spans / serialize ConFrames) runs **outside** the exclusive LMDB `write_txn`. Concurrent threads may prepare in parallel; only commits serialize at the engine (single active write txn). FFI handle-table locks do not cover ingest.
 
+
+## HPC multi-writer (millions of ranks)
+
+A **single** LMDB environment cannot run concurrent `write_txn`s. For site-scale
+ingest (many SLURM tasks uploading CON), use **`ShardedConCorpus`**:
+
+1. `readcon-db shard-init /scratch/campaign --shards 256` once on the shared FS.
+2. Each rank opens **only its shard**: `shard_id = $SLURM_PROCID % n_shards` (or
+   `traj_id % n_shards`) via `ShardedConCorpus::open_shard` / CLI `shard-ingest --shard S`.
+3. Writers on **different shards never share a write lock** — up to `n_shards`
+   parallel commits on one filesystem (bounded by FS, not one LMDB mutex).
+4. Global queries: `shard-select` / `ShardedConCorpus::select` fans out read-only
+   across shards (multi-reader MVCC per shard).
+
+Assign trajectory IDs so `traj_id % n_shards == shard_id` (CLI `shard-ingest`
+advances start-id accordingly). This is **partitioned embedded writers**, not
+Raft multi-master — the right pattern for campaign uploads on Lustre/GPFS.

@@ -12,7 +12,7 @@
 use std::env;
 use std::process::ExitCode;
 
-use readcon_db::{ConCorpus, Select};
+use readcon_db::{ConCorpus, Select, ShardedConCorpus, DEFAULT_N_SHARDS};
 
 fn usage() -> ExitCode {
     eprintln!(
@@ -31,6 +31,9 @@ fn usage() -> ExitCode {
                      [--export out.xyz]
   readcon-db dedup-export <corpus_dir> [same filters as select] -o out.xyz
   readcon-db reindex <corpus_dir>
+  readcon-db shard-init <root> [--shards N]
+  readcon-db shard-ingest <root> --shard S --start-id T <file.con>...
+  readcon-db shard-select <root> [--symbol S] ...
   readcon-db hash-file <file.con>
 "
     );
@@ -307,6 +310,99 @@ fn main() -> ExitCode {
                     if keys.len() > 20 {
                         println!("  ...");
                     }
+                }
+            }
+
+            "shard-init" => {
+                let root = args.first().ok_or("root")?.clone();
+                let mut ns = DEFAULT_N_SHARDS;
+                let mut i = 1;
+                while i < args.len() {
+                    if args[i] == "--shards" {
+                        ns = args.get(i + 1).ok_or("n")?.parse()?;
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                let _ = ShardedConCorpus::open(&root, ns)?;
+                println!("initialized {root} with {ns} shards");
+            }
+            "shard-ingest" => {
+                let root = args.first().ok_or("root")?.clone();
+                let mut shard = None::<u32>;
+                let mut start = 1u64;
+                let mut files = Vec::new();
+                let mut i = 1;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "--shard" => {
+                            shard = Some(args.get(i + 1).ok_or("shard")?.parse()?);
+                            i += 2;
+                        }
+                        "--start-id" => {
+                            start = args.get(i + 1).ok_or("id")?.parse()?;
+                            i += 2;
+                        }
+                        _ => {
+                            files.push(args[i].clone());
+                            i += 1;
+                        }
+                    }
+                }
+                let sid = shard.ok_or("--shard required (HPC: use $SLURM_PROCID % n_shards)")?;
+                let db = ShardedConCorpus::open_shard(&root, sid)?;
+                let mut tid = start;
+                for f in files {
+                    // Ensure traj routes to this shard
+                    let routed = ShardedConCorpus::shard_for_traj(tid, {
+                        let m: readcon_db::ShardManifest = serde_json::from_str(
+                            &std::fs::read_to_string(std::path::Path::new(&root).join("shards.json"))?,
+                        )?;
+                        m.n_shards
+                    });
+                    if routed != sid {
+                        return Err(format!(
+                            "traj {tid} routes to shard {routed}, not {sid}; choose start-id ≡ {sid} (mod n_shards)"
+                        )
+                        .into());
+                    }
+                    let n = db.append_trajectory_path(tid, &f)?;
+                    println!("shard {sid} traj {tid}: {n} frames from {f}");
+                    tid += 1;
+                    // skip ids that don't map to this shard
+                    while ShardedConCorpus::shard_for_traj(tid, {
+                        let m: readcon_db::ShardManifest = serde_json::from_str(
+                            &std::fs::read_to_string(std::path::Path::new(&root).join("shards.json"))?,
+                        )?;
+                        m.n_shards
+                    }) != sid
+                    {
+                        tid += 1;
+                    }
+                }
+            }
+            "shard-select" => {
+                let root = args.first().ok_or("root")?.clone();
+                let mut symbol = None;
+                let mut i = 1;
+                while i < args.len() {
+                    if args[i] == "--symbol" {
+                        symbol = Some(args.get(i + 1).ok_or("sym")?.clone());
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                let mut db = ShardedConCorpus::open(&root, DEFAULT_N_SHARDS)?;
+                let mut sel = Select::new();
+                if let Some(s) = symbol {
+                    sel = sel.require_symbol(s);
+                }
+                let keys = db.select(&sel)?;
+                println!("{} keys across {} shards", keys.len(), db.n_shards());
+                for k in keys.iter().take(20) {
+                    println!("  traj={} frame={}", k.traj_id, k.frame_idx);
                 }
             }
             "hash-file" => {
