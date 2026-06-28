@@ -24,15 +24,24 @@ Docs: <https://lode-org.github.io/readcon-db/> · API: <https://docs.rs/readcon-
 ## Quick start (from source)
 
 ```bash
-# Optional: sibling checkouts under LODE/ (path dep on readcon-core)
-export VIRTUAL_ENV=... && source $VIRTUAL_ENV/bin/activate
-cd readcon-core && maturin develop --release --features python
-# optional foreign formats:
-# maturin develop --release --features python,chemfiles
-cd ../readcon-db && maturin develop --release --features python
-
+git clone https://github.com/lode-org/readcon-db
+cd readcon-db
 cargo test --locked
 cargo build --release   # libreadcon_db + CLI readcon-db
+```
+
+Optional LODE sibling checkout (edit core + db together): clone both under the same parent, then create **untracked** `.cargo/config.toml` in `readcon-db`:
+
+```toml
+[patch.crates-io]
+readcon-core = { path = "../readcon-core" }
+```
+
+Python extension from a checkout (`python/` + maturin):
+
+```bash
+pip install maturin
+maturin develop --release --features python --manifest-path python/pyproject.toml
 ```
 
 ```rust

@@ -21,21 +21,25 @@ Install [readcon](https://pypi.org/project/readcon/) (core) as well when you nee
 
 ## From source (developers)
 
-Sibling checkout next to `readcon-core` (optional **path** dep for LODE):
-
 ```bash
-git clone https://github.com/lode-org/readcon-core
 git clone https://github.com/lode-org/readcon-db
 cd readcon-db
 cargo test --locked
 cargo build --release   # libreadcon_db + CLI readcon-db
 ```
 
+`readcon-core` comes from crates.io (`^0.14`). To develop against a local core tree, add an **untracked** `.cargo/config.toml`:
+
+```toml
+[patch.crates-io]
+readcon-core = { path = "../readcon-core" }
+```
+
 Python extension from a checkout:
 
 ```bash
-cd readcon-db/python
-maturin develop --release --features python
+pip install maturin
+maturin develop --release --features python --manifest-path python/pyproject.toml
 ```
 
 C / C++: build with `cargo build --release` and use `include/readcon-db.h`.  
