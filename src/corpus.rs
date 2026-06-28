@@ -40,11 +40,22 @@ pub struct TrajMeta {
     pub source: String,
 }
 
-/// Prepared ingest record: CPU parse/serialize finished **before** exclusive write_txn.
-struct PreparedFrameRec {
+/// All secondary index keys precomputed **outside** exclusive write_txn (commit = puts only).
+struct PreparedIndexPuts {
     fk: FrameKey,
     blob: String,
-    frame: ConFrame,
+    hash: [u8; 16],
+    natoms_k: [u8; 16],
+    symbol_keys: Vec<Vec<u8>>,
+    elem_count_keys: Vec<Vec<u8>>,
+    formula_k: Option<Vec<u8>>,
+    energy_k: Option<[u8; 20]>,
+    fmax_k: Option<[u8; 20]>,
+    mass_k: Option<[u8; 20]>,
+    volume_k: Option<[u8; 20]>,
+    pbc_k: Option<[u8; 13]>,
+    flag_keys: Vec<[u8; 13]>,
+    meta_keys: Vec<[u8; 21]>,
 }
 
 pub struct ConCorpus {
@@ -177,72 +188,45 @@ impl ConCorpus {
         &self.path
     }
 
-    fn index_frame(&self, wtxn: &mut RwTxn, fk: FrameKey, frame: &ConFrame, blob: &str) -> Result<()> {
-        let fk_b = fk.to_bytes();
-        self.frames.put(wtxn, &fk_b[..], blob)?;
-
-        let hash = hash_frame_bytes(blob.as_bytes());
-        let hb = hash.to_bytes();
-        self.hash_by_frame.put(wtxn, &fk_b[..], &hb[..])?;
-        if self.frame_by_hash.get(wtxn, &hb[..])?.is_none() {
-            self.frame_by_hash.put(wtxn, &hb[..], &fk_b[..])?;
-        }
-
+    /// CPU-only: derive every secondary key for one frame (call **outside** write_txn).
+    fn build_index_puts(fk: FrameKey, frame: &ConFrame, blob: String) -> PreparedIndexPuts {
+        let hash = hash_frame_bytes(blob.as_bytes()).to_bytes();
         let n_atoms = frame.atom_data.len() as u32;
-        let nk = natoms_key(n_atoms, fk);
-        self.idx_natoms.put(wtxn, &nk[..], &())?;
-
         let counts = frame_species(frame);
-        let mut syms = BTreeSet::new();
+        let mut symbol_keys = Vec::new();
+        let mut elem_count_keys = Vec::new();
+        let mut seen = BTreeSet::new();
         for (sym, cnt) in &counts {
-            syms.insert(sym.clone());
-            let ek = elem_count_key(sym, *cnt, fk);
-            self.idx_elem_count.put(wtxn, &ek[..], &())?;
-        }
-        for s in &syms {
-            let sk = symbol_key(s, fk);
-            self.idx_symbol.put(wtxn, &sk[..], &())?;
+            elem_count_keys.push(elem_count_key(sym, *cnt, fk));
+            if seen.insert(sym.clone()) {
+                symbol_keys.push(symbol_key(sym, fk));
+            }
         }
         let formula = composition_formula(&counts);
-        if !formula.is_empty() {
-            let fk_form = formula_key(&formula, fk);
-            self.idx_formula.put(wtxn, &fk_form[..], &())?;
-        }
-
-        if let Some(e) = frame_energy(frame) {
-            if let Some(ek) = energy_bin_key(e, fk) {
-                self.idx_energy.put(wtxn, &ek[..], &())?;
-            }
-            let fk_flag = flag_key(FLAG_HAS_ENERGY, fk);
-            self.idx_flags.put(wtxn, &fk_flag[..], &())?;
-        }
-        if frame_has_forces(frame) {
-            let fk_flag = flag_key(FLAG_HAS_FORCES, fk);
-            self.idx_flags.put(wtxn, &fk_flag[..], &())?;
-            if let Some(fm) = frame_fmax(frame) {
-                if let Some(fk_fm) = fmax_bin_key(fm, fk) {
-                    self.idx_fmax.put(wtxn, &fk_fm[..], &())?;
-                }
-            }
-        }
+        let formula_k = if formula.is_empty() {
+            None
+        } else {
+            Some(formula_key(&formula, fk))
+        };
+        let mut flag_keys = Vec::new();
+        let energy_k = frame_energy(frame).and_then(|e| {
+            flag_keys.push(flag_key(FLAG_HAS_ENERGY, fk));
+            energy_bin_key(e, fk)
+        });
+        let fmax_k = if frame_has_forces(frame) {
+            flag_keys.push(flag_key(FLAG_HAS_FORCES, fk));
+            frame_fmax(frame).and_then(|fm| fmax_bin_key(fm, fk))
+        } else {
+            None
+        };
         if frame_has_velocities(frame) {
-            let fk_flag = flag_key(FLAG_HAS_VELOCITIES, fk);
-            self.idx_flags.put(wtxn, &fk_flag[..], &())?;
+            flag_keys.push(flag_key(FLAG_HAS_VELOCITIES, fk));
         }
-        if let Some(m) = frame_total_mass(frame) {
-            if let Some(k) = mass_bin_key(m, fk) {
-                self.idx_mass.put(wtxn, &k[..], &())?;
-            }
-        }
-        if let Some(v) = frame_cell_volume(frame) {
-            if let Some(k) = volume_bin_key(v, fk) {
-                self.idx_volume.put(wtxn, &k[..], &())?;
-            }
-        }
-        if let Some(mask) = frame_pbc_mask(frame) {
-            self.idx_pbc.put(wtxn, &pbc_key(mask, fk)[..], &())?;
-        }
-        let meta_puts: [(u8, Option<f64>); 7] = [
+        let mass_k = frame_total_mass(frame).and_then(|m| mass_bin_key(m, fk));
+        let volume_k = frame_cell_volume(frame).and_then(|v| volume_bin_key(v, fk));
+        let pbc_k = frame_pbc_mask(frame).map(|mask| pbc_key(mask, fk));
+        let mut meta_keys = Vec::new();
+        for (ch, val) in [
             (META_TIME, frame_time(frame)),
             (META_TIMESTEP, frame_timestep(frame)),
             (META_FRAME_INDEX, frame_frame_index(frame)),
@@ -250,22 +234,84 @@ impl ConCorpus {
             (META_NEB_BAND, frame_neb_band(frame)),
             (META_CHARGE, frame_charge(frame)),
             (META_MAGMOM, frame_magmom(frame)),
-        ];
-        for (ch, val) in meta_puts {
+        ] {
             if let Some(x) = val {
                 if let Some(k) = meta_scalar_key(ch, x, fk) {
-                    self.idx_meta.put(wtxn, &k[..], &())?;
+                    meta_keys.push(k);
                 }
             }
         }
+        PreparedIndexPuts {
+            fk,
+            blob,
+            hash,
+            natoms_k: natoms_key(n_atoms, fk),
+            symbol_keys,
+            elem_count_keys,
+            formula_k,
+            energy_k,
+            fmax_k,
+            mass_k,
+            volume_k,
+            pbc_k,
+            flag_keys,
+            meta_keys,
+        }
+    }
+
+    /// Exclusive section: LMDB puts only (no hash/species/bin derivation).
+    fn put_index_puts(&self, wtxn: &mut RwTxn, p: &PreparedIndexPuts) -> Result<()> {
+        let fk_b = p.fk.to_bytes();
+        self.frames.put(wtxn, &fk_b[..], p.blob.as_str())?;
+        self.hash_by_frame.put(wtxn, &fk_b[..], &p.hash[..])?;
+        if self.frame_by_hash.get(wtxn, &p.hash[..])?.is_none() {
+            self.frame_by_hash.put(wtxn, &p.hash[..], &fk_b[..])?;
+        }
+        self.idx_natoms.put(wtxn, &p.natoms_k[..], &())?;
+        for sk in &p.symbol_keys {
+            self.idx_symbol.put(wtxn, &sk[..], &())?;
+        }
+        for ek in &p.elem_count_keys {
+            self.idx_elem_count.put(wtxn, &ek[..], &())?;
+        }
+        if let Some(ref fk_form) = p.formula_k {
+            self.idx_formula.put(wtxn, &fk_form[..], &())?;
+        }
+        if let Some(ek) = p.energy_k {
+            self.idx_energy.put(wtxn, &ek[..], &())?;
+        }
+        if let Some(fk_fm) = p.fmax_k {
+            self.idx_fmax.put(wtxn, &fk_fm[..], &())?;
+        }
+        if let Some(k) = p.mass_k {
+            self.idx_mass.put(wtxn, &k[..], &())?;
+        }
+        if let Some(k) = p.volume_k {
+            self.idx_volume.put(wtxn, &k[..], &())?;
+        }
+        if let Some(pk) = p.pbc_k {
+            self.idx_pbc.put(wtxn, &pk[..], &())?;
+        }
+        for fk_flag in &p.flag_keys {
+            self.idx_flags.put(wtxn, &fk_flag[..], &())?;
+        }
+        for mk in &p.meta_keys {
+            self.idx_meta.put(wtxn, &mk[..], &())?;
+        }
         Ok(())
+    }
+
+    /// Reindex path: build puts then put (derivation not under a multi-frame exclusive prepare loop).
+    fn index_frame(&self, wtxn: &mut RwTxn, fk: FrameKey, frame: &ConFrame, blob: &str) -> Result<()> {
+        let puts = Self::build_index_puts(fk, frame, blob.to_owned());
+        self.put_index_puts(wtxn, &puts)
     }
 
     /// Parse path/string CON into owned blobs + frames (no exclusive LMDB write section).
     fn prepare_trajectory_str(
         traj_id: TrajId,
         file_contents: &str,
-    ) -> Result<Vec<PreparedFrameRec>> {
+    ) -> Result<Vec<PreparedIndexPuts>> {
         let mut out = Vec::new();
         let mut frame_idx: u32 = 0;
         let mut iter = ConFrameIterator::new(file_contents);
@@ -275,14 +321,11 @@ impl ConCorpus {
                 Some(Err(e)) => return Err(Error::Parse(e.to_string())),
                 Some(Ok(x)) => x,
             };
-            out.push(PreparedFrameRec {
-                fk: FrameKey {
-                    traj_id,
-                    frame_idx,
-                },
-                blob: blob.to_owned(),
-                frame,
-            });
+            let fk = FrameKey {
+                traj_id,
+                frame_idx,
+            };
+            out.push(Self::build_index_puts(fk, &frame, blob.to_owned()));
             frame_idx += 1;
         }
         Ok(out)
@@ -293,7 +336,7 @@ impl ConCorpus {
         traj_id: TrajId,
         frames: &[ConFrame],
         start_idx: u32,
-    ) -> Result<Vec<PreparedFrameRec>> {
+    ) -> Result<Vec<PreparedIndexPuts>> {
         let mut out = Vec::with_capacity(frames.len());
         let mut frame_idx = start_idx;
         for fr in frames {
@@ -305,14 +348,11 @@ impl ConCorpus {
             }
             let blob = String::from_utf8(buf.into_inner())
                 .map_err(|e| Error::Message(format!("utf8: {e}")))?;
-            out.push(PreparedFrameRec {
-                fk: FrameKey {
-                    traj_id,
-                    frame_idx,
-                },
-                blob,
-                frame: fr.clone(),
-            });
+            let fk = FrameKey {
+                traj_id,
+                frame_idx,
+            };
+            out.push(Self::build_index_puts(fk, fr, blob));
             frame_idx += 1;
         }
         Ok(out)
@@ -322,7 +362,7 @@ impl ConCorpus {
     fn commit_prepared(
         &self,
         traj_id: TrajId,
-        prepared: &[PreparedFrameRec],
+        prepared: &[PreparedIndexPuts],
         source: String,
         replace_meta: bool,
     ) -> Result<u32> {
@@ -335,7 +375,7 @@ impl ConCorpus {
             }
         }
         for p in prepared {
-            self.index_frame(&mut wtxn, p.fk, &p.frame, &p.blob)?;
+            self.put_index_puts(&mut wtxn, p)?;
         }
         let n_frames = prepared
             .last()
@@ -381,13 +421,13 @@ impl ConCorpus {
     }
 
     /// Append frames to an existing trajectory (or create it). Returns new total frame count.
+    /// Concurrent extend of the **same** `traj_id` is rejected if `n_frames` moved (TOCTOU guard).
     pub fn extend_trajectory_frames(
         &self,
         traj_id: TrajId,
         frames: &[ConFrame],
         source_hint: impl Into<String>,
     ) -> Result<u32> {
-        // Read start index under a short read txn (not a writer lock for CPU serialize).
         let (start_idx, source) = {
             let rtxn = self.env.read_txn()?;
             let tid_key = traj_id.to_be_bytes();
@@ -398,19 +438,23 @@ impl ConCorpus {
                 (0u32, source_hint.into())
             }
         };
+        // Key derivation fully outside exclusive section.
         let prepared = Self::prepare_trajectory_frames(traj_id, frames, start_idx)?;
-        // Commit with replace_meta: always rewrite traj_meta to new n_frames.
         let mut wtxn = self.env.write_txn()?;
         let tid_key = traj_id.to_be_bytes();
-        // Re-check existence race: if another writer created same traj_id as new, fail if we expected create.
-        if start_idx == 0 {
-            if let Some(existing) = self.traj_meta.get(&wtxn, &tid_key[..])? {
-                let meta: TrajMeta = serde_json::from_str(existing)?;
-                return Err(Error::TrajExists(traj_id, meta.n_frames));
-            }
+        let live_n = if let Some(existing) = self.traj_meta.get(&wtxn, &tid_key[..])? {
+            let meta: TrajMeta = serde_json::from_str(existing)?;
+            meta.n_frames
+        } else {
+            0u32
+        };
+        if live_n != start_idx {
+            return Err(Error::Message(format!(
+                "concurrent extend race on traj {traj_id}: expected start {start_idx}, live {live_n}"
+            )));
         }
         for p in &prepared {
-            self.index_frame(&mut wtxn, p.fk, &p.frame, &p.blob)?;
+            self.put_index_puts(&mut wtxn, p)?;
         }
         let n_frames = prepared
             .last()
