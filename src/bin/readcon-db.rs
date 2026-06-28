@@ -12,7 +12,7 @@
 use std::env;
 use std::process::ExitCode;
 
-use readcon_db::{join_corpus_dirs, ConCorpus, Select, ShardedConCorpus, DEFAULT_N_SHARDS};
+use readcon_db::{ConCorpus, Select, ShardedConCorpus, DEFAULT_N_SHARDS};
 
 fn usage() -> ExitCode {
     eprintln!(
@@ -457,13 +457,18 @@ fn main() -> ExitCode {
                     sel = sel.require_symbol(s);
                 }
                 let n = if sharded {
-                    let tmp = tempfile::tempdir()?;
-                    let joined = tmp.path().join("j");
+                    let joined = std::env::temp_dir().join(format!(
+                        "readcon_db_join_{}",
+                        std::process::id()
+                    ));
+                    let _ = std::fs::remove_dir_all(&joined);
                     let mut sc2 = ShardedConCorpus::open(&src, DEFAULT_N_SHARDS)?;
                     sc2.join_to_single_env(&joined)?;
                     let db = ConCorpus::open(&joined)?;
                     let keys = db.select(&sel)?;
-                    db.export_extxyz(&keys, &out, "energy")?
+                    let n = db.export_extxyz(&keys, &out, "energy")?;
+                    let _ = std::fs::remove_dir_all(&joined);
+                    n
                 } else {
                     let db = ConCorpus::open(&src)?;
                     let keys = db.select(&sel)?;
