@@ -1,5 +1,14 @@
 //! Optional **cooked SoA** payload: derived binary numerics beside authoritative CON text.
 //!
+//! # Why CON text is still required (RCSO is **not** fully equivalent)
+//!
+//! RCSO stores only POD numerics (positions and optional forces/velocities). It does
+//! **not** carry element symbols, masses, cell/angles, constraint masks, JSON metadata,
+//! section labels, or exact on-disk CON bytes. Therefore it cannot replace
+//! `frames` for xxHash3 dedup, join/split fidelity, `reindex`, formula/symbol indexes,
+//! or CON export. The improvement is skipping **CON parse on numeric hot paths** when a
+//! valid cooked blob exists—not omitting the text tier from storage.
+//!
 //! Layout (little-endian, version 1):
 //! - magic `RCSO` (4 bytes)
 //! - version `u32` (=1)

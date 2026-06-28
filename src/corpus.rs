@@ -662,6 +662,7 @@ impl ConCorpus {
     }
 
     /// Raw optional cooked SoA bytes for `key` (None if never cooked).
+    /// Does **not** read `frames` (CON text).
     pub fn get_cooked_soa_bytes(&self, key: FrameKey) -> Result<Option<Vec<u8>>> {
         let rtxn = self.env.read_txn()?;
         let fk_b = key.to_bytes();
@@ -671,18 +672,28 @@ impl ConCorpus {
             .map(|b| b.to_vec()))
     }
 
+    /// True if a **valid** RCSO blob is stored (decode succeeds). Missing/corrupt → false.
+    /// Authority APIs must not use this flag to skip CON text.
+    pub fn has_valid_cooked_soa(&self, key: FrameKey) -> Result<bool> {
+        Ok(self.get_cooked_soa(key)?.is_some())
+    }
+
     /// Decode cooked SoA if present and valid; `None` if missing or corrupt (CON text unchanged).
+    /// Reads **only** `frames_soa`—no CON parse.
     pub fn get_cooked_soa(&self, key: FrameKey) -> Result<Option<crate::cooked_soa::CookedSoa>> {
         Ok(self
             .get_cooked_soa_bytes(key)?
             .and_then(|b| crate::cooked_soa::CookedSoa::try_decode(&b)))
     }
 
-    /// Prefer valid cooked SoA; otherwise parse CON text. Always uses CON for fidelity of non-numeric fields via `get_frame` when falling back.
+    /// Prefer valid cooked SoA (**no CON parse** on hit); otherwise parse CON text in `frames`.
+    /// RCSO is not fully equivalent to CON (no symbols/metadata/exact bytes)—do not omit `frames`.
     pub fn get_positions(&self, key: FrameKey) -> Result<Vec<[f64; 3]>> {
+        // Fast path: frames_soa only.
         if let Some(c) = self.get_cooked_soa(key)? {
             return Ok(c.positions);
         }
+        // Fallback: authoritative CON text → parse (never invent from indexes alone).
         let fr = self.get_frame(key)?;
         Ok(fr
             .atom_data
@@ -691,12 +702,14 @@ impl ConCorpus {
             .collect())
     }
 
-    /// Prefer cooked forces when present; else parse CON (`None` if no forces on frame).
+    /// Prefer cooked forces when the RCSO flag block is present (**no CON parse** on hit);
+    /// else parse CON (`None` if no forces on frame).
     pub fn get_forces(&self, key: FrameKey) -> Result<Option<Vec<[f64; 3]>>> {
         if let Some(c) = self.get_cooked_soa(key)? {
             if c.forces.is_some() {
                 return Ok(c.forces);
             }
+            // Cooked present but no forces block — fall through to CON for fidelity.
         }
         let fr = self.get_frame(key)?;
         if !fr.atom_data.iter().any(|a| a.force.is_some()) {
@@ -706,6 +719,25 @@ impl ConCorpus {
             fr.atom_data
                 .iter()
                 .map(|a| a.force.unwrap_or([0.0; 3]))
+                .collect(),
+        ))
+    }
+
+    /// Prefer cooked velocities when present; else parse CON.
+    pub fn get_velocities(&self, key: FrameKey) -> Result<Option<Vec<[f64; 3]>>> {
+        if let Some(c) = self.get_cooked_soa(key)? {
+            if c.velocities.is_some() {
+                return Ok(c.velocities);
+            }
+        }
+        let fr = self.get_frame(key)?;
+        if !fr.atom_data.iter().any(|a| a.velocity.is_some()) {
+            return Ok(None);
+        }
+        Ok(Some(
+            fr.atom_data
+                .iter()
+                .map(|a| a.velocity.unwrap_or([0.0; 3]))
                 .collect(),
         ))
     }
@@ -1787,5 +1819,74 @@ mod tests {
             })
             .unwrap()
             .is_some());
+    }
+
+    /// RCSO cannot stand in for missing CON text (not fully equivalent).
+    #[test]
+    fn cooked_soa_cannot_replace_missing_frames_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let key = FrameKey {
+            traj_id: 9,
+            frame_idx: 0,
+        };
+        db.append_trajectory_path_cook(9, fixture("tiny_cuh2.con"), true)
+            .unwrap();
+        assert!(db.has_valid_cooked_soa(key).unwrap());
+        let pos_ok = db.get_positions(key).unwrap();
+        assert!(!pos_ok.is_empty());
+        // Delete authoritative CON blob but leave RCSO (unsupported storage shape).
+        {
+            let mut wtxn = db.env.write_txn().unwrap();
+            let fk_b = key.to_bytes();
+            db.frames.delete(&mut wtxn, &fk_b[..]).unwrap();
+            wtxn.commit().unwrap();
+        }
+        // Numeric tier may still decode RCSO...
+        assert!(db.get_cooked_soa(key).unwrap().is_some());
+        let pos_cooked_only = db.get_positions(key).unwrap();
+        assert_eq!(pos_cooked_only, pos_ok);
+        // ...but authority surfaces fail without CON text.
+        assert!(db.get_frame_text(key).is_err());
+        assert!(db.get_frame(key).is_err());
+        // Hash reverse lookup still keyed off CON-era hash_by_frame may exist, but
+        // reindex cannot rebuild without frames blob.
+        assert!(db.frame_formula(key).is_err());
+    }
+
+    #[test]
+    fn numeric_fast_path_matches_con_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let key = FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        for _ in 0..2 {
+            // fresh corpus each half would be overkill; exercise cook + dual path twice
+        }
+        db.append_trajectory_path(1, fixture("tiny_cuh2_forces.con"))
+            .unwrap();
+        let fr = db.get_frame(key).unwrap();
+        let expect_pos: Vec<_> = fr.atom_data.iter().map(|a| [a.x, a.y, a.z]).collect();
+        let expect_f: Vec<_> = fr
+            .atom_data
+            .iter()
+            .map(|a| a.force.unwrap_or([0.0; 3]))
+            .collect();
+        // Without cook: parse path
+        assert_eq!(db.get_positions(key).unwrap(), expect_pos);
+        assert_eq!(db.get_forces(key).unwrap().unwrap(), expect_f);
+        db.cook_frame(key).unwrap();
+        assert!(db.has_valid_cooked_soa(key).unwrap());
+        // With cook: fast path must match CON-derived atoms (shipped API, not re-impl)
+        assert_eq!(db.get_positions(key).unwrap(), expect_pos);
+        assert_eq!(db.get_forces(key).unwrap().unwrap(), expect_f);
+        let text = db.get_frame_text(key).unwrap();
+        let h = db.frame_hash(key).unwrap();
+        db.delete_cooked_soa(key).unwrap();
+        assert_eq!(db.get_frame_text(key).unwrap(), text);
+        assert_eq!(db.frame_hash(key).unwrap().to_bytes(), h.to_bytes());
+        assert_eq!(db.get_positions(key).unwrap(), expect_pos);
     }
 }
