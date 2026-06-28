@@ -11,17 +11,27 @@ Part of the **readcon ecosystem** with [`readcon-core`](https://github.com/lode-
 
 ASE is **not** on the critical path for reading CON or XYZ in this stack. ASE `.db` may appear in CSE **timing** tables; it is not the recommended store.
 
-## Quick start
+## Install
 
 ```bash
-# Python (checkouts side-by-side)
+cargo add readcon-db
+cargo install readcon-db --locked   # CLI
+pip install readcon-db             # module readcon_db (PyPI)
+```
+
+Docs: <https://lode-org.github.io/readcon-db/> · API: <https://docs.rs/readcon-db> · crate: <https://crates.io/crates/readcon-db>
+
+## Quick start (from source)
+
+```bash
+# Optional: sibling checkouts under LODE/ (path dep on readcon-core)
 export VIRTUAL_ENV=... && source $VIRTUAL_ENV/bin/activate
 cd readcon-core && maturin develop --release --features python
 # optional foreign formats:
 # maturin develop --release --features python,chemfiles
 cd ../readcon-db && maturin develop --release --features python
 
-cargo test
+cargo test --locked
 cargo build --release   # libreadcon_db + CLI readcon-db
 ```
 

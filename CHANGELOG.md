@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.2 - 2026-06-28
+
+### Documentation
+- Install docs reflect crates.io / PyPI / Pages (no path-only wording)
+- Package metadata: homepage and documentation URLs
+
+### Continuous integration
+- CI (test, clippy, maturin smoke), crates.io publish workflow, Python wheels + PyPI on tags
+
+### Packaging
+- Align `python/pyproject.toml` version with crate **0.1.2**
+
 ## 0.1.1 - 2026-06-28
 ### Features
 - Optional RCSO cooked SoA tier (`frames_soa`) with cook/delete/numeric getters

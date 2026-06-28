@@ -1,10 +1,12 @@
 [package]
 name = "readcon-db"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Mmap-backed CON frame corpus (Heed/LMDB), xxHash exact match, multi-language FFI"
 license = "MIT"
 repository = "https://github.com/lode-org/readcon-db"
+homepage = "https://lode-org.github.io/readcon-db/"
+documentation = "https://docs.rs/readcon-db"
 rust-version = "1.75"
 readme = "README.md"
 keywords = ["con", "trajectory", "lmdb", "mmap", "molecular-dynamics"]

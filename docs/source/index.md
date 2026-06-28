@@ -28,7 +28,8 @@ changelog_link
 | SQL | Not provided (by design) |
 
 ```bash
-cargo add readcon-db   # when published; path dep: LODE/readcon-db
+cargo add readcon-db
+cargo install readcon-db --locked
 cargo test -p readcon-db
 ```
 
