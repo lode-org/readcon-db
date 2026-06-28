@@ -101,7 +101,22 @@ Single trusted user on local disk for v1. No network protocol in v1.
 ## Status
 
 Shipped: frames, traj_meta, composition/energy/fmax/flags/natoms/symbol/hash indexes, `Select`, reindex, append frames, CLI/Python/C campaign select.
-Roadmap: optional cooked SoA blobs; parallel chunked reindex.
+## Optional cooked SoA tier (`frames_soa`)
+
+**Shipped (derived, non-authoritative):** each `FrameKey` may have a binary
+payload in LMDB DB `frames_soa` (magic `RCSO`, v1 LE POD header + f64 N×3
+positions and optional forces/velocities). Encode/decode: `cooked_soa::CookedSoa`
+from a parsed `ConFrame`.
+
+| Rule | Behavior |
+|------|----------|
+| Authority | UTF-8 CON text in `frames` only; xxHash3 / dedup / join-split / `reindex` ignore SoA |
+| Opt-in | Default ingest does **not** cook; `cook_frame` / `recook_all` / `append_trajectory_path_cook(..., true)` |
+| Hot path | `get_positions` / `get_forces` prefer valid cooked; corrupt/missing → parse CON |
+| Discard | `delete_cooked_soa`; reindex and select unaffected |
+| DLPack | Still **ephemeral** in-process views on `ConFrame`—not an LMDB value format |
+
+Roadmap (unchanged): parallel chunked reindex; optional multi-dtype SoA matrix.
 
 ## ASE.db column ↔ readcon-db (competitive screening set)
 

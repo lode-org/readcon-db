@@ -81,6 +81,8 @@ pub struct ConCorpus {
     idx_meta: Database<Bytes, Unit>,
     frame_by_hash: Database<Bytes, Bytes>,
     hash_by_frame: Database<Bytes, Bytes>,
+    /// Optional derived SoA numerics (`FrameKey` → cooked bytes). Not authoritative.
+    frames_soa: Database<Bytes, Bytes>,
 }
 
 fn frame_has_forces(frame: &ConFrame) -> bool {
@@ -131,6 +133,7 @@ impl ConCorpus {
         let idx_meta = env.create_database(&mut wtxn, Some("idx_meta"))?;
         let frame_by_hash = env.create_database(&mut wtxn, Some("frame_by_hash"))?;
         let hash_by_frame = env.create_database(&mut wtxn, Some("hash_by_frame"))?;
+        let frames_soa = env.create_database(&mut wtxn, Some("frames_soa"))?;
         wtxn.commit()?;
 
         Ok(Self {
@@ -151,6 +154,7 @@ impl ConCorpus {
             idx_meta,
             frame_by_hash,
             hash_by_frame,
+            frames_soa,
         })
     }
 
@@ -655,6 +659,101 @@ impl ConCorpus {
             .ok_or_else(|| Error::Parse("empty blob".into()))?
             .map_err(|e| Error::Parse(e.to_string()))?;
         Ok(fr)
+    }
+
+    /// Raw optional cooked SoA bytes for `key` (None if never cooked).
+    pub fn get_cooked_soa_bytes(&self, key: FrameKey) -> Result<Option<Vec<u8>>> {
+        let rtxn = self.env.read_txn()?;
+        let fk_b = key.to_bytes();
+        Ok(self
+            .frames_soa
+            .get(&rtxn, &fk_b[..])?
+            .map(|b| b.to_vec()))
+    }
+
+    /// Decode cooked SoA if present and valid; `None` if missing or corrupt (CON text unchanged).
+    pub fn get_cooked_soa(&self, key: FrameKey) -> Result<Option<crate::cooked_soa::CookedSoa>> {
+        Ok(self
+            .get_cooked_soa_bytes(key)?
+            .and_then(|b| crate::cooked_soa::CookedSoa::try_decode(&b)))
+    }
+
+    /// Prefer valid cooked SoA; otherwise parse CON text. Always uses CON for fidelity of non-numeric fields via `get_frame` when falling back.
+    pub fn get_positions(&self, key: FrameKey) -> Result<Vec<[f64; 3]>> {
+        if let Some(c) = self.get_cooked_soa(key)? {
+            return Ok(c.positions);
+        }
+        let fr = self.get_frame(key)?;
+        Ok(fr.atom_data.iter().map(|a| a.coord).collect())
+    }
+
+    /// Prefer cooked forces when present; else parse CON (`None` if no forces on frame).
+    pub fn get_forces(&self, key: FrameKey) -> Result<Option<Vec<[f64; 3]>>> {
+        if let Some(c) = self.get_cooked_soa(key)? {
+            if c.forces.is_some() {
+                return Ok(c.forces);
+            }
+        }
+        let fr = self.get_frame(key)?;
+        if !fr.atom_data.iter().any(|a| a.force.is_some()) {
+            return Ok(None);
+        }
+        Ok(Some(
+            fr.atom_data
+                .iter()
+                .map(|a| a.force.unwrap_or([0.0; 3]))
+                .collect(),
+        ))
+    }
+
+    /// Cook one frame from authoritative CON text (overwrite existing cooked entry).
+    pub fn cook_frame(&self, key: FrameKey) -> Result<usize> {
+        let fr = self.get_frame(key)?;
+        let bytes = crate::cooked_soa::CookedSoa::encode_frame(&fr)?;
+        let mut wtxn = self.env.write_txn()?;
+        let fk_b = key.to_bytes();
+        self.frames_soa.put(&mut wtxn, &fk_b[..], &bytes[..])?;
+        wtxn.commit()?;
+        Ok(bytes.len())
+    }
+
+    /// Cook all frames that have CON text; returns number of frames cooked.
+    pub fn recook_all(&self) -> Result<u32> {
+        let keys = self.list_frame_keys()?;
+        let mut n = 0u32;
+        for k in keys {
+            self.cook_frame(k)?;
+            n += 1;
+        }
+        Ok(n)
+    }
+
+    /// Drop cooked tier for one key (CON text and indexes untouched).
+    pub fn delete_cooked_soa(&self, key: FrameKey) -> Result<()> {
+        let mut wtxn = self.env.write_txn()?;
+        let fk_b = key.to_bytes();
+        let _ = self.frames_soa.delete(&mut wtxn, &fk_b[..])?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    /// Ingest path with optional cook-on-write (still stores CON text as authority).
+    pub fn append_trajectory_path_cook(
+        &self,
+        traj_id: TrajId,
+        file: impl AsRef<Path>,
+        cook: bool,
+    ) -> Result<u32> {
+        let n = self.append_trajectory_path(traj_id, file)?;
+        if cook {
+            for i in 0..n {
+                self.cook_frame(FrameKey {
+                    traj_id,
+                    frame_idx: i,
+                })?;
+            }
+        }
+        Ok(n)
     }
 
     pub fn frame_hash(&self, key: FrameKey) -> Result<ContentHash> {
@@ -1568,5 +1667,118 @@ mod tests {
             .select(&Select::new().exact_composition("Cu:2|H:2"))
             .unwrap();
         assert!(form.len() >= 2);
+    }
+
+    #[test]
+    fn cooked_soa_roundtrip_and_authority() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let key = FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con")).unwrap();
+        // default: no cooked
+        assert!(db.get_cooked_soa_bytes(key).unwrap().is_none());
+        let pos_via_parse = db.get_positions(key).unwrap();
+        let fr = db.get_frame(key).unwrap();
+        assert_eq!(pos_via_parse.len(), fr.atom_data.len());
+        for (i, a) in fr.atom_data.iter().enumerate() {
+            assert_eq!(pos_via_parse[i], a.coord);
+        }
+
+        let text_before = db.get_frame_text(key).unwrap();
+        let h_before = db.frame_hash(key).unwrap();
+        let nbytes = db.cook_frame(key).unwrap();
+        assert!(nbytes > 0);
+        let cooked = db.get_cooked_soa(key).unwrap().expect("cooked present");
+        assert_eq!(cooked.natoms as usize, fr.atom_data.len());
+        for (i, a) in fr.atom_data.iter().enumerate() {
+            assert_eq!(cooked.positions[i], a.coord);
+        }
+        // CON authority unchanged
+        assert_eq!(db.get_frame_text(key).unwrap(), text_before);
+        assert_eq!(db.frame_hash(key).unwrap().to_bytes(), h_before.to_bytes());
+        assert_eq!(
+            db.find_by_hash(h_before).unwrap(),
+            Some(key)
+        );
+        let pos_cooked = db.get_positions(key).unwrap();
+        assert_eq!(pos_cooked, cooked.positions);
+
+        // select still works
+        let keys = db.select(&Select::new().require_symbol("Cu")).unwrap();
+        assert!(keys.contains(&key));
+
+        // reindex ignores cooked; text still selects
+        db.reindex().unwrap();
+        assert!(db.get_cooked_soa(key).unwrap().is_some());
+        assert!(db
+            .select(&Select::new().require_symbol("Cu"))
+            .unwrap()
+            .contains(&key));
+
+        // delete cooked → fallback parse
+        db.delete_cooked_soa(key).unwrap();
+        assert!(db.get_cooked_soa_bytes(key).unwrap().is_none());
+        let pos_again = db.get_positions(key).unwrap();
+        assert_eq!(pos_again, pos_via_parse);
+        assert_eq!(db.get_frame_text(key).unwrap(), text_before);
+    }
+
+    #[test]
+    fn cooked_soa_forces_and_cook_on_ingest() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path_cook(3, fixture("tiny_cuh2_forces.con"), true)
+            .unwrap();
+        let key = FrameKey {
+            traj_id: 3,
+            frame_idx: 0,
+        };
+        assert!(db.get_cooked_soa_bytes(key).unwrap().is_some());
+        let fr = db.get_frame(key).unwrap();
+        let forces = db.get_forces(key).unwrap().expect("forces");
+        for (i, a) in fr.atom_data.iter().enumerate() {
+            if let Some(f) = a.force {
+                assert_eq!(forces[i], f);
+            }
+        }
+        // corrupt cooked → fallback
+        let mut wtxn = db.env.write_txn().unwrap();
+        let fk_b = key.to_bytes();
+        db.frames_soa
+            .put(&mut wtxn, &fk_b[..], b"XXXX_not_valid")
+            .unwrap();
+        wtxn.commit().unwrap();
+        assert!(db.get_cooked_soa(key).unwrap().is_none());
+        let pos = db.get_positions(key).unwrap();
+        assert_eq!(pos.len(), fr.atom_data.len());
+        assert_eq!(pos[0], fr.atom_data[0].coord);
+    }
+
+    #[test]
+    fn cooked_soa_recook_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con")).unwrap();
+        db.append_trajectory_path(2, fixture("tiny_cuh2_forces.con"))
+            .unwrap();
+        let n = db.recook_all().unwrap();
+        assert_eq!(n, 2);
+        assert!(db
+            .get_cooked_soa(FrameKey {
+                traj_id: 1,
+                frame_idx: 0
+            })
+            .unwrap()
+            .is_some());
+        assert!(db
+            .get_cooked_soa(FrameKey {
+                traj_id: 2,
+                frame_idx: 0
+            })
+            .unwrap()
+            .is_some());
     }
 }

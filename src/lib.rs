@@ -3,6 +3,7 @@
 //! Optional `python` feature builds PyO3 bindings. C ABI is always compiled into
 //! `cdylib`/`staticlib` (`src/ffi.rs`).
 
+mod cooked_soa;
 mod corpus;
 mod frame_scalars;
 mod error;
@@ -11,6 +12,7 @@ mod keys;
 mod select;
 mod shard;
 
+pub use cooked_soa::CookedSoa;
 pub use corpus::{frame_fmax, ConCorpus};
 pub use frame_scalars::{frame_cell_volume, frame_total_mass};
 pub use error::{Error, Result};
