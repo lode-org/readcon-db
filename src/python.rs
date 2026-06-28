@@ -198,8 +198,9 @@ impl PyConCorpus {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Touch all blobs for trajectory `0..n_frames` in one LMDB read txn (extract bench).
-    fn touch_trajectory(&self, traj_id: u64, n_frames: u32) -> PyResult<u64> {
+    /// Materialize all frame blobs for `traj_id` in one LMDB read txn (full extract).
+    /// Returns `(total_bytes, payload_checksum)` so callers cannot elide the copy.
+    fn touch_trajectory(&self, traj_id: u64, n_frames: u32) -> PyResult<(u64, u64)> {
         self.inner
             .touch_trajectory_blobs(traj_id, n_frames)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))

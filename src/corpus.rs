@@ -534,22 +534,30 @@ impl ConCorpus {
         Ok(out)
     }
 
-    /// Sum stored blob lengths for `traj_id` frames `0..n_frames` in one txn (touch extract).
-    pub fn touch_trajectory_blobs(&self, traj_id: TrajId, n_frames: u32) -> Result<u64> {
+    /// Materialize every frame blob for `traj_id` in **one** read txn (full extract hot path).
+    ///
+    /// Copies each LMDB value into an owned `String` and folds bytes so the fair
+    /// campaign pays for payload access—not merely `mmap` slice length.
+    /// Returns `(sum of lengths, byte checksum)` for observability.
+    pub fn touch_trajectory_blobs(&self, traj_id: TrajId, n_frames: u32) -> Result<(u64, u64)> {
         let rtxn = self.env.read_txn()?;
         let mut total = 0u64;
+        let mut checksum = 0u64;
         for frame_idx in 0..n_frames {
             let key = FrameKey {
                 traj_id,
                 frame_idx,
             };
-            let fk_b = key.to_bytes();
-            let Some(s) = self.frames.get(&rtxn, &fk_b[..])? else {
-                return Err(Error::MissingFrame(key));
-            };
-            total += s.len() as u64;
+            // Owned copy — same cost class as get_frame_text, batched under one txn.
+            let owned = self.get_frame_text_txn(&rtxn, key)?;
+            total += owned.len() as u64;
+            for (i, b) in owned.as_bytes().iter().enumerate() {
+                checksum = checksum.wrapping_add((*b as u64).wrapping_mul((i as u64).wrapping_add(1)));
+            }
         }
-        Ok(total)
+        // Prevent dead-code elimination of the fold in optimized builds used by benchmarks.
+        std::hint::black_box(checksum);
+        Ok((total, checksum))
     }
 
     pub fn get_frame(&self, key: FrameKey) -> Result<ConFrame> {
@@ -1266,8 +1274,9 @@ mod tests {
             .append_trajectory_path(1, fixture("tiny_cuh2.con"))
             .unwrap();
         assert!(n >= 1);
-        let total = db.touch_trajectory_blobs(1, n).unwrap();
+        let (total, checksum) = db.touch_trajectory_blobs(1, n).unwrap();
         assert!(total > 0);
+        assert!(checksum > 0);
         let texts = db
             .get_frame_texts(&[FrameKey {
                 traj_id: 1,
@@ -1276,6 +1285,12 @@ mod tests {
             .unwrap();
         assert_eq!(texts.len(), 1);
         assert_eq!(texts[0].len() as u64, total);
+        // Checksum must depend on payload bytes (not only length).
+        let mut expect = 0u64;
+        for (i, b) in texts[0].as_bytes().iter().enumerate() {
+            expect = expect.wrapping_add((*b as u64).wrapping_mul((i as u64).wrapping_add(1)));
+        }
+        assert_eq!(checksum, expect);
     }
     #[test]
     fn ase_competitive_mass_volume_pbc_meta_charge() {
