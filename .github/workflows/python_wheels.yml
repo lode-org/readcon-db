@@ -31,15 +31,20 @@ jobs:
   sdist:
     name: Build sdist
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: python
     steps:
       - uses: actions/checkout@v4
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
-          args: --manifest-path python/pyproject.toml --out dist
+          args: --out ../dist
+          working-directory: python
       - name: Validate sdist
-        run: pipx run twine check --strict dist/*
+        run: pipx run twine check --strict ../dist/*
+        working-directory: python
       - uses: actions/upload-artifact@v4
         with:
           name: sdist
@@ -69,9 +74,8 @@ jobs:
         with:
           target: ${{ matrix.target }}
           manylinux: auto
-          args: >-
-            --release --out dist --features python --find-interpreter
-            --manifest-path python/pyproject.toml
+          working-directory: python
+          args: --release --out ../dist --features python --find-interpreter
           docker-options: >-
             -e CARGO_HTTP_MULTIPLEXING=false
             -e CARGO_NET_RETRY=10
@@ -103,8 +107,6 @@ jobs:
           path: dist/
       - name: List artifacts
         run: ls -la dist/
-      # Configure Trusted Publisher on PyPI for project readcon-db:
-      # owner lode-org, repo readcon-db, workflow python_wheels.yml, environment pypi
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
