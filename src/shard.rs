@@ -245,6 +245,67 @@ mod tests {
         assert_eq!(ShardedConCorpus::shard_for_traj(0, 64), 0);
         assert_eq!(ShardedConCorpus::shard_for_traj(65, 64), 1);
     }
+
+    /// Strong-scaling HPC story: concurrent writers on distinct shards, then
+    /// fan-out select agrees with a **single-env** corpus that ingested the
+    /// same trajectory texts (ground truth membership).
+    #[test]
+    fn multi_shard_writers_select_matches_single_env_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("hpc_scale");
+        let baseline = dir.path().join("single_env");
+        let n_shards = 4u32;
+        ShardedConCorpus::open(&root, n_shards).unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let root_a = Arc::new(root.clone());
+        let mut joins = Vec::new();
+        for sid in 0..n_shards {
+            let root = Arc::clone(&root_a);
+            let text = text.clone();
+            joins.push(thread::spawn(move || {
+                let db = ShardedConCorpus::open_shard(root.as_path(), sid).unwrap();
+                let traj = u64::from(sid);
+                db.append_trajectory_str(traj, &text, format!("s{sid}"))
+                    .unwrap()
+            }));
+        }
+        let mut frames_per_traj = Vec::new();
+        for j in joins {
+            frames_per_traj.push(j.join().unwrap());
+        }
+        assert!(frames_per_traj.iter().all(|&n| n >= 1));
+
+        // Single-env ground truth: same traj_ids and CON text.
+        let single = ConCorpus::open(&baseline).unwrap();
+        for sid in 0..n_shards {
+            let traj = u64::from(sid);
+            let n = single
+                .append_trajectory_str(traj, &text, format!("s{sid}"))
+                .unwrap();
+            assert_eq!(n, frames_per_traj[sid as usize]);
+        }
+
+        let mut fan = ShardedConCorpus::open(&root, n_shards).unwrap();
+        let sharded_keys = fan.select(&Select::new().require_symbol("Cu")).unwrap();
+        let base_keys = single.select(&Select::new().require_symbol("Cu")).unwrap();
+        assert_eq!(sharded_keys.len(), base_keys.len());
+        let mut sk: Vec<_> = sharded_keys.iter().map(|k| (k.traj_id, k.frame_idx)).collect();
+        let mut bk: Vec<_> = base_keys.iter().map(|k| (k.traj_id, k.frame_idx)).collect();
+        sk.sort_unstable();
+        bk.sort_unstable();
+        assert_eq!(sk, bk, "fan-out select must match single-env membership");
+
+        // Spot-check text blobs agree for each key.
+        for (tid, fidx) in &sk {
+            let key = crate::keys::FrameKey {
+                traj_id: *tid,
+                frame_idx: *fidx,
+            };
+            let a = fan.get_frame_text(key).unwrap();
+            let b = single.get_frame_text(key).unwrap();
+            assert_eq!(a, b);
+        }
+    }
 }
 
 /// Exportable corpus layout kinds for analysis handoff.
