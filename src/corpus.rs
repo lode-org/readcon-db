@@ -84,54 +84,24 @@ pub struct ConCorpus {
 }
 
 fn frame_has_forces(frame: &ConFrame) -> bool {
-    frame
-        .header
-        .sections
-        .iter()
-        .any(|s| s.eq_ignore_ascii_case("forces"))
-        || frame.atom_data.iter().any(|a| a.force.is_some())
+    readcon_core::index_proj::frame_has_forces(frame)
 }
 
 fn frame_has_velocities(frame: &ConFrame) -> bool {
-    frame
-        .header
-        .sections
-        .iter()
-        .any(|s| s.eq_ignore_ascii_case("velocities"))
-        || frame.atom_data.iter().any(|a| a.velocity.is_some())
+    readcon_core::index_proj::frame_has_velocities(frame)
 }
 
 fn frame_energy(frame: &ConFrame) -> Option<f64> {
-    frame
-        .header
-        .energy()
-        .filter(|e| e.is_finite())
-        .or_else(|| {
-            frame
-                .header
-                .metadata
-                .get("energy")
-                .and_then(|v| v.as_f64())
-                .filter(|e| e.is_finite())
-        })
+    readcon_core::index_proj::finite_energy(frame)
 }
 
 /// Euclidean max ||F_i|| over atoms with force data; None if no forces.
 pub fn frame_fmax(frame: &ConFrame) -> Option<f64> {
-    let mut m = None;
-    for a in &frame.atom_data {
-        if let Some(f) = a.force {
-            let mag = (f[0] * f[0] + f[1] * f[1] + f[2] * f[2]).sqrt();
-            if mag.is_finite() {
-                m = Some(m.map_or(mag, |cur: f64| cur.max(mag)));
-            }
-        }
-    }
-    m
+    readcon_core::index_proj::frame_fmax(frame)
 }
 
 fn frame_species(frame: &ConFrame) -> Vec<(String, u32)> {
-    species_counts_from_symbols(frame.atom_data.iter().map(|a| a.symbol.as_ref()))
+    readcon_core::index_proj::frame_species_counts(frame)
 }
 
 impl ConCorpus {
@@ -210,51 +180,53 @@ impl ConCorpus {
 
 
     /// CPU-only: derive every secondary key for one frame (call **outside** write_txn).
+    /// Screening scalars come from [`readcon_core::index_proj::FrameIndexProjection`].
     fn build_index_puts(fk: FrameKey, frame: &ConFrame, blob: String) -> PreparedIndexPuts {
+        use readcon_core::index_proj::FrameIndexProjection;
         let hash = hash_frame_bytes(blob.as_bytes()).to_bytes();
-        let n_atoms = frame.atom_data.len() as u32;
-        let counts = frame_species(frame);
+        let proj = FrameIndexProjection::from_frame(frame);
         let mut symbol_keys = Vec::new();
         let mut elem_count_keys = Vec::new();
         let mut seen = BTreeSet::new();
-        for (sym, cnt) in &counts {
+        for (sym, cnt) in &proj.species_counts {
             elem_count_keys.push(elem_count_key(sym, *cnt, fk));
             if seen.insert(sym.clone()) {
                 symbol_keys.push(symbol_key(sym, fk));
             }
         }
-        let formula = composition_formula(&counts);
-        let formula_k = if formula.is_empty() {
+        let formula_k = if proj.formula.is_empty() {
             None
         } else {
-            Some(formula_key(&formula, fk))
+            Some(formula_key(&proj.formula, fk))
         };
         let mut flag_keys = Vec::new();
-        let energy_k = frame_energy(frame).and_then(|e| {
+        let energy_k = proj.energy.and_then(|e| {
             flag_keys.push(flag_key(FLAG_HAS_ENERGY, fk));
             energy_bin_key(e, fk)
         });
-        let fmax_k = if frame_has_forces(frame) {
+        let fmax_k = if proj.has_forces {
             flag_keys.push(flag_key(FLAG_HAS_FORCES, fk));
-            frame_fmax(frame).and_then(|fm| fmax_bin_key(fm, fk))
+            proj.fmax.and_then(|fm| fmax_bin_key(fm, fk))
         } else {
             None
         };
-        if frame_has_velocities(frame) {
+        if proj.has_velocities {
             flag_keys.push(flag_key(FLAG_HAS_VELOCITIES, fk));
         }
-        let mass_k = frame_total_mass(frame).and_then(|m| mass_bin_key(m, fk));
-        let volume_k = frame_cell_volume(frame).and_then(|v| volume_bin_key(v, fk));
-        let pbc_k = frame_pbc_mask(frame).map(|mask| pbc_key(mask, fk));
+        let mass_k = proj.total_mass.and_then(|m| mass_bin_key(m, fk));
+        let volume_k = proj.cell_volume.and_then(|v| volume_bin_key(v, fk));
+        let pbc_k = proj
+            .pbc
+            .map(|p| pbc_key(crate::keys::pbc_mask_from_bools(p), fk));
         let mut meta_keys = Vec::new();
         for (ch, val) in [
-            (META_TIME, frame_time(frame)),
-            (META_TIMESTEP, frame_timestep(frame)),
-            (META_FRAME_INDEX, frame_frame_index(frame)),
-            (META_NEB_BEAD, frame_neb_bead(frame)),
-            (META_NEB_BAND, frame_neb_band(frame)),
-            (META_CHARGE, frame_charge(frame)),
-            (META_MAGMOM, frame_magmom(frame)),
+            (META_TIME, proj.time),
+            (META_TIMESTEP, proj.timestep),
+            (META_FRAME_INDEX, proj.frame_index),
+            (META_NEB_BEAD, proj.neb_bead),
+            (META_NEB_BAND, proj.neb_band),
+            (META_CHARGE, proj.charge),
+            (META_MAGMOM, proj.magmom),
         ] {
             if let Some(x) = val {
                 if let Some(k) = meta_scalar_key(ch, x, fk) {
@@ -266,7 +238,7 @@ impl ConCorpus {
             fk,
             blob,
             hash,
-            natoms_k: natoms_key(n_atoms, fk),
+            natoms_k: natoms_key(proj.n_atoms, fk),
             symbol_keys,
             elem_count_keys,
             formula_k,

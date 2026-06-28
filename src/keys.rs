@@ -149,34 +149,8 @@ pub(crate) fn parse_elem_count_key(k: &[u8], symbol: &str) -> Option<(u32, Frame
     Some((count, fk))
 }
 
-/// Canonical formula string: sorted `Sym:count` joined by `|` (empty symbols skipped).
-/// Example: Cu₂H₂ → `Cu:2|H:2`. Deterministic for exact composition index.
-pub fn composition_formula(counts: &[(String, u32)]) -> String {
-    let mut parts: Vec<(String, u32)> = counts
-        .iter()
-        .filter(|(s, c)| !s.is_empty() && *c > 0)
-        .cloned()
-        .collect();
-    parts.sort_by(|a, b| a.0.cmp(&b.0));
-    parts
-        .into_iter()
-        .map(|(s, c)| format!("{s}:{c}"))
-        .collect::<Vec<_>>()
-        .join("|")
-}
-
-/// Species multiset from atom symbols (non-empty only).
-pub fn species_counts_from_symbols<'a>(symbols: impl Iterator<Item = &'a str>) -> Vec<(String, u32)> {
-    use std::collections::BTreeMap;
-    let mut m = BTreeMap::new();
-    for s in symbols {
-        if s.is_empty() {
-            continue;
-        }
-        *m.entry(s.to_string()).or_insert(0u32) += 1;
-    }
-    m.into_iter().collect()
-}
+/// Canonical formula string — delegated to [`readcon_core::index_proj`] (single encoding).
+pub use readcon_core::index_proj::{composition_formula, species_counts_from_symbols};
 
 /// formula || 0xff || FrameKey
 pub(crate) fn formula_key(formula: &str, fk: FrameKey) -> Vec<u8> {

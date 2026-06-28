@@ -70,6 +70,21 @@ Formula encoding: sorted non-empty symbols, `Sym:count` joined by `|` (e.g. `Cu:
 3. **Decode with `readcon-core`** so CON semantics never fork.
 4. **Selection returns keys first**; callers decode lazily.
 
+## Core contracts (`readcon-core::index_proj`)
+
+Screening scalars and ingest rules live in **readcon-core** so this crate does not fork CON meaning:
+
+| Contract | API | Role |
+|----------|-----|------|
+| Index projection | `FrameIndexProjection::from_frame` | natoms, formula, finite energy, fmax, mass, volume, sections mask, meta channels |
+| Formula encoding | `composition_formula` / `frame_composition_formula` | `idx_formula` keys (`Cu:2|H:2`) |
+| Finite policy | `finite_energy`, mass/volume/fmax | Non-finite scalars omitted from ordered indexes |
+| Sections mask | `sections_present_mask` / `SECTIONS_MASK_*` | forces / velocities / energies flags |
+| Span ingest | `ConFrameIterator::next_with_raw_span`, `frame_byte_spans` | Store exact multi-frame substrings; no hot-path re-serialize |
+| Canonical write | `ConFrameWriter::canonical(true)` | Opt-in stable JSON key order for materialize-from-frames |
+
+`frame_scalars` and `corpus` prepare/reindex call into these APIs (thin wrappers / delegates).
+
 ## Ecosystem
 
 | Crate | Responsibility |
