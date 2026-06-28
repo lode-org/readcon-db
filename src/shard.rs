@@ -235,7 +235,7 @@ mod tests {
             ns.push(j.join().unwrap());
         }
         assert!(ns.iter().all(|&n| n >= 1));
-        let mut fan = ShardedConCorpus::open(&root, n_shards).unwrap();
+        let mut fan = ShardedConCorpus::open(root.as_path(), n_shards).unwrap();
         let keys = fan.select(&Select::new().require_symbol("Cu")).unwrap();
         assert_eq!(keys.len(), 8);
     }
