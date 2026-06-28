@@ -196,7 +196,7 @@ mod tests {
 
     fn fixture(name: &str) -> String {
         let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../readcon-core/resources/test")
+            .join("resources/test")
             .join(name);
         std::fs::read_to_string(p).unwrap()
     }

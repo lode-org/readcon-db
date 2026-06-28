@@ -1228,12 +1228,12 @@ mod tests {
 
     fn fixture(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../readcon-core/resources/test")
+            .join("resources/test")
             .join(name)
     }
 
     fn fixtures_dir() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../readcon-core/resources/test")
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/test")
     }
 
     #[test]

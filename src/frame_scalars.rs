@@ -58,7 +58,7 @@ mod tests {
     #[test]
     fn mass_and_volume_from_fixture() {
         let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../readcon-core/resources/test/tiny_cuh2.con");
+            .join("resources/test/tiny_cuh2.con");
         let text = std::fs::read_to_string(p).unwrap();
         let fr = ConFrameIterator::new(&text).next().unwrap().unwrap();
         let m = frame_total_mass(&fr);
