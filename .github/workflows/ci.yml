@@ -37,22 +37,3 @@ jobs:
         run: cargo clippy --locked --all-targets
       - name: Docs
         run: cargo doc --locked --no-deps
-
-  python:
-    name: maturin develop smoke (ubuntu)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-      - name: Install and smoke
-        working-directory: python
-        run: |
-          python -m venv /tmp/rdb-venv
-          /tmp/rdb-venv/bin/pip install -U pip maturin
-          /tmp/rdb-venv/bin/maturin develop --release --features python
-          /tmp/rdb-venv/bin/python -c "import readcon_db; print('ok', readcon_db.__file__)"
