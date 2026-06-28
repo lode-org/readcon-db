@@ -138,3 +138,14 @@ ingest (many SLURM tasks uploading CON), use **`ShardedConCorpus`**:
 Assign trajectory IDs so `traj_id % n_shards == shard_id` (CLI `shard-ingest`
 advances start-id accordingly). This is **partitioned embedded writers**, not
 Raft multi-master — the right pattern for campaign uploads on Lustre/GPFS.
+
+## LMDB model decision (HPC)
+
+**KEEP sharded LMDB (Heed).** Single-env multi-writer contradicts LMDB SWMR; HPC-scale
+uploads use **independent envs per shard** (MDHIM-style local backends / industry
+sharded-LMDB practice). Full rationale, citations (LMDB docs, MDHIM HotStorage’15,
+PapyrusKV, RocksDB contrast, HDF5/Zarr/ADIOS2/DAOS contrast), risks, and falsifiers:
+see decision artifact from the storage-model review (session SCRATCH
+`lmdb-model-decision.md`) or regenerate from team notes. Do **not** interpret
+“one write_txn per env” as “LMDB cannot do multi-process writes”—only that
+**partitioning is mandatory** for concurrent commits.
