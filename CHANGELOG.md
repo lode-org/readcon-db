@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.1 - 2026-06-28
+### Features
+- Optional RCSO cooked SoA tier (`frames_soa`) with cook/delete/numeric getters
+- C/Python/CLI/Fortran exposure for cook and positions/forces fast path
+- User docs: `docs/orgmode/cooked-soa.org` (CON authority; RCSO not fully equivalent)
+
+### Documentation
+- Dual-tier rules in architecture Sphinx summaries and README pointer
+
+
 ## 0.1.0 — 2026-06-27
 
 ### Added
