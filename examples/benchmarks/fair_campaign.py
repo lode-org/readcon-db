@@ -29,8 +29,10 @@ from ase.db import connect
 from readcon_db import ConCorpus
 
 REPO_DB = Path(__file__).resolve().parents[2]
-CORE_TEST = REPO_DB.parent / "readcon-core" / "resources" / "test"
-DEFAULT_FIXTURE = CORE_TEST / "tiny_cuh2.con"
+# Prefer fixtures vendored in this repo (CI / standalone checkout); fall back to sibling core.
+_VENDORED = REPO_DB / "resources" / "test" / "tiny_cuh2.con"
+_CORE = REPO_DB.parent / "readcon-core" / "resources" / "test" / "tiny_cuh2.con"
+DEFAULT_FIXTURE = _VENDORED if _VENDORED.is_file() else _CORE
 DEFAULT_LADDER = (10, 50, 100, 200, 500)
 
 
