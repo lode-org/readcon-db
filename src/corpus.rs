@@ -1299,6 +1299,37 @@ mod tests {
         }
         assert_eq!(checksum, expect);
     }
+
+    /// Multi-process: N OS processes each open the same env via CLI and select.
+    #[test]
+    fn multiproc_cli_concurrent_select() {
+        use std::process::Command;
+        let dir = tempfile::tempdir().unwrap();
+        let corpus = dir.path().join("mp_corpus");
+        {
+            let db = ConCorpus::open(&corpus).unwrap();
+            db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+                .unwrap();
+        }
+        let Some(bin) = option_env!("CARGO_BIN_EXE_readcon-db") else {
+            return;
+        };
+        let corpus_s = corpus.to_str().unwrap();
+        let mut kids = Vec::new();
+        for _ in 0..4 {
+            kids.push(
+                Command::new(bin)
+                    .args(["select", corpus_s, "--symbol", "Cu"])
+                    .stdout(std::process::Stdio::null())
+                    .spawn()
+                    .expect("spawn"),
+            );
+        }
+        for mut c in kids {
+            assert!(c.wait().unwrap().success());
+        }
+    }
+
     #[test]
     fn ase_competitive_mass_volume_pbc_meta_charge() {
         use readcon_core::types::ConFrameBuilder;
