@@ -3,7 +3,7 @@ module readcon_db
   implicit none
   private
   public :: rkrdb_ok, rkrdb_err, db_open, db_close, db_append, db_select_basic, &
-            db_result_count, db_result_key, db_frame_hash, db_xxh3_128
+            db_result_count, db_result_key, db_frame_hash, db_frame_formula, db_xxh3_128
 
   integer(c_int), parameter :: rkrdb_ok = 0
   integer(c_int), parameter :: rkrdb_err = -1
@@ -61,6 +61,15 @@ module readcon_db
       integer(c_int8_t), intent(in) :: data(*)
       integer(c_size_t), value :: n
       integer(c_int8_t), intent(out) :: out_hash(*)
+      integer(c_int) :: st
+    end function
+    function rkrdb_frame_formula(id, traj_id, frame_idx, buf, buflen) bind(C, name="rkrdb_frame_formula") result(st)
+      import :: c_int, c_size_t, c_int64_t, c_int32_t, c_char
+      integer(c_size_t), value :: id
+      integer(c_int64_t), value :: traj_id
+      integer(c_int32_t), value :: frame_idx
+      character(kind=c_char), intent(out) :: buf(*)
+      integer(c_size_t), value :: buflen
       integer(c_int) :: st
     end function
   end interface
@@ -145,6 +154,26 @@ contains
     integer(c_int8_t), intent(out) :: hash16(16)
     integer(c_int), intent(out) :: status
     status = rkrdb_xxh3_128(data, n, hash16)
+  end subroutine
+
+  subroutine db_frame_formula(id, traj_id, frame_idx, formula, status)
+    integer(c_size_t), intent(in) :: id
+    integer(c_int64_t), intent(in) :: traj_id
+    integer(c_int32_t), intent(in) :: frame_idx
+    character(len=*), intent(out) :: formula
+    integer(c_int), intent(out) :: status
+    character(kind=c_char) :: buf(512)
+    integer :: i, n
+    buf = c_null_char
+    status = rkrdb_frame_formula(id, traj_id, frame_idx, buf, int(512, c_size_t))
+    formula = ""
+    if (status /= rkrdb_ok) return
+    n = 0
+    do i = 1, 512
+      if (buf(i) == c_null_char) exit
+      n = n + 1
+    end do
+    if (n > 0) formula = transfer(buf(1:n), formula(1:n))
   end subroutine
 
 end module readcon_db

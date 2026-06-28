@@ -292,6 +292,46 @@ pub unsafe extern "C" fn rkrdb_reindex(id: usize) -> c_int {
     .unwrap_or(RKRDB_NULL)
 }
 
+/// Canonical composition formula for a stored frame (same as core `index_proj`).
+/// Writes into `buf` (NUL-terminated). Returns RKRDB_OK, RKRDB_NOT_FOUND, RKRDB_ERR, or buffer size need as positive? 
+/// On success returns RKRDB_OK; if buflen too small returns RKRDB_ERR and sets last_error.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_frame_formula(
+    id: usize,
+    traj_id: u64,
+    frame_idx: u32,
+    buf: *mut c_char,
+    buflen: usize,
+) -> c_int {
+    if buf.is_null() || buflen == 0 {
+        return RKRDB_NULL;
+    }
+    with_handle(id, |h| {
+        match h.corpus.frame_formula(crate::keys::FrameKey {
+            traj_id,
+            frame_idx,
+        }) {
+            Ok(s) => {
+                let bytes = s.as_bytes();
+                if bytes.len() + 1 > buflen {
+                    set_err(h, crate::error::Error::Message("buffer too small".into()));
+                    return Ok(RKRDB_ERR);
+                }
+                unsafe {
+                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf as *mut u8, bytes.len());
+                    *buf.add(bytes.len()) = 0;
+                }
+                Ok(RKRDB_OK)
+            }
+            Err(e) => {
+                set_err(h, e);
+                Ok(RKRDB_ERR)
+            }
+        }
+    })
+    .unwrap_or(RKRDB_NULL)
+}
+
 /// Campaign select: composition formula (NUL-terminated, may be null), optional fmax window.
 /// `use_fmax_range` non-zero applies fmax_min/max. Flags: bit0 forces, bit1 velocities, bit2 energy.
 /// Element constraints: pass `elem_sym` + `elem_count` + `elem_exact` (1=exact, 0=min) for one pair (null skips).
