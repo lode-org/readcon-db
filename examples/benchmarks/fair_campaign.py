@@ -83,13 +83,11 @@ def bench_readcon_db(con_path: Path, n_frames: int, corpus_dir: Path) -> dict:
     insert_s = time.perf_counter() - t0
     assert int(nf) == n_frames, (nf, n_frames)
 
-    # extract: touch all frames
+    # extract: touch all blobs under one read txn per pass (batch API)
     rounds = 20
     t1 = time.perf_counter()
     for _ in range(rounds):
-        for i in range(n_frames):
-            text = db.get_frame_text(1, i)
-            _ = len(text)
+        _ = db.touch_trajectory(1, n_frames)
     extract_s = (time.perf_counter() - t1) / rounds
 
     # competitive selects (mean over rounds)
@@ -132,11 +130,9 @@ def bench_readcon_db(con_path: Path, n_frames: int, corpus_dir: Path) -> dict:
             _ = db.select(energy_min=-1e9, energy_max=1e9, require_energy=True)
         select_energy_s = (time.perf_counter() - t2c) / sel_rounds
 
-    # Multi-reader: share one ConCorpus (Heed forbids a second Env open in-process).
-    # Threads issue concurrent get_frame_text on the shared handle — CSE-style load.
+    # Multi-reader: share one ConCorpus; each thread uses one batch touch (one txn).
     def reader():
-        for i in range(n_frames):
-            _ = len(db.get_frame_text(1, i))
+        _ = db.touch_trajectory(1, n_frames)
 
     t3 = time.perf_counter()
     threads = [threading.Thread(target=reader) for _ in range(8)]

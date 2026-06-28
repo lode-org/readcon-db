@@ -198,6 +198,26 @@ impl PyConCorpus {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// Touch all blobs for trajectory `0..n_frames` in one LMDB read txn (extract bench).
+    fn touch_trajectory(&self, traj_id: u64, n_frames: u32) -> PyResult<u64> {
+        self.inner
+            .touch_trajectory_blobs(traj_id, n_frames)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    fn get_frame_texts(&self, keys: Vec<(u64, u32)>) -> PyResult<Vec<String>> {
+        let fks: Vec<FrameKey> = keys
+            .into_iter()
+            .map(|(t, f)| FrameKey {
+                traj_id: t,
+                frame_idx: f,
+            })
+            .collect();
+        self.inner
+            .get_frame_texts(&fks)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
     #[pyo3(signature = (keys, path, energy_key=None))]
     fn export_extxyz(
         &self,

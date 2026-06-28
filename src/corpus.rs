@@ -509,11 +509,47 @@ impl ConCorpus {
 
     pub fn get_frame_text(&self, key: FrameKey) -> Result<String> {
         let rtxn = self.env.read_txn()?;
+        self.get_frame_text_txn(&rtxn, key)
+    }
+
+    fn get_frame_text_txn(
+        &self,
+        rtxn: &heed::RoTxn<'_>,
+        key: FrameKey,
+    ) -> Result<String> {
         let fk_b = key.to_bytes();
-        match self.frames.get(&rtxn, &fk_b[..])? {
+        match self.frames.get(rtxn, &fk_b[..])? {
             Some(s) => Ok(s.to_owned()),
             None => Err(Error::MissingFrame(key)),
         }
+    }
+
+    /// Batch point-gets under **one** read transaction (extract / multi-reader hot path).
+    pub fn get_frame_texts(&self, keys: &[FrameKey]) -> Result<Vec<String>> {
+        let rtxn = self.env.read_txn()?;
+        let mut out = Vec::with_capacity(keys.len());
+        for &key in keys {
+            out.push(self.get_frame_text_txn(&rtxn, key)?);
+        }
+        Ok(out)
+    }
+
+    /// Sum stored blob lengths for `traj_id` frames `0..n_frames` in one txn (touch extract).
+    pub fn touch_trajectory_blobs(&self, traj_id: TrajId, n_frames: u32) -> Result<u64> {
+        let rtxn = self.env.read_txn()?;
+        let mut total = 0u64;
+        for frame_idx in 0..n_frames {
+            let key = FrameKey {
+                traj_id,
+                frame_idx,
+            };
+            let fk_b = key.to_bytes();
+            let Some(s) = self.frames.get(&rtxn, &fk_b[..])? else {
+                return Err(Error::MissingFrame(key));
+            };
+            total += s.len() as u64;
+        }
+        Ok(total)
     }
 
     pub fn get_frame(&self, key: FrameKey) -> Result<ConFrame> {
@@ -878,13 +914,22 @@ impl ConCorpus {
             }
         }
 
+        // Intersect smallest-first to minimize temporary allocations.
+        sets.sort_by_key(|s| s.len());
         let mut acc = sets.remove(0);
         for s in sets {
-            acc = acc.intersection(&s).copied().collect();
+            if acc.is_empty() {
+                break;
+            }
+            if s.len() < acc.len() {
+                acc = s.intersection(&acc).copied().collect();
+            } else {
+                acc = acc.intersection(&s).copied().collect();
+            }
         }
 
         let mut out: Vec<FrameKey> = acc.into_iter().collect();
-        out.sort();
+        out.sort_unstable();
         if let Some(lim) = sel.limit {
             out.truncate(lim);
         }
@@ -1211,6 +1256,26 @@ mod tests {
         let keys2 = db.select(&Select::new().require_forces()).unwrap();
         assert_eq!(a, b);
         assert_eq!(keys1, keys2);
+    }
+
+    #[test]
+    fn batch_touch_and_texts() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let n = db
+            .append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            .unwrap();
+        assert!(n >= 1);
+        let total = db.touch_trajectory_blobs(1, n).unwrap();
+        assert!(total > 0);
+        let texts = db
+            .get_frame_texts(&[FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            }])
+            .unwrap();
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].len() as u64, total);
     }
     #[test]
     fn ase_competitive_mass_volume_pbc_meta_charge() {
