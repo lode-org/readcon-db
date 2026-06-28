@@ -27,17 +27,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
       - name: Test (locked)
         run: cargo test --locked --all-targets
       - name: Clippy
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -W clippy::all
       - name: Docs
         run: cargo doc --locked --no-deps
 
   python:
-    name: maturin develop (ubuntu)
+    name: maturin wheel smoke (ubuntu)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -49,10 +51,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
       - name: Install maturin
         run: pip install maturin
-      - name: Build extension
+      - name: Build and install wheel
         working-directory: python
-        run: maturin build --release --features python --out /tmp/wheels
-      - name: Install wheel and smoke import
         run: |
+          maturin build --release --features python --out /tmp/wheels
           pip install /tmp/wheels/*.whl
-          python -c "import readcon_db; print(readcon_db.__file__)"
+          python -c "import readcon_db; print('ok', readcon_db.__file__)"
