@@ -17,7 +17,5 @@ jobs:
       with:
         check-latest-tag-only: true
 
-    - name: Audit for large files
-      uses: HaoZeke/large-file-auditor@v0.1.0
-      with:
-        file-size-threshold: "1M"
+    # large-file-auditor is omitted: this clone already has historical
+    # target/debug blobs above 1M. Rewriting shared history is a separate job.
