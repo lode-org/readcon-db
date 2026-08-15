@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.4 - 2026-08-15
+
+### Packaging
+- `python/pyproject.toml` ships the repo README so `twine check --strict` accepts the sdist
+
+### Continuous integration
+- Wheel workflow filename is `python-wheels.yml` (PyPI trusted publisher)
+
 ## 0.1.3 - 2026-08-15
 
 ### Packaging

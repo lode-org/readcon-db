@@ -53,7 +53,7 @@ CMake:
 include(FetchContent)
 FetchContent_Declare(
   readcon-db
-  URL https://github.com/lode-org/readcon-db/releases/download/v0.1.3/readcon-db-cxx-0.1.3.tar.gz
+  URL https://github.com/lode-org/readcon-db/releases/download/v0.1.4/readcon-db-cxx-0.1.4.tar.gz
   URL_HASH SHA256=<sha256 from the .sha256 sidecar on the GitHub Release>
 )
 FetchContent_MakeAvailable(readcon-db)
