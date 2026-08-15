@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.3 - 2026-08-15
+
+### Packaging
+- CMake FetchContent / `find_package(readcon-db)` and Meson wrap without cbindgen
+- cargo-c metadata: shipped `include/readcon-db.h`, `readcon-db.pc`
+- cxx source tarball (`readcon-db-cxx-0.1.3.tar.gz` and `-vendor`) on the GitHub Release
+
 ## 0.1.2 - 2026-06-28
 
 ### Documentation
