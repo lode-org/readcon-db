@@ -26,7 +26,7 @@ lychee --config lychee.toml 'docs/_build/html/**/*.html'
 | Lint | `lint.yml` | PR | Conventional commits + large-file audit |
 | C/C++ dist | `ci_cxx.yml` | push, PR | CMake/Meson/pkg-config without cbindgen |
 | crates.io | `crates_publish.yml` | `v*` tag | `cargo publish --locked` |
-| Python wheels | `python_wheels.yml` | `v*` tag, PR | maturin matrix → PyPI |
+| Python wheels | `python-wheels.yml` | `v*` tag, PR | maturin matrix → PyPI |
 | cxx tarball | `cxx_tarball.yml` | GitHub Release | slim + vendor C/C++ source tarballs |
 
 ## Release

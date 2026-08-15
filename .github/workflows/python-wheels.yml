@@ -10,7 +10,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'python/**'
-      - '.github/workflows/python_wheels.yml'
+      - '.github/workflows/python-wheels.yml'
   workflow_dispatch:
 
 concurrency:
