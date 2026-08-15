@@ -54,6 +54,7 @@ include(FetchContent)
 FetchContent_Declare(
   readcon-db
   URL https://github.com/lode-org/readcon-db/releases/download/v0.1.2/readcon-db-cxx-0.1.2.tar.gz
+  URL_HASH SHA256=<sha256 from the .sha256 sidecar on the GitHub Release>
 )
 FetchContent_MakeAvailable(readcon-db)
 target_link_libraries(app PRIVATE readcon-db::shared)
@@ -70,6 +71,12 @@ pkg-config --cflags --libs readcon-db
 
 Meson: `dependency('readcon-db')` with a wrap pointing at
 `readcon-db-cxx-$VERSION.tar.gz` (see `packaging/wrapdb/`).
+
+A process that uses both C APIs must link the **shared** objects
+(`libreadcon_db.so` and `libreadcon_core.so`). Do not static-link
+`libreadcon_db.a` together with `libreadcon_core.a`: the db archive
+already contains the Rust core and rust-std, and the duplicate
+symbols fail at link.
 
 Fortran: `fortran/ReadConDb` (`bind(C)` against the C ABI).
 

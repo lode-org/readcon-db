@@ -43,7 +43,7 @@ endif()
 string(REGEX REPLACE "([0-9]*)\\.([0-9]*)\\.([0-9]*).*" "\\1.\\2.\\3" READCON_DB_CMAKE_VERSION ${READCON_DB_VERSION})
 project(readcon-db
     VERSION ${READCON_DB_CMAKE_VERSION}
-    LANGUAGES C CXX
+    LANGUAGES C
 )
 set(PROJECT_VERSION ${READCON_DB_VERSION})
 
@@ -90,8 +90,7 @@ set(READCON_DB_C_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/include/readcon-db.h")
 if (NOT EXISTS ${READCON_DB_C_HEADER})
     message(FATAL_ERROR
         "missing shipped C header ${READCON_DB_C_HEADER}. "
-        "Maintainers regenerate it with scripts/regen-capi-headers.sh; "
-        "consumers must not run cbindgen.")
+        "The header is hand-maintained next to src/ffi.rs; cbindgen is not used.")
 endif()
 
 find_program(CARGO_EXE "cargo" DOC "path to cargo (Rust build system)")

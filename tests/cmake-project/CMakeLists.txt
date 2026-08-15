@@ -3,7 +3,19 @@ project(readcon-db-cmake-test C)
 
 option(READCON_DB_USE_FETCHCONTENT "Exercise FetchContent_Declare(SOURCE_DIR=...)" ON)
 
-if(DEFINED READCON_DB_SOURCE_DIR)
+if(DEFINED READCON_DB_FETCH_URL)
+    include(FetchContent)
+    if(DEFINED READCON_DB_FETCH_HASH)
+        FetchContent_Declare(
+            readcon-db
+            URL "${READCON_DB_FETCH_URL}"
+            URL_HASH "${READCON_DB_FETCH_HASH}"
+        )
+    else()
+        FetchContent_Declare(readcon-db URL "${READCON_DB_FETCH_URL}")
+    endif()
+    FetchContent_MakeAvailable(readcon-db)
+elseif(DEFINED READCON_DB_SOURCE_DIR)
     if(READCON_DB_USE_FETCHCONTENT)
         include(FetchContent)
         FetchContent_Declare(readcon-db SOURCE_DIR "${READCON_DB_SOURCE_DIR}")

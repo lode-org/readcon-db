@@ -26,7 +26,12 @@ endif
 
 cc = meson.get_compiler('c')
 cargo_prog = find_program('cargo', required: true)
+rustc_prog = find_program('rustc', required: true)
 _py = find_program('python3', 'python')
+_rv = run_command(rustc_prog, '--version', check: true).stdout().strip().split()
+if _rv.length() < 2 or not _rv[1].version_compare('>= 1.75.0')
+    error('readcon-db requires rustc >= 1.75.0')
+endif
 
 _rust_sys_deps = []
 if host_machine.system() == 'linux'
@@ -57,9 +62,17 @@ endif
 
 _profile = get_option('buildtype') == 'debug' ? 'debug' : 'release'
 
+_src_rs = run_command(
+    _py,
+    '-c',
+    'from pathlib import Path; print("\\n".join(str(p) for p in sorted(Path("src").rglob("*.rs"))))',
+    check: true,
+).stdout().strip().split('\n')
+
 readcon_cargo = custom_target(
     'readcon-cargo',
     input: files('Cargo.toml', 'src/lib.rs'),
+    depend_files: files('Cargo.lock') + files(_src_rs),
     output: [_cargo_shared, _cargo_static],
     command: [
         _py,
@@ -72,6 +85,7 @@ readcon_cargo = custom_target(
         _cargo_static,
         '@OUTPUT0@',
         '@OUTPUT1@',
+        get_option('rust_features'),
     ],
     build_by_default: true,
     install: true,
@@ -84,8 +98,9 @@ install_headers(
 
 # link_args + sources: Meson must not promote an installed static consumer
 # to link_whole (custom_target is not a library target).
+_link_idx = get_option('default_library') == 'static' ? 1 : 0
 readcon_dep = declare_dependency(
-    link_args: [readcon_cargo[0].full_path()],
+    link_args: [readcon_cargo[_link_idx].full_path()],
     sources: readcon_cargo,
     dependencies: _rust_sys_deps,
     include_directories: _incdir,
