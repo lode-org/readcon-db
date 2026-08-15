@@ -42,8 +42,6 @@ release = { changelog_title = "Releases" }
 
 [changelog]
 path = "CHANGELOG.md"
-authors = [
-        { username = "HaoZeke", signature = "Rohit Goswami" }
-]
+authors = [{ username = "HaoZeke", signature = "Rohit Goswami" }]
 
 [bump_profiles]
