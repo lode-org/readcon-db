@@ -17,6 +17,8 @@ ASE is **not** on the critical path for reading CON or XYZ in this stack. ASE `.
 cargo add readcon-db
 cargo install readcon-db --locked   # CLI
 pip install readcon-db             # module readcon_db (PyPI)
+# C/C++: FetchContent / meson dependency('readcon-db') / pkg-config
+# headers in include/ are shipped; cbindgen is not required
 ```
 
 Docs: <https://lode-org.github.io/readcon-db/> · API: <https://docs.rs/readcon-db> · crate: <https://crates.io/crates/readcon-db>

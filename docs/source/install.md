@@ -42,7 +42,35 @@ pip install maturin
 maturin develop --release --features python --manifest-path python/pyproject.toml
 ```
 
-C / C++: build with `cargo build --release` and use `include/readcon-db.h`.  
+## C / C++ (no cbindgen)
+
+`include/readcon-db.h` is hand-written and shipped. CMake FetchContent,
+Meson wrap, and `pkg-config` do **not** run cbindgen.
+
+CMake:
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(
+  readcon-db
+  URL https://github.com/lode-org/readcon-db/releases/download/v0.1.2/readcon-db-cxx-0.1.2.tar.gz
+)
+FetchContent_MakeAvailable(readcon-db)
+target_link_libraries(app PRIVATE readcon-db::shared)
+```
+
+From a checkout:
+
+```bash
+cmake -S . -B build -DCMAKE_INSTALL_PREFIX=$PWD/prefix
+cmake --build build && cmake --install build
+export PKG_CONFIG_PATH=$PWD/prefix/lib/pkgconfig
+pkg-config --cflags --libs readcon-db
+```
+
+Meson: `dependency('readcon-db')` with a wrap pointing at
+`readcon-db-cxx-$VERSION.tar.gz` (see `packaging/wrapdb/`).
+
 Fortran: `fortran/ReadConDb` (`bind(C)` against the C ABI).
 
 ## Documentation
