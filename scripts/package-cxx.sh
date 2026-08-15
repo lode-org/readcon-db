@@ -124,7 +124,8 @@ echo "${OUTPUT_DIR}/${ARCHIVE_NAME}.tar.gz"
 echo "sha256:${SHA}"
 echo "${SHA}" > "${OUTPUT_DIR}/${ARCHIVE_NAME}.tar.gz.sha256"
 
-if [[ -f "$ROOT_DIR/packaging/wrapdb/readcon-db.wrap.in" ]]; then
+# wrapdb wrap points at the slim tarball URL; do not overwrite it from --vendor.
+if [[ "$VENDOR" -eq 0 && -f "$ROOT_DIR/packaging/wrapdb/readcon-db.wrap.in" ]]; then
     sed -e "s/@VERSION@/${VERSION}/g" -e "s/@SHA256@/${SHA}/g" \
         "$ROOT_DIR/packaging/wrapdb/readcon-db.wrap.in" \
         > "${OUTPUT_DIR}/readcon-db.wrap"
