@@ -39,6 +39,24 @@ tempfile = "3"
 [package.metadata.docs.rs]
 all-features = false
 
+[package.metadata.capi]
+min_version = "0.10.17"
+
+[package.metadata.capi.header]
+name = "readcon-db"
+subdirectory = ""
+generation = false
+
+[package.metadata.capi.pkg_config]
+name = "readcon-db"
+filename = "readcon-db"
+description = "Mmap-backed CON frame corpus (LMDB) with C/C++ FFI"
+
+[package.metadata.capi.install.include]
+asset = [
+    { from = "include/readcon-db.h" },
+]
+
 [[example]]
 name = "bench_corpus_ops"
 path = "examples/bench_corpus_ops.rs"

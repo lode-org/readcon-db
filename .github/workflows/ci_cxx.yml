@@ -1,0 +1,88 @@
+name: C/C++ distribution
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: cxx-dist-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  cxx-dist:
+    runs-on: ubuntu-22.04
+    name: CMake + Meson + pkg-config (no cbindgen)
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install CMake, Meson, Ninja, pkg-config
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build pkg-config python3
+          python3 -m pip install meson
+
+      - name: Structural gate (no cbindgen required)
+        run: bash scripts/check-cxx-dist.sh
+
+      - name: Prove cbindgen is absent
+        run: |
+          if command -v cbindgen >/dev/null 2>&1; then
+            echo "cbindgen must not be installed on this job" >&2
+            exit 1
+          fi
+
+      - name: CMake FetchContent from this source tree
+        run: |
+          cmake -S tests/cmake-project -B build/cmake-fetch \
+            -DREADCON_DB_SOURCE_DIR="$GITHUB_WORKSPACE" \
+            -DREADCON_DB_USE_FETCHCONTENT=ON \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/cmake-fetch --parallel
+          ./build/cmake-fetch/c-main
+          ./build/cmake-fetch/c-main-static
+
+      - name: CMake install + find_package + pkg-config
+        run: |
+          cmake -S . -B build/db-prefix \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/prefix" \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/db-prefix --parallel
+          cmake --install build/db-prefix
+          test -f prefix/include/readcon-db.h
+          test -f prefix/lib/pkgconfig/readcon-db.pc
+          test -f prefix/lib/cmake/readcon-db/readcon-db-config.cmake
+          PKG_CONFIG_PATH="$GITHUB_WORKSPACE/prefix/lib/pkgconfig" \
+            pkg-config --exists --print-errors readcon-db
+          PKG_CONFIG_PATH="$GITHUB_WORKSPACE/prefix/lib/pkgconfig" \
+            pkg-config --libs readcon-db | grep -q readcon_db
+          cmake -S tests/cmake-project -B build/cmake-find \
+            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/prefix"
+          cmake --build build/cmake-find --parallel
+          ./build/cmake-find/c-main
+
+      - name: Meson setup + install (no cbindgen)
+        run: |
+          meson setup build/meson-dist \
+            --prefix="$GITHUB_WORKSPACE/meson-prefix" \
+            --libdir=lib \
+            --buildtype=release
+          meson compile -C build/meson-dist
+          meson install -C build/meson-dist
+          test -f meson-prefix/include/readcon-db.h
+          test -f meson-prefix/lib/pkgconfig/readcon-db.pc
+          export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/meson-prefix/lib/pkgconfig"
+          pkg-config --exists --print-errors readcon-db
+          meson setup tests/meson-wrap build/meson-wrap --buildtype=release
+          meson compile -C build/meson-wrap
+          ./build/meson-wrap/c-main
+
+      - name: cxx tarball lists shipped headers
+        run: |
+          mkdir -p /tmp/cxx-out
+          bash scripts/package-cxx.sh /tmp/cxx-out
+          tar -tzf /tmp/cxx-out/readcon-db-cxx-*.tar.gz | grep -E 'include/readcon-db\.h$'
