@@ -22,6 +22,12 @@ jobs:
         run: |
           pip install -r docs/requirements.txt
           sphinx-build -b html docs/source docs/_build/html
+      - name: Install lychee
+        uses: taiki-e/install-action@v2
+        with:
+          tool: lychee@0.24.2
+      - name: Link check (lychee)
+        run: lychee --config lychee.toml 'docs/_build/html/**/*.html'
       - name: Assemble site
         run: |
           mkdir -p _site

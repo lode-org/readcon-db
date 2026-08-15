@@ -124,6 +124,8 @@ pkg.generate(
     filebase: 'readcon-db',
     description: 'Mmap-backed CON frame corpus (LMDB) with C/C++ FFI',
     version: meson.project_version(),
-    libraries: ['-lreadcon_db'],
+    # Raw `-lfoo` strings do not get `-L${libdir}`; wrap consumers then
+    # fail at link with "cannot find -lreadcon_db".
+    libraries: ['-L${libdir}', '-lreadcon_db'],
     url: 'https://github.com/lode-org/readcon-db',
 )

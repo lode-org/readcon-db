@@ -463,7 +463,7 @@ pub unsafe extern "C" fn rkrdb_recook_all(id: usize) -> c_int {
 }
 
 /// Canonical composition formula for a stored frame (same as core `index_proj`).
-/// Writes into `buf` (NUL-terminated). Returns RKRDB_OK, RKRDB_NOT_FOUND, RKRDB_ERR, or buffer size need as positive? 
+/// Writes into `buf` (NUL-terminated). Returns RKRDB_OK, RKRDB_NOT_FOUND, RKRDB_ERR, or buffer size need as positive?
 /// On success returns RKRDB_OK; if buflen too small returns RKRDB_ERR and sets last_error.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_frame_formula(

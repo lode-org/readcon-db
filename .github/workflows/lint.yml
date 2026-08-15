@@ -1,0 +1,21 @@
+name: Lint
+
+on:
+  pull_request:
+    branches: [main]
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+
+    - name: Conventional commits check
+      uses: cocogitto/cocogitto-action@v3
+      with:
+        check-latest-tag-only: true
+
+    # large-file-auditor is omitted: this clone already has historical
+    # target/debug blobs above 1M. Rewriting shared history is a separate job.
