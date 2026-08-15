@@ -1,0 +1,4 @@
+option('with_tests', type : 'boolean',
+       value : false,
+       description: 'Runs cargo test from meson',
+      )
