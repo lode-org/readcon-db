@@ -2,7 +2,7 @@ option('with_tests', type : 'boolean',
        value : false,
        description: 'Runs cargo test from meson',
       )
-option('rust_features', type : 'string',
+option('cargo_features', type : 'string',
        value : '',
        description: 'Comma-separated cargo features forwarded to cargo rustc',
       )
