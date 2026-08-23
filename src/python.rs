@@ -121,10 +121,11 @@ impl PyConCorpus {
         }
         let file = h5py.call_method1("File", (path, "w"))?;
         let np = py.import("numpy")?;
-        let kw = |py: Python<'_>, key: &str, val: Bound<'_, PyAny>| -> PyResult<Bound<'_, PyDict>> {
-            let d = PyDict::new(py);
-            d.set_item(key, val)?;
-            Ok(d)
+        let put = |obj: &Bound<'_, PyAny>, name: &str, data: Bound<'_, PyAny>| -> PyResult<()> {
+            let d = PyDict::new(obj.py());
+            d.set_item("data", data)?;
+            obj.call_method("create_dataset", (name,), Some(&d))?;
+            Ok(())
         };
         let h5md = file.call_method1("create_group", ("h5md",))?;
         let h5md_attrs = h5md.getattr("attrs")?;
@@ -136,25 +137,25 @@ impl PyConCorpus {
         attrs.set_item("dimension", 3)?;
         attrs.set_item("boundary", ("periodic", "periodic", "periodic"))?;
         let edges = np.call_method1("asarray", ((boxl[0], boxl[1], boxl[2]),))?;
-        boxg.call_method("create_dataset", ("edges",), Some(&kw(py, "data", edges)?))?;
+        put(&boxg, "edges", edges)?;
         let dtype_kw = PyDict::new(py);
         dtype_kw.set_item("dtype", "float64")?;
         let pos_arr = np
             .call_method("asarray", (pos,), Some(&dtype_kw))?
             .call_method1("reshape", ((n_frames, natoms, 3),))?;
         let posg = all.call_method1("create_group", ("position",))?;
-        posg.call_method("create_dataset", ("value",), Some(&kw(py, "data", pos_arr)?))?;
+        put(&posg, "value", pos_arr)?;
         if let Some(f) = forces {
             if f.len() == n_frames * natoms * 3 {
                 let f_arr = np
                     .call_method("asarray", (f,), Some(&dtype_kw))?
                     .call_method1("reshape", ((n_frames, natoms, 3),))?;
                 let fg = all.call_method1("create_group", ("force",))?;
-                fg.call_method("create_dataset", ("value",), Some(&kw(py, "data", f_arr)?))?;
+                put(&fg, "value", f_arr)?;
             }
         }
         let spec_arr = np.call_method1("asarray", (species,))?;
-        all.call_method("create_dataset", ("species",), Some(&kw(py, "data", spec_arr)?))?;
+        put(&all, "species", spec_arr)?;
         file.call_method0("close")?;
         Ok(n_frames as u32)
     }
