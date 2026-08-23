@@ -443,6 +443,46 @@ impl ConCorpus {
         Ok(())
     }
 
+    fn delete_index_puts(&self, wtxn: &mut RwTxn, p: &PreparedIndexPuts) -> Result<()> {
+        let fk_b = p.fk.to_bytes();
+        let _ = self.frames.delete(wtxn, &fk_b[..])?;
+        let _ = self.hash_by_frame.delete(wtxn, &fk_b[..])?;
+        let _ = self.frame_by_hash.delete(wtxn, &p.hash[..])?;
+        let _ = self.frames_soa.delete(wtxn, &fk_b[..])?;
+        let _ = self.idx_natoms.delete(wtxn, &p.natoms_k[..])?;
+        for sk in &p.symbol_keys {
+            let _ = self.idx_symbol.delete(wtxn, &sk[..])?;
+        }
+        for ek in &p.elem_count_keys {
+            let _ = self.idx_elem_count.delete(wtxn, &ek[..])?;
+        }
+        if let Some(ref fk_form) = p.formula_k {
+            let _ = self.idx_formula.delete(wtxn, &fk_form[..])?;
+        }
+        if let Some(ek) = p.energy_k {
+            let _ = self.idx_energy.delete(wtxn, &ek[..])?;
+        }
+        if let Some(fk_fm) = p.fmax_k {
+            let _ = self.idx_fmax.delete(wtxn, &fk_fm[..])?;
+        }
+        if let Some(k) = p.mass_k {
+            let _ = self.idx_mass.delete(wtxn, &k[..])?;
+        }
+        if let Some(k) = p.volume_k {
+            let _ = self.idx_volume.delete(wtxn, &k[..])?;
+        }
+        if let Some(pk) = p.pbc_k {
+            let _ = self.idx_pbc.delete(wtxn, &pk[..])?;
+        }
+        for fk_flag in &p.flag_keys {
+            let _ = self.idx_flags.delete(wtxn, &fk_flag[..])?;
+        }
+        for mk in &p.meta_keys {
+            let _ = self.idx_meta.delete(wtxn, &mk[..])?;
+        }
+        Ok(())
+    }
+
     /// Reindex path: build puts then put (derivation not under a multi-frame exclusive prepare loop).
     fn index_frame(&self, wtxn: &mut RwTxn, fk: FrameKey, frame: &ConFrame, blob: &str) -> Result<()> {
         let puts = Self::build_index_puts(fk, frame, blob.to_owned());
@@ -579,10 +619,11 @@ impl ConCorpus {
             return Err(Error::Message("no frames for traj".into()));
         }
         let mut frames = Vec::with_capacity(keys.len());
-        let mut old_hashes = Vec::with_capacity(keys.len());
+        let mut old_puts = Vec::with_capacity(keys.len());
         for k in &keys {
-            old_hashes.push(self.frame_hash(*k)?);
+            let blob = self.get_frame_text(*k)?;
             let mut fr = self.get_frame(*k)?;
+            old_puts.push(Self::build_index_puts(*k, &fr, blob));
             let merged = crate::units_canon::merge_units(fr.header.units(), units.clone())?;
             crate::units_canon::rescale_frame_units(&mut fr, &merged)?;
             fr.header.set_units(merged);
@@ -590,12 +631,8 @@ impl ConCorpus {
         }
         let prepared = Self::prepare_trajectory_frames(traj_id, &frames, 0)?;
         let mut wtxn = self.env.write_txn()?;
-        for (k, h) in keys.iter().zip(old_hashes.iter()) {
-            let fk_b = k.to_bytes();
-            let hb = h.to_bytes();
-            let _ = self.frame_by_hash.delete(&mut wtxn, &hb[..])?;
-            let _ = self.hash_by_frame.delete(&mut wtxn, &fk_b[..])?;
-            let _ = self.frames_soa.delete(&mut wtxn, &fk_b[..])?;
+        for p in &old_puts {
+            self.delete_index_puts(&mut wtxn, p)?;
         }
         for p in &prepared {
             self.put_index_puts(&mut wtxn, p)?;
@@ -1574,6 +1611,46 @@ mod tests {
         assert_eq!(u2["length"], "nm");
         assert_eq!(u2["energy"], "hartree");
         assert_eq!(u2["time"], "ps");
+        let fr0 = db.get_frame(k).unwrap();
+        let vol_nm = crate::frame_scalars::frame_cell_volume(&fr0).expect("vol");
+        let old_ang_vol = vol_nm * 1000.0;
+        let stale = db
+            .select(&Select::new().volume_range(old_ang_vol * 0.5, old_ang_vol * 1.5))
+            .unwrap();
+        assert!(
+            stale.is_empty(),
+            "old angstrom volume key must be gone after set_units"
+        );
+        let fresh = db
+            .select(&Select::new().volume_range(vol_nm * 0.5, vol_nm * 1.5))
+            .unwrap();
+        assert_eq!(fresh, vec![k]);
+    }
+
+    #[test]
+    fn ingest_directory_units_stamps_canonical() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("cons");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::copy(fixture("tiny_cuh2.con"), src.join("a.con")).unwrap();
+        let db = ConCorpus::open(dir.path().join("db")).unwrap();
+        let n = db
+            .ingest_directory_units(
+                &src,
+                1,
+                Some(serde_json::json!({"length":"A","energy":"ev"})),
+            )
+            .unwrap();
+        assert_eq!(n.len(), 1);
+        let u = db
+            .frame_units(FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(u["length"], "angstrom");
+        assert_eq!(u["energy"], "eV");
     }
 
     #[test]

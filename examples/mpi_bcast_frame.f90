@@ -77,13 +77,19 @@ program mpi_bcast_frame
     if (we_inited == 1) call MPI_Finalize(ierr)
     stop 4
   end if
-  ! Batched pack (RCSB) on the same caller comm.
+  ! Batched pack (RCSB) on the same caller comm. Two keys.
   if (rank == 0) then
     call db_open_readonly(trim(corpus), id, status)
-    if (status == rkrdb_ok) then
-      call db_pack_frames(id, [traj], [frame], 1_c_int32_t, buf, buflen, &
-                          nbytes, status)
-      call db_close(id, status)
+    if (status /= rkrdb_ok) then
+      write (error_unit, '(a)') 'open_readonly failed'
+      call MPI_Abort(comm, 2, ierr)
+    end if
+    call db_pack_frames(id, [traj, traj], [frame, frame], 2_c_int32_t, &
+                        buf, buflen, nbytes, status)
+    call db_close(id, status)
+    if (status /= rkrdb_ok .or. nbytes <= 0) then
+      write (error_unit, '(a)') 'pack_frames failed'
+      call MPI_Abort(comm, 3, ierr)
     end if
   end if
   call MPI_Bcast(nbytes, 1, MPI_INTEGER, 0, comm, ierr)

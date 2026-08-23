@@ -34,7 +34,9 @@ def main(argv: list[str]) -> int:
         traj = int(argv[2]) if len(argv) > 2 else 1
         frame = int(argv[3]) if len(argv) > 3 else 0
         blob = bcast_packed_frame(comm, corpus, traj, frame, root=0)
-        batch = bcast_packed_frames(comm, corpus, [(traj, frame)], root=0)
+        batch = bcast_packed_frames(
+            comm, corpus, [(traj, frame), (traj, frame)], root=0
+        )
         xyz = ConCorpus.unpack_positions(blob)
         _ = ConCorpus.unpack_batch(batch)
         if rank == 0:

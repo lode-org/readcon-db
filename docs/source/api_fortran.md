@@ -48,8 +48,8 @@ without the helper. Standalone: `examples/mpi_bcast_frame.f90` (single
 `db_pack_frame` then `db_pack_frames`).
 
 H5MD interchange and caller units: `db_append_units`, `db_set_units`,
-`db_h5md_times` (dest `ps`). CON line-2 `units` is the authority; dest
-export is Å / ps / kJ mol^{-1} Å^{-1}.
+`db_h5md_times` (dest `ps`). C symbols are `rkrdb_append_trajectory_units`,
+`rkrdb_set_units`, `rkrdb_h5md_times`. CON line-2 `units` is the authority.
 
 ## Cooked SoA (RCSO)
 

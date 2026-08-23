@@ -536,15 +536,17 @@ impl PyConCorpus {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
-    #[pyo3(signature = (dir, start_traj_id=None))]
+    #[pyo3(signature = (dir, start_traj_id=None, units=None))]
     fn ingest_directory(
         &self,
         dir: &str,
         start_traj_id: Option<u64>,
+        units: Option<Bound<'_, PyDict>>,
     ) -> PyResult<Vec<(u64, u32, String)>> {
         let start = start_traj_id.unwrap_or(1);
+        let u = units_from_pydict(units)?;
         self.inner
-            .ingest_directory(dir, start)
+            .ingest_directory_units(dir, start, u)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 

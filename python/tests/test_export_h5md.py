@@ -217,15 +217,22 @@ def test_export_h5md_append_nm_scales_positions(tmp_path):
 
 
 def test_export_h5md_writes_header_time(tmp_path):
-    db = ConCorpus(str(tmp_path / "corpus"))
-    db.append_trajectory(
-        1,
-        str(FIXTURE / "tiny_cuh2.con"),
-        units={"length": "angstrom", "energy": "eV", "time": "fs"},
+    src = (FIXTURE / "tiny_cuh2.con").read_text()
+    lines = src.splitlines()
+    lines[1] = (
+        '{"con_spec_version":3,"time":12.5,'
+        '"units":{"length":"angstrom","energy":"eV","time":"fs"}}'
     )
+    con = tmp_path / "timed.con"
+    con.write_text("\n".join(lines) + "\n")
+    db = ConCorpus(str(tmp_path / "corpus"))
+    db.append_trajectory(1, str(con))
     out = tmp_path / "t.h5"
     db.export_h5md(1, str(out))
     with h5py.File(out, "r") as f:
         t = f["particles/all/position/time"][:]
         assert t.shape == (1,)
-        assert np.isfinite(t).all()
+        assert abs(float(t[0]) - 0.0125) < 1e-12
+        et = f["particles/all/box/edges/time"][:]
+        assert abs(float(et[0]) - 0.0125) < 1e-12
+        assert f["particles/all/box/edges/value"].shape[0] == 1

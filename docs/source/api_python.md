@@ -74,8 +74,8 @@ CON `units.length` / `units.time` / `units.energy` convert through
 `unit_conversion_factor(from, to)` and `canonicalize_unit(expr)` are
 on the Python module. Callers write aliases (`A`, `ev`, `femtosecond`);
 `append_trajectory(..., units={...})`, `extend_trajectory(..., units={...})`,
-and `set_units(traj_id, {...})` store canonical names (`angstrom`, `eV`,
-`fs`) in CON metadata. `append` / `extend` stamp the incoming numbers;
+`ingest_directory(..., units={...})`, and `set_units(traj_id, {...})`
+store canonical names (`angstrom`, `eV`, `fs`) in CON metadata. `append` / `extend` stamp the incoming numbers;
 `set_units` converts stored numbers so the new label is honest.
 Mixed-force trajectories write a full `[T][N][3]` force dataset
 (zeros on frames without forces). Box `boundary` follows CON `pbc`
