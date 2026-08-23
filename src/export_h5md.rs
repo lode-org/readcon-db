@@ -146,4 +146,25 @@ mod tests {
         assert!(f[..a.natoms * 3].iter().all(|&x| x == 0.0));
         assert!(f[a.natoms * 3..].iter().any(|&x| x != 0.0));
     }
+
+    #[test]
+    fn collect_h5md_con_fallback_matches_rcso() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_multi_cuh2.con"))
+            .unwrap();
+        let key = crate::keys::FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        assert!(!db.has_valid_cooked_soa(key).unwrap());
+        let from_con = db.collect_h5md(1).unwrap();
+        db.recook_all().unwrap();
+        assert!(db.has_valid_cooked_soa(key).unwrap());
+        let from_rcso = db.collect_h5md(1).unwrap();
+        assert_eq!(from_con.n_frames, from_rcso.n_frames);
+        assert_eq!(from_con.positions, from_rcso.positions);
+        assert_eq!(from_con.edges, from_rcso.edges);
+        assert_eq!(from_con.species_z, from_rcso.species_z);
+    }
 }

@@ -53,3 +53,27 @@ def test_export_h5md_mixed_forces_zero_pad(tmp_path):
         rest = force[1:]
         assert np.all(first == 0.0)
         assert np.any(rest != 0.0)
+
+
+def test_export_h5md_con_fallback_matches_rcso(tmp_path):
+    db = ConCorpus(str(tmp_path / "corpus"))
+    n = db.append_trajectory(1, str(FIXTURE / "tiny_multi_cuh2.con"))
+    assert n >= 2
+    assert not db.has_valid_cooked_soa(1, 0)
+    out_con = tmp_path / "from_con.h5"
+    db.export_h5md(1, str(out_con))
+    db.recook_all()
+    assert db.has_valid_cooked_soa(1, 0)
+    out_rcso = tmp_path / "from_rcso.h5"
+    db.export_h5md(1, str(out_rcso))
+    with h5py.File(out_con, "r") as a, h5py.File(out_rcso, "r") as b:
+        np.testing.assert_allclose(
+            a["particles/all/position/value"][:],
+            b["particles/all/position/value"][:],
+        )
+        np.testing.assert_allclose(
+            a["particles/all/box/edges/value"][:],
+            b["particles/all/box/edges/value"][:],
+        )
+        assert a["particles/all/position/value"].shape[0] == n
+        assert a["particles/all/position/value"].ndim == 3
