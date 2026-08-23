@@ -75,50 +75,12 @@ impl PyConCorpus {
         let h5py = py
             .import("h5py")
             .map_err(|_| PyRuntimeError::new_err("export_h5md requires h5py"))?;
-        let keys = self
+        let a = self
             .inner
-            .select(&Select::new().trajectory(traj_id))
+            .collect_h5md(traj_id)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        if keys.is_empty() {
-            return Err(PyRuntimeError::new_err("no frames for traj"));
-        }
-        let n_frames = keys.len();
-        let first = self
-            .inner
-            .get_frame(keys[0])
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        let natoms = first.atom_data.len();
-        let z: Vec<i32> = first
-            .atom_data
-            .iter()
-            .map(|a| readcon_core::helpers::symbol_to_atomic_number(a.symbol.as_ref()) as i32)
-            .collect();
-        let mut pos = Vec::with_capacity(n_frames * natoms * 3);
-        let mut edges = Vec::with_capacity(n_frames * 3);
-        let mut force_rows: Vec<Option<Vec<[f64; 3]>>> = Vec::with_capacity(n_frames);
-        for k in &keys {
-            let fr = self
-                .inner
-                .get_frame(*k)
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-            edges.extend_from_slice(&fr.header.boxl);
-            let cooked = crate::cooked_soa::CookedSoa::decode(
-                &self
-                    .inner
-                    .pack_frame(*k)
-                    .map_err(|e| PyRuntimeError::new_err(e.to_string()))?,
-            )
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-            if cooked.natoms as usize != natoms {
-                return Err(PyRuntimeError::new_err(
-                    "H5MD export needs fixed natoms in the trajectory",
-                ));
-            }
-            for p in &cooked.positions {
-                pos.extend_from_slice(p);
-            }
-            force_rows.push(cooked.forces);
-        }
+        let n_frames = a.n_frames;
+        let natoms = a.natoms;
         let file = h5py.call_method1("File", (path, "w"))?;
         let np = py.import("numpy")?;
         let put = |obj: &Bound<'_, PyAny>, name: &str, data: Bound<'_, PyAny>| -> PyResult<()> {
@@ -127,10 +89,12 @@ impl PyConCorpus {
             obj.call_method("create_dataset", (name,), Some(&d))?;
             Ok(())
         };
-        let write_td = |parent: &Bound<'_, PyAny>, name: &str, value: Bound<'_, PyAny>, step: Bound<'_, PyAny>| -> PyResult<()> {
+        let write_td = |parent: &Bound<'_, PyAny>, name: &str, value: Bound<'_, PyAny>, step: Bound<'_, PyAny>, unit: &str| -> PyResult<()> {
             let g = parent.call_method1("create_group", (name,))?;
             put(&g, "value", value)?;
             put(&g, "step", step)?;
+            let val = g.call_method1("__getitem__", ("value",))?;
+            val.getattr("attrs")?.set_item("unit", unit)?;
             Ok(())
         };
         let h5md = file.call_method1("create_group", ("h5md",))?;
@@ -147,38 +111,36 @@ impl PyConCorpus {
         let boxg = all.call_method1("create_group", ("box",))?;
         let attrs = boxg.getattr("attrs")?;
         attrs.set_item("dimension", 3)?;
-        attrs.set_item("boundary", ("periodic", "periodic", "periodic"))?;
+        attrs.set_item(
+            "boundary",
+            (
+                a.boundary[0].as_str(),
+                a.boundary[1].as_str(),
+                a.boundary[2].as_str(),
+            ),
+        )?;
         let dtype_kw = PyDict::new(py);
         dtype_kw.set_item("dtype", "float64")?;
         let i64_kw = PyDict::new(py);
         i64_kw.set_item("dtype", "int64")?;
+        let i32_kw = PyDict::new(py);
+        i32_kw.set_item("dtype", "int32")?;
         let step = np.call_method("arange", (n_frames as i64,), Some(&i64_kw))?;
         let pos_arr = np
-            .call_method("asarray", (pos,), Some(&dtype_kw))?
+            .call_method("asarray", (a.positions,), Some(&dtype_kw))?
             .call_method1("reshape", ((n_frames, natoms, 3),))?;
-        write_td(&all, "position", pos_arr, step.clone())?;
+        write_td(&all, "position", pos_arr, step.clone(), "Angstrom")?;
         let edges_arr = np
-            .call_method("asarray", (edges,), Some(&dtype_kw))?
-            .call_method1("reshape", ((n_frames, 3),))?;
-        write_td(&boxg, "edges", edges_arr, step.clone())?;
-        if force_rows.iter().any(|f| f.is_some()) {
-            let mut fbuf = vec![f64::NAN; n_frames * natoms * 3];
-            for (ti, fo) in force_rows.iter().enumerate() {
-                if let Some(rows) = fo {
-                    let off = ti * natoms * 3;
-                    for (i, row) in rows.iter().enumerate() {
-                        fbuf[off + i * 3] = row[0];
-                        fbuf[off + i * 3 + 1] = row[1];
-                        fbuf[off + i * 3 + 2] = row[2];
-                    }
-                }
-            }
+            .call_method("asarray", (a.edges,), Some(&dtype_kw))?
+            .call_method1("reshape", ((n_frames, 3, 3),))?;
+        write_td(&boxg, "edges", edges_arr, step.clone(), "Angstrom")?;
+        if let Some(fbuf) = a.forces {
             let f_arr = np
                 .call_method("asarray", (fbuf,), Some(&dtype_kw))?
                 .call_method1("reshape", ((n_frames, natoms, 3),))?;
-            write_td(&all, "force", f_arr, step)?;
+            write_td(&all, "force", f_arr, step, "eV/Angstrom")?;
         }
-        let spec_arr = np.call_method1("asarray", (z,))?;
+        let spec_arr = np.call_method("asarray", (a.species_z,), Some(&i32_kw))?;
         put(&all, "species", spec_arr)?;
         file.call_method0("close")?;
         Ok(n_frames as u32)
@@ -198,6 +160,13 @@ impl PyConCorpus {
     fn append_trajectory(&self, traj_id: u64, path: &str) -> PyResult<u32> {
         self.inner
             .append_trajectory_path(traj_id, path)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Append frames to an existing trajectory (or create it).
+    fn extend_trajectory(&self, traj_id: u64, path: &str) -> PyResult<u32> {
+        self.inner
+            .extend_trajectory_path(traj_id, path)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 

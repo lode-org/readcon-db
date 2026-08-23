@@ -5,7 +5,11 @@
 ### Features
 - Batched RCSO pack (`RCSB`): `pack_frames` / `rkrdb_pack_frames` / `bcast_packed_frames` on the caller comm
 - `readcon-db drain <local_root> <pfs_root>` copies shard dirs after node-local ingest
-- Python `export_h5md` writes cooked `[T][N][3]` via h5py (CON stays authority)
+- Python `export_h5md` writes H5MD 1.1 interchange via h5py (CON stays authority):
+  `/h5md` author/creator, `position/step`+`value` `[T][N][3]`, `box/edges/value` `[T][3][3]`,
+  integer-Z species, unit attributes, CON `pbc` on `box/boundary`. Mixed-force
+  frames pad zeros. `ConCorpus::collect_h5md` owns the arrays; `extend_trajectory`
+  is exposed on the Python binding.
 - MPI pack/Bcast helper takes the **caller communicator** (`include/readcon-db-mpi.h`,
   Python `bcast_packed_frame(comm, ...)`, Fortran pack + `MPI_Bcast` on the INTEGER
   handle). Never `MPI_Init` if the host already did; never names the process-wide

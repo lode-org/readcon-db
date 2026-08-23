@@ -55,11 +55,19 @@ blob = bcast_packed_frames(comm, "/scratch/corpus", [(1, 0), (1, 1), (1, 2)])
 frames = ConCorpus.unpack_batch(blob)
 ```
 
-Cooked H5MD interchange (h5py; fixed `natoms`; CON stays authority):
+Cooked H5MD 1.1 interchange (h5py; fixed `natoms`; CON stays authority):
 
 ```python
 db.export_h5md(traj_id=1, path="traj.h5")
 ```
+
+The file has `/h5md` version `[1,1]` with `author`/`creator`,
+`particles/all/position/{value,step}` of shape `[T][N][3]`,
+`box/edges/{value,step}` of shape `[T][3][3]`, integer-Z `species`,
+and unit attributes (`Angstrom`, `eV/Angstrom`). Mixed-force
+trajectories write a full `[T][N][3]` force dataset (zeros on frames
+without forces). Box `boundary` follows CON `pbc` (periodic when
+absent).
 
 Standalone: `examples/mpi_bcast_frame.py`.
 
