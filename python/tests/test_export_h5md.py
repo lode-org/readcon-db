@@ -139,21 +139,34 @@ def test_pack_frames_unpack_batch(tmp_path):
     np.testing.assert_allclose(np.asarray(frames[0]), np.asarray(pos0))
 
 
-def test_export_h5md_mdanalysis_reader(tmp_path):
+def _mda_accepts_bytes_units():
+    """H5MD 1.1 units are fixed ASCII. MDA 2.10 indexes attrs as dict keys
+    and does not decode bytes, so teach it the byte keys."""
     from MDAnalysis.coordinates.H5MD import H5MDReader
 
+    for table in H5MDReader._unit_translation.values():
+        for key, val in list(table.items()):
+            if isinstance(key, str):
+                table[key.encode("ascii")] = val
+                table[np.bytes_(key.encode("ascii"))] = val
+    return H5MDReader
+
+
+def test_export_h5md_mdanalysis_reader(tmp_path):
+    H5MDReader = _mda_accepts_bytes_units()
     db = ConCorpus(str(tmp_path / "corpus"))
     n = db.append_trajectory(1, str(FIXTURE / "tiny_multi_cuh2.con"))
     out = tmp_path / "mda.h5"
     db.export_h5md(1, str(out))
+    with h5py.File(out, "r") as f:
+        assert _as_str(f["particles/all/position/time"].attrs["unit"]) == "ps"
     reader = H5MDReader(str(out), convert_units=True)
     assert reader.n_frames == n
     assert reader.n_atoms >= 1
 
 
 def test_export_h5md_mdanalysis_reader_with_forces(tmp_path):
-    from MDAnalysis.coordinates.H5MD import H5MDReader
-
+    H5MDReader = _mda_accepts_bytes_units()
     db = ConCorpus(str(tmp_path / "corpus"))
     db.append_trajectory(1, str(FIXTURE / "tiny_cuh2.con"))
     n = db.extend_trajectory(1, str(FIXTURE / "tiny_cuh2_forces.con"))

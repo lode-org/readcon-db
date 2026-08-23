@@ -90,13 +90,11 @@ impl PyConCorpus {
             Ok(())
         };
         let ascii_attr = |obj: &Bound<'_, PyAny>, name: &str, val: &str, n: usize| -> PyResult<()> {
-            // Fixed-width Unicode (not H5T_VARIABLE). MDA reads a Python str;
-            // VL UTF-8 is illegal for H5MD interchange.
+            let dt = h5py.call_method("string_dtype", ("ascii", n), None)?;
             let kw = PyDict::new(obj.py());
-            kw.set_item("dtype", format!("U{n}"))?;
-            let arr = np.call_method("array", (val,), Some(&kw))?;
+            kw.set_item("dtype", dt)?;
             obj.getattr("attrs")?
-                .call_method("create", (name, arr), None)?;
+                .call_method("create", (name, val), Some(&kw))?;
             Ok(())
         };
         let write_td = |parent: &Bound<'_, PyAny>, name: &str, value: Bound<'_, PyAny>, step: Bound<'_, PyAny>, time: Bound<'_, PyAny>, unit: &str, tunit: &str| -> PyResult<()> {
