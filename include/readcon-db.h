@@ -50,6 +50,32 @@ int rkrdb_get_forces(size_t id, uint64_t traj_id, uint32_t frame_idx, double *ou
                      uint32_t capacity_atoms, uint32_t *out_natoms, uint8_t *out_has_forces);
 int rkrdb_xxh3_128(const uint8_t *data, size_t len, uint8_t *out_hash16);
 
+/* --- Observation archive: async fixed-composition ledger of oracle
+ * evaluations. Writes land on a dedicated writer thread (append is
+ * non-blocking); fetch returns rows in the caller's original atom
+ * order. See src/archive.rs. --- */
+/** Open/create archive at dir (corpus at dir/observations.rdb). z = per-atom
+ *  atomic numbers in caller order (natoms entries), cell3 = orthorhombic box
+ *  lengths. Writes opaque handle to out_id. */
+int rkrdb_archive_open(const char *dir, const uint32_t *z, uint32_t natoms,
+                       const double *cell3, size_t *out_id);
+/** Enqueue one row: flat 3*natoms positions/forces (caller order) + energy.
+ *  Non-blocking; disk failures counted via rkrdb_archive_dropped. */
+int rkrdb_archive_append(size_t id, const double *positions, const double *forces,
+                         double energy);
+/** Block until every enqueued row is committed or counted dropped. */
+int rkrdb_archive_flush(size_t id);
+/** Rows committed to the corpus (including prior runs). */
+int rkrdb_archive_count(size_t id, uint64_t *out_count);
+/** Rows the writer thread could not persist. */
+int rkrdb_archive_dropped(size_t id, uint64_t *out_count);
+/** Fetch committed row `index` in caller atom order; buffers hold 3*natoms
+ *  doubles. Flush first for a complete snapshot. */
+int rkrdb_archive_fetch(size_t id, uint64_t index, double *positions, double *forces,
+                        uint32_t capacity_atoms, double *out_energy);
+/** Drain the writer, close the corpus, release the handle. */
+int rkrdb_archive_close(size_t id);
+
 #ifdef __cplusplus
 } /* extern "C" */
 
