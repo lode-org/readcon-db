@@ -1049,6 +1049,41 @@ pub unsafe extern "C" fn rkrdb_get_frame(
     .unwrap_or(std::ptr::null_mut())
 }
 
+/// Dest-`ps` times from `collect_h5md` (CON time or `i * timestep`, else index).
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_h5md_times(
+    id: usize,
+    traj_id: u64,
+    out: *mut f64,
+    cap: usize,
+    out_n: *mut u32,
+) -> c_int {
+    if out.is_null() || out_n.is_null() {
+        return RKRDB_NULL;
+    }
+    let corpus = match corpus_arc(id) {
+        Ok(c) => c,
+        Err(c) => return c,
+    };
+    match corpus.collect_h5md(traj_id) {
+        Ok(a) => {
+            if a.times.len() > cap {
+                set_err_id(id, "h5md_times buffer too small");
+                return RKRDB_ERR;
+            }
+            unsafe {
+                ptr::copy_nonoverlapping(a.times.as_ptr(), out, a.times.len());
+                *out_n = a.times.len() as u32;
+            }
+            RKRDB_OK
+        }
+        Err(e) => {
+            set_err_id(id, e);
+            RKRDB_ERR
+        }
+    }
+}
+
 /// xxHash3-128 of arbitrary bytes (LE 16 bytes) — for clients hashing off-line blobs.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_xxh3_128(data: *const u8, len: usize, out_hash16: *mut u8) -> c_int {
@@ -1111,6 +1146,13 @@ mod tests {
             assert!(s.contains("eV"), "{s}");
             assert!(s.contains("fs"), "{s}");
             assert!(!s.contains("\"A\""), "{s}");
+            let mut times = [0.0f64; 8];
+            let mut nt = 0u32;
+            assert_eq!(
+                rkrdb_h5md_times(id, 1, times.as_mut_ptr(), times.len(), &mut nt),
+                RKRDB_OK
+            );
+            assert!(nt >= 1);
             assert_eq!(rkrdb_close(id), RKRDB_OK);
         }
     }

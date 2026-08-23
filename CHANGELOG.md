@@ -8,8 +8,8 @@
   (no `lock.mdb`) after node-local ingest and refuses dest overwrite
 - Callers write units (`append_trajectory(..., units=)`,
   `extend_trajectory(..., units=)`, `set_units`, CLI `--units`,
-  C `rkrdb_append_trajectory_units` / `rkrdb_set_units`, Fortran
-  `db_append_units`);
+  C `rkrdb_append_trajectory_units` / `rkrdb_set_units` /
+  `rkrdb_h5md_times`, Fortran `db_append_units`);
   aliases are canonicalized into CON metadata (`A` → `angstrom`).
   `set_units` converts stored numbers; append/extend stamp incoming
   values.

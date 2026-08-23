@@ -91,12 +91,7 @@ fn frame_time_ps(h: &readcon_core::types::FrameHeader, frame_idx: u32) -> Result
     if let Some(t) = h.time() {
         return Ok(t * time_scale_to_ps(&from)?);
     }
-    if let Some(dt) = h
-        .metadata
-        .get("timestep")
-        .and_then(|v| v.as_f64())
-        .filter(|x| x.is_finite() && *x > 0.0)
-    {
+    if let Some(dt) = h.timestep().filter(|x| x.is_finite() && *x > 0.0) {
         return Ok(f64::from(frame_idx) * dt * time_scale_to_ps(&from)?);
     }
     Ok(f64::from(frame_idx))

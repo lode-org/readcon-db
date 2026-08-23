@@ -84,6 +84,8 @@ int rkrdb_get_positions(size_t id, uint64_t traj_id, uint32_t frame_idx, double 
 int rkrdb_get_forces(size_t id, uint64_t traj_id, uint32_t frame_idx, double *out_xyz,
                      uint32_t capacity_atoms, uint32_t *out_natoms, uint8_t *out_has_forces);
 int rkrdb_xxh3_128(const uint8_t *data, size_t len, uint8_t *out_hash16);
+/** Dest-ps times from collect_h5md. */
+int rkrdb_h5md_times(size_t id, uint64_t traj_id, double *out, size_t cap, uint32_t *out_n);
 
 /* --- Observation archive: async fixed-composition ledger of oracle
  * evaluations. Writes land on a dedicated writer thread (append is
@@ -220,6 +222,13 @@ public:
   static int unpack_batch_item(const uint8_t *buf, size_t buflen, uint32_t index, double *out_xyz,
                                uint32_t capacity_atoms, uint32_t *out_natoms) {
     return rkrdb_unpack_batch_item(buf, buflen, index, out_xyz, capacity_atoms, out_natoms);
+  }
+
+  uint32_t h5md_times(uint64_t traj_id, double *out, size_t cap) {
+    uint32_t n = 0;
+    if (rkrdb_h5md_times(id_, traj_id, out, cap, &n) != RKRDB_OK)
+      throw std::runtime_error("h5md_times failed");
+    return n;
   }
 
   size_t id() const { return id_; }

@@ -12,6 +12,8 @@ rkrdb_append_trajectory(id, 1, "run.con", &n);
 rkrdb_append_trajectory_units(id, 1, "run.con",
     "{\"length\":\"A\",\"energy\":\"ev\"}", &n);
 rkrdb_set_units(id, 1, "{\"length\":\"nm\",\"energy\":\"eV\"}", &n);
+double t[64]; uint32_t nt = 0;
+rkrdb_h5md_times(id, 1, t, 64, &nt);
 rkrdb_select_basic(id, 1, "Cu", 1, 100000, 0);
 /* Metadata filters: flags bit0=forces, bit1=velocities, bit2=energy present */
 rkrdb_select_meta(id, /*traj*/ -1, "Cu", 1, 100000,
