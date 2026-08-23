@@ -15,6 +15,18 @@ extern "C" {
 #define RKRDB_NULL -3
 
 int rkrdb_open(const char *path, size_t *out_id);
+/** Existing corpus, MDB_RDONLY. No mkdir. */
+int rkrdb_open_readonly(const char *path, size_t *out_id);
+/**
+ * Pack one frame as RCSO for a unidirectional MPI_Bcast.
+ * Rank 0: open_readonly + pack. Others: never open the env; unpack after Bcast.
+ * Returns byte count (>=0) or an error code.
+ */
+int rkrdb_pack_frame(size_t id, uint64_t traj_id, uint32_t frame_idx, uint8_t *buf,
+                     size_t buflen);
+/** Decode RCSO positions. No corpus handle. */
+int rkrdb_unpack_positions(const uint8_t *buf, size_t buflen, double *out_xyz,
+                           uint32_t capacity_atoms, uint32_t *out_natoms);
 int rkrdb_close(size_t id);
 int rkrdb_last_error(size_t id, char *buf, size_t buflen);
 int rkrdb_append_trajectory(size_t id, uint64_t traj_id, const char *path, uint32_t *out_n_frames);
@@ -92,10 +104,12 @@ class Corpus {
   size_t id_ = static_cast<size_t>(-1);
 
 public:
-  explicit Corpus(const char *path) {
+  explicit Corpus(const char *path, bool readonly = false) {
     size_t id = 0;
-    if (rkrdb_open(path, &id) != RKRDB_OK)
-      throw std::runtime_error("rkrdb_open failed");
+    int st = readonly ? rkrdb_open_readonly(path, &id) : rkrdb_open(path, &id);
+    if (st != RKRDB_OK)
+      throw std::runtime_error(readonly ? "rkrdb_open_readonly failed"
+                                        : "rkrdb_open failed");
     id_ = id;
   }
   ~Corpus() {
@@ -158,6 +172,11 @@ public:
     if (v < 0)
       throw std::runtime_error("has_valid_cooked");
     return v == 1;
+  }
+
+  /// RCSO blob for MPI_Bcast. Workers call unpack_positions (no handle).
+  int pack_frame(uint64_t traj_id, uint32_t frame_idx, uint8_t *buf, size_t buflen) {
+    return rkrdb_pack_frame(id_, traj_id, frame_idx, buf, buflen);
   }
 
   size_t id() const { return id_; }

@@ -4,7 +4,7 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 use heed::types::{Bytes, Str, Unit};
-use heed::{Database, Env, EnvOpenOptions, RwTxn};
+use heed::{Database, Env, EnvFlags, EnvOpenOptions, RwTxn};
 use readcon_core::iterators::ConFrameIterator;
 use readcon_core::types::ConFrame;
 use readcon_core::writer::ConFrameWriter;
@@ -108,14 +108,114 @@ fn frame_species(frame: &ConFrame) -> Vec<(String, u32)> {
 
 impl ConCorpus {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with(path, false)
+    }
+
+    /// Open an existing corpus with `MDB_RDONLY`. No mkdir, no write txn.
+    /// MPI workers that only *read* should use this — or, better, rank 0
+    /// [`Self::pack_frame`] and `MPI_Bcast` so other ranks never open LMDB.
+    pub fn open_readonly(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with(path, true)
+    }
+
+    fn open_with(path: impl AsRef<Path>, readonly: bool) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        fs::create_dir_all(&path)?;
+        if readonly {
+            if !path.is_dir() {
+                return Err(Error::Message(format!(
+                    "readonly open: {} is not a corpus directory",
+                    path.display()
+                )));
+            }
+        } else {
+            fs::create_dir_all(&path)?;
+        }
         let mut opts = EnvOpenOptions::new();
         opts.map_size(MAP_SIZE);
         opts.max_dbs(MAX_DBS);
         opts.max_readers(MAX_READERS);
-        // Mmap + MVCC: readers do not block writers beyond LMDB page COW; writers serialize.
+        if readonly {
+            // heed 0.21: MDB_RDONLY via EnvFlags, not a builder method.
+            unsafe {
+                opts.flags(EnvFlags::READ_ONLY);
+            }
+        }
         let env = unsafe { opts.open(&path)? };
+
+        if readonly {
+            let rtxn = env.read_txn()?;
+            let missing = |name: &str| Error::Message(format!("readonly open: missing database {name}"));
+            let frames = env
+                .open_database(&rtxn, Some("frames"))?
+                .ok_or_else(|| missing("frames"))?;
+            let traj_meta = env
+                .open_database(&rtxn, Some("traj_meta"))?
+                .ok_or_else(|| missing("traj_meta"))?;
+            let idx_natoms = env
+                .open_database(&rtxn, Some("idx_natoms"))?
+                .ok_or_else(|| missing("idx_natoms"))?;
+            let idx_symbol = env
+                .open_database(&rtxn, Some("idx_symbol"))?
+                .ok_or_else(|| missing("idx_symbol"))?;
+            let idx_energy = env
+                .open_database(&rtxn, Some("idx_energy"))?
+                .ok_or_else(|| missing("idx_energy"))?;
+            let idx_flags = env
+                .open_database(&rtxn, Some("idx_flags"))?
+                .ok_or_else(|| missing("idx_flags"))?;
+            let idx_elem_count = env
+                .open_database(&rtxn, Some("idx_elem_count"))?
+                .ok_or_else(|| missing("idx_elem_count"))?;
+            let idx_formula = env
+                .open_database(&rtxn, Some("idx_formula"))?
+                .ok_or_else(|| missing("idx_formula"))?;
+            let idx_fmax = env
+                .open_database(&rtxn, Some("idx_fmax"))?
+                .ok_or_else(|| missing("idx_fmax"))?;
+            let idx_mass = env
+                .open_database(&rtxn, Some("idx_mass"))?
+                .ok_or_else(|| missing("idx_mass"))?;
+            let idx_volume = env
+                .open_database(&rtxn, Some("idx_volume"))?
+                .ok_or_else(|| missing("idx_volume"))?;
+            let idx_pbc = env
+                .open_database(&rtxn, Some("idx_pbc"))?
+                .ok_or_else(|| missing("idx_pbc"))?;
+            let idx_meta = env
+                .open_database(&rtxn, Some("idx_meta"))?
+                .ok_or_else(|| missing("idx_meta"))?;
+            let frame_by_hash = env
+                .open_database(&rtxn, Some("frame_by_hash"))?
+                .ok_or_else(|| missing("frame_by_hash"))?;
+            let hash_by_frame = env
+                .open_database(&rtxn, Some("hash_by_frame"))?
+                .ok_or_else(|| missing("hash_by_frame"))?;
+            let frames_soa = env
+                .open_database(&rtxn, Some("frames_soa"))?
+                .ok_or_else(|| missing("frames_soa"))?;
+            // heed: uncommitted open_database txn → EINVAL on the next RoTxn.
+            rtxn.commit()?;
+            return Ok(Self {
+                path,
+                env,
+                frames,
+                traj_meta,
+                idx_natoms,
+                idx_symbol,
+                idx_energy,
+                idx_flags,
+                idx_elem_count,
+                idx_formula,
+                idx_fmax,
+                idx_mass,
+                idx_volume,
+                idx_pbc,
+                idx_meta,
+                frame_by_hash,
+                hash_by_frame,
+                frames_soa,
+            });
+        }
 
         let mut wtxn = env.write_txn()?;
         let frames = env.create_database(&mut wtxn, Some("frames"))?;
@@ -158,8 +258,26 @@ impl ConCorpus {
         })
     }
 
+    /// RCSO bytes for a unidirectional broadcast (rank 0 packs, others unpack).
+    /// Prefers a valid cooked blob; otherwise encodes from the CON text.
+    pub fn pack_frame(&self, key: FrameKey) -> Result<Vec<u8>> {
+        if let Some(b) = self.get_cooked_soa_bytes(key)? {
+            if crate::cooked_soa::CookedSoa::try_decode(&b).is_some() {
+                return Ok(b);
+            }
+        }
+        let fr = self.get_frame(key)?;
+        crate::cooked_soa::CookedSoa::encode_frame(&fr)
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Wait until this process's LMDB env is gone. Required before
+    /// `open_readonly` on the same path in the same process.
+    pub fn close(self) {
+        self.env.prepare_for_closing().wait();
     }
 
     /// All frame keys in this env (for compaction / export pipelines).
@@ -1305,6 +1423,33 @@ mod tests {
             .append_trajectory_path(2, fixture("tiny_multi_cuh2.con"))
             .unwrap();
         assert!(n2 >= 2);
+    }
+
+    #[test]
+    fn readonly_open_and_pack_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        let packed = {
+            let db = ConCorpus::open(dir.path()).unwrap();
+            db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+                .unwrap();
+            let packed = db.pack_frame(key).unwrap();
+            db.close();
+            packed
+        };
+        let decoded = crate::cooked_soa::CookedSoa::decode(&packed).unwrap();
+        assert!(decoded.natoms >= 1);
+
+        let ro = ConCorpus::open_readonly(dir.path()).unwrap();
+        let packed2 = ro.pack_frame(key).unwrap();
+        assert_eq!(packed, packed2);
+        assert!(ConCorpus::open_readonly("/no/such/corpus-dir-readonly").is_err());
+        assert!(ro
+            .append_trajectory_path(9, fixture("tiny_cuh2.con"))
+            .is_err());
     }
 
     #[test]

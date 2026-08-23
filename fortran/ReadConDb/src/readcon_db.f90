@@ -2,9 +2,9 @@ module readcon_db
   use, intrinsic :: iso_c_binding
   implicit none
   private
-  public :: rkrdb_ok, rkrdb_err, db_open, db_close, db_append, db_select_basic, &
+  public :: rkrdb_ok, rkrdb_err, db_open, db_open_readonly, db_close, db_append, db_select_basic, &
             db_result_count, db_result_key, db_frame_hash, db_frame_formula, db_xxh3_128, &
-            db_get_frame
+            db_get_frame, db_pack_frame, db_unpack_positions
 
   integer(c_int), parameter :: rkrdb_ok = 0
   integer(c_int), parameter :: rkrdb_err = -1
@@ -14,6 +14,29 @@ module readcon_db
       import :: c_char, c_int, c_size_t
       character(kind=c_char), intent(in) :: path(*)
       integer(c_size_t), intent(out) :: out_id
+      integer(c_int) :: st
+    end function
+    function rkrdb_open_readonly(path, out_id) bind(C, name="rkrdb_open_readonly") result(st)
+      import :: c_char, c_int, c_size_t
+      character(kind=c_char), intent(in) :: path(*)
+      integer(c_size_t), intent(out) :: out_id
+      integer(c_int) :: st
+    end function
+    function rkrdb_pack_frame(id, traj_id, frame_idx, buf, buflen) bind(C, name="rkrdb_pack_frame") result(n)
+      import :: c_int, c_size_t, c_int64_t, c_int32_t, c_int8_t
+      integer(c_size_t), value :: id, buflen
+      integer(c_int64_t), value :: traj_id
+      integer(c_int32_t), value :: frame_idx
+      integer(c_int8_t), intent(out) :: buf(*)
+      integer(c_int) :: n
+    end function
+    function rkrdb_unpack_positions(buf, buflen, out_xyz, cap, out_n) bind(C, name="rkrdb_unpack_positions") result(st)
+      import :: c_int, c_size_t, c_int8_t, c_double, c_int32_t
+      integer(c_int8_t), intent(in) :: buf(*)
+      integer(c_size_t), value :: buflen
+      real(c_double), intent(out) :: out_xyz(*)
+      integer(c_int32_t), value :: cap
+      integer(c_int32_t), intent(out) :: out_n
       integer(c_int) :: st
     end function
     function rkrdb_close(id) bind(C, name="rkrdb_close") result(st)
@@ -130,6 +153,43 @@ contains
     character(kind=c_char), allocatable :: cp(:)
     cp = f_c_string(path)
     status = rkrdb_open(cp, id)
+  end subroutine
+
+  subroutine db_open_readonly(path, id, status)
+    character(len=*), intent(in) :: path
+    integer(c_size_t), intent(out) :: id
+    integer(c_int), intent(out) :: status
+    character(kind=c_char), allocatable :: cp(:)
+    cp = f_c_string(path)
+    status = rkrdb_open_readonly(cp, id)
+  end subroutine
+
+  subroutine db_pack_frame(id, traj_id, frame_idx, buf, buflen, n, status)
+    integer(c_size_t), intent(in) :: id, buflen
+    integer(c_int64_t), intent(in) :: traj_id
+    integer(c_int32_t), intent(in) :: frame_idx
+    integer(c_int8_t), intent(out) :: buf(*)
+    integer, intent(out) :: n
+    integer(c_int), intent(out) :: status
+    integer(c_int) :: rc
+    rc = rkrdb_pack_frame(id, traj_id, frame_idx, buf, buflen)
+    if (rc < 0) then
+      status = rc
+      n = 0
+    else
+      status = rkrdb_ok
+      n = int(rc)
+    end if
+  end subroutine
+
+  subroutine db_unpack_positions(buf, buflen, xyz, cap, natoms, status)
+    integer(c_int8_t), intent(in) :: buf(*)
+    integer(c_size_t), intent(in) :: buflen
+    real(c_double), intent(out) :: xyz(*)
+    integer(c_int32_t), intent(in) :: cap
+    integer(c_int32_t), intent(out) :: natoms
+    integer(c_int), intent(out) :: status
+    status = rkrdb_unpack_positions(buf, buflen, xyz, cap, natoms)
   end subroutine
 
   subroutine db_close(id, status)

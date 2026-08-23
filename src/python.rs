@@ -13,10 +13,36 @@ struct PyConCorpus {
 #[pymethods]
 impl PyConCorpus {
     #[new]
-    fn new(path: &str) -> PyResult<Self> {
-        ConCorpus::open(path)
-            .map(|inner| Self { inner })
+    #[pyo3(signature = (path, readonly=false))]
+    fn new(path: &str, readonly: bool) -> PyResult<Self> {
+        let inner = if readonly {
+            ConCorpus::open_readonly(path)
+        } else {
+            ConCorpus::open(path)
+        }
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    /// RCSO bytes for MPI_Bcast (rank 0). Workers call ``unpack`` on the copy.
+    fn pack_frame(&self, traj_id: u64, frame_idx: u32) -> PyResult<Vec<u8>> {
+        self.inner
+            .pack_frame(FrameKey {
+                traj_id,
+                frame_idx,
+            })
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    #[staticmethod]
+    fn unpack_positions(buf: Vec<u8>) -> PyResult<Vec<(f64, f64, f64)>> {
+        let cooked = crate::cooked_soa::CookedSoa::decode(&buf)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(cooked
+            .positions
+            .into_iter()
+            .map(|p| (p[0], p[1], p[2]))
+            .collect())
     }
 
     fn append_trajectory(&self, traj_id: u64, path: &str) -> PyResult<u32> {

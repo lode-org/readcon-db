@@ -92,6 +92,98 @@ pub unsafe extern "C" fn rkrdb_open(path: *const c_char, out_id: *mut usize) -> 
     }
 }
 
+/// Open an existing corpus `MDB_RDONLY`. No mkdir, no write txn.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_open_readonly(path: *const c_char, out_id: *mut usize) -> c_int {
+    if path.is_null() || out_id.is_null() {
+        return RKRDB_NULL;
+    }
+    let cpath = unsafe { CStr::from_ptr(path) };
+    let path = match cpath.to_str() {
+        Ok(s) => s,
+        Err(_) => return RKRDB_ERR,
+    };
+    match ConCorpus::open_readonly(path) {
+        Ok(corpus) => {
+            let id = push_handle(Handle {
+                corpus: Arc::new(corpus),
+                last_keys: Vec::new(),
+                last_error: String::new(),
+            });
+            unsafe { *out_id = id };
+            RKRDB_OK
+        }
+        Err(_) => RKRDB_ERR,
+    }
+}
+
+/// Pack one frame as RCSO bytes for `MPI_Bcast`. Returns byte count, or error.
+/// Rank 0 calls this; other ranks never open the env.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_pack_frame(
+    id: usize,
+    traj_id: u64,
+    frame_idx: u32,
+    buf: *mut u8,
+    buflen: usize,
+) -> c_int {
+    if buf.is_null() || buflen == 0 {
+        return RKRDB_NULL;
+    }
+    let key = FrameKey {
+        traj_id,
+        frame_idx,
+    };
+    with_handle(id, |h| match h.corpus.pack_frame(key) {
+        Ok(bytes) => {
+            if bytes.len() > buflen {
+                set_err(h, "buffer too small");
+                return Ok(RKRDB_ERR);
+            }
+            unsafe {
+                ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
+            }
+            Ok(bytes.len() as c_int)
+        }
+        Err(e) => {
+            set_err(h, e);
+            Ok(RKRDB_ERR)
+        }
+    })
+    .unwrap_or(RKRDB_NULL)
+}
+
+/// Unpack RCSO positions (no corpus handle — MPI worker side).
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_unpack_positions(
+    buf: *const u8,
+    buflen: usize,
+    out_xyz: *mut f64,
+    capacity_atoms: u32,
+    out_natoms: *mut u32,
+) -> c_int {
+    if buf.is_null() || out_xyz.is_null() || out_natoms.is_null() {
+        return RKRDB_NULL;
+    }
+    let slice = unsafe { std::slice::from_raw_parts(buf, buflen) };
+    let cooked = match crate::cooked_soa::CookedSoa::decode(slice) {
+        Ok(c) => c,
+        Err(_) => return RKRDB_ERR,
+    };
+    if cooked.natoms > capacity_atoms {
+        return RKRDB_ERR;
+    }
+    unsafe { *out_natoms = cooked.natoms };
+    let n = cooked.natoms as usize;
+    let dest = unsafe { std::slice::from_raw_parts_mut(out_xyz, n.saturating_mul(3)) };
+    for (i, p) in cooked.positions.iter().enumerate() {
+        dest[i * 3] = p[0];
+        dest[i * 3 + 1] = p[1];
+        dest[i * 3 + 2] = p[2];
+    }
+    RKRDB_OK
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_close(id: usize) -> c_int {
     let mut g = HANDLES.lock().unwrap();
