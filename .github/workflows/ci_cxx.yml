@@ -55,6 +55,7 @@ jobs:
           cmake --build build/db-prefix --parallel
           cmake --install build/db-prefix
           test -f prefix/include/readcon-db.h
+          test -f prefix/include/readcon-db-mpi.h
           test -f prefix/lib/pkgconfig/readcon-db.pc
           test -f prefix/lib/cmake/readcon-db/readcon-db-config.cmake
           PKG_CONFIG_PATH="$GITHUB_WORKSPACE/prefix/lib/pkgconfig" \
@@ -75,6 +76,7 @@ jobs:
           meson compile -C build/meson-dist
           meson install -C build/meson-dist
           test -f meson-prefix/include/readcon-db.h
+          test -f meson-prefix/include/readcon-db-mpi.h
           test -f meson-prefix/lib/pkgconfig/readcon-db.pc
           export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/meson-prefix/lib/pkgconfig"
           pkg-config --exists --print-errors readcon-db

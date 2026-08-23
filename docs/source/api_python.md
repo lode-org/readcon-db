@@ -30,6 +30,26 @@ raw = ConCorpus.xxh3_128(b"blob")
 Optional `select` kwargs: `exact_hash=` (16-byte LE xxh3-128), `energy_min` /
 `energy_max`, `require_forces`, `require_velocities`, `require_energy`, `limit`.
 
+## MPI: pack on root, Bcast on the caller communicator
+
+`bcast_packed_frame(comm, corpus_dir, traj_id, frame_idx, root=0)` takes
+an **mpi4py** `Comm` — LAMMPS `lmp.world`, `COMM_WORLD.Split(...)`, a
+`Dup`. mpi4py already called `MPI_Init`; the helper never does, and
+never names the process-wide world handle.
+
+```python
+from mpi4py import MPI
+from readcon_db import ConCorpus, bcast_packed_frame
+
+# Host-owned comm. A LAMMPS Python fix passes lmp.world (or a split).
+comm = MPI.COMM_WORLD.Dup()
+blob = bcast_packed_frame(comm, "/scratch/corpus", traj_id=1, frame_idx=0)
+xyz = ConCorpus.unpack_positions(blob)
+comm.Free()
+```
+
+Standalone: `examples/mpi_bcast_frame.py`.
+
 ## Cooked SoA (RCSO)
 
 See `docs/orgmode/cooked-soa.org`. Tier is opt-in; CON text remains authority. Bindings expose cook / delete / has-valid / positions (and forces on C/Python/Rust).

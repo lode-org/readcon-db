@@ -68,10 +68,15 @@ Formula encoding: sorted non-empty symbols, `Sym:count` joined by `|` (e.g. `Cu:
 1. **Frame blob is authoritative** for fidelity; indexes are derived and rebuildable.
 2. **Single writer** for ingest/reindex; analysis is read-only
    (`ConCorpus::open_readonly` / `MDB_RDONLY`). MPI ranks that all
-   need the **same** frames should not each open the env: rank 0
-   `pack_frame` (RCSO) and `MPI_Bcast`; workers `unpack` with no handle.
-   Shared mmap (`open_readonly` on every rank) is the other legal path
-   when ranks touch *different* keys.
+   need the **same** frames should not each open the env: rank 0 of
+   the **caller communicator** `pack_frame` (RCSO) and `MPI_Bcast` on
+   that same handle (`include/readcon-db-mpi.h`, Python
+   `bcast_packed_frame(comm, ...)`). The host already owns MPI
+   (LAMMPS `lmp->world` / a sub-comm, mpi4py `Comm`); the library
+   never calls `MPI_Init` and never names the process-wide world
+   communicator. Workers `unpack` with no handle. Shared mmap
+   (`open_readonly` on every rank) is the other legal path when
+   ranks touch *different* keys.
 3. **Decode with `readcon-core`** so CON semantics never fork.
 4. **Selection returns keys first**; callers decode lazily.
 

@@ -113,7 +113,9 @@ impl ConCorpus {
 
     /// Open an existing corpus with `MDB_RDONLY`. No mkdir, no write txn.
     /// MPI workers that only *read* should use this — or, better, rank 0
-    /// [`Self::pack_frame`] and `MPI_Bcast` so other ranks never open LMDB.
+    /// of the *caller* communicator [`Self::pack_frame`] and `MPI_Bcast`
+    /// on that same handle so other ranks never open LMDB. Never
+    /// initialize MPI here; the host (LAMMPS, mpi4py) already did.
     pub fn open_readonly(path: impl AsRef<Path>) -> Result<Self> {
         Self::open_with(path, true)
     }
@@ -258,8 +260,9 @@ impl ConCorpus {
         })
     }
 
-    /// RCSO bytes for a unidirectional broadcast (rank 0 packs, others unpack).
-    /// Prefers a valid cooked blob; otherwise encodes from the CON text.
+    /// RCSO bytes for a unidirectional broadcast on the caller communicator
+    /// (rank 0 of that comm packs, others unpack). Prefers a valid cooked
+    /// blob; otherwise encodes from the CON text.
     pub fn pack_frame(&self, key: FrameKey) -> Result<Vec<u8>> {
         if let Some(b) = self.get_cooked_soa_bytes(key)? {
             if crate::cooked_soa::CookedSoa::try_decode(&b).is_some() {

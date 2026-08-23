@@ -44,8 +44,10 @@ maturin develop --release --features python --manifest-path python/pyproject.tom
 
 ## C / C++ (no cbindgen)
 
-`include/readcon-db.h` is hand-written and shipped. CMake FetchContent,
-Meson wrap, and `pkg-config` do **not** run cbindgen.
+`include/readcon-db.h` is hand-written and shipped. Optional
+`include/readcon-db-mpi.h` takes the caller's `MPI_Comm` (not linked into
+the library). CMake FetchContent, Meson wrap, and `pkg-config` do **not**
+run cbindgen.
 
 CMake:
 

@@ -1,5 +1,26 @@
 # Workflows
 
+## MPI: one rank packs, the rest receive
+
+When every rank needs the **same** frame, do not open LMDB on every rank.
+Rank 0 of the communicator the host already owns (`lmp->world`, an mpi4py
+`Comm`, a Fortran INTEGER handle) packs RCSO; `MPI_Bcast` on **that**
+handle; workers unpack with no corpus. The library does not call
+`MPI_Init` and does not name the process-wide world communicator.
+
+```c
+#include "readcon-db-mpi.h"
+rkrdb_bcast_packed_frame(lmp->world, 0, dir, traj, frame, &buf, &n);
+```
+
+```python
+from readcon_db import bcast_packed_frame
+blob = bcast_packed_frame(lmp.world, dir, traj, frame)  # mpi4py Comm
+```
+
+The other legal path: every rank `open_readonly` (shared mmap) when ranks
+touch **different** keys.
+
 ## CON-native (default)
 
 Optimizers → **CON files** → `readcon-db` ingest → `select` / `get_frame` / C/`readcon` decode.

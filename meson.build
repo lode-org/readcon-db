@@ -23,6 +23,11 @@ if not fs.is_file(_msproot / 'include' / 'readcon-db.h')
         'missing shipped header include/readcon-db.h',
     )
 endif
+if not fs.is_file(_msproot / 'include' / 'readcon-db-mpi.h')
+    error(
+        'missing shipped header include/readcon-db-mpi.h',
+    )
+endif
 
 cc = meson.get_compiler('c')
 cargo_prog = find_program('cargo', required: true)
@@ -94,6 +99,7 @@ readcon_cargo = custom_target(
 
 install_headers(
     'include/readcon-db.h',
+    'include/readcon-db-mpi.h',
 )
 
 # link_args + sources: Meson must not promote an installed static consumer

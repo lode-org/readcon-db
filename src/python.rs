@@ -24,7 +24,8 @@ impl PyConCorpus {
         Ok(Self { inner })
     }
 
-    /// RCSO bytes for MPI_Bcast (rank 0). Workers call ``unpack`` on the copy.
+    /// RCSO bytes for a unidirectional broadcast on the *caller* communicator.
+    /// Rank 0 packs; workers call :func:`unpack_positions` on the copy.
     fn pack_frame(&self, traj_id: u64, frame_idx: u32) -> PyResult<Vec<u8>> {
         self.inner
             .pack_frame(FrameKey {
@@ -353,8 +354,55 @@ impl PyConCorpus {
     }
 }
 
+/// Unidirectional RCSO broadcast on the caller's mpi4py communicator.
+///
+/// `comm` is an ``mpi4py.MPI.Comm`` (LAMMPS world/subcomm, ``Comm.Split``,
+/// ``Comm.Dup``). This function never names the process-wide world handle
+/// and never calls ``MPI_Init`` — mpi4py and LAMMPS already started MPI.
+///
+/// Rank ``root`` opens the corpus read-only and packs; every other rank
+/// on ``comm`` receives the bytes and never opens LMDB.
+#[pyfunction]
+#[pyo3(signature = (comm, corpus_dir, traj_id, frame_idx, root=0))]
+fn bcast_packed_frame(
+    comm: Bound<'_, PyAny>,
+    corpus_dir: &str,
+    traj_id: u64,
+    frame_idx: u32,
+    root: i32,
+) -> PyResult<Vec<u8>> {
+    let rank: i32 = comm.call_method0("Get_rank")?.extract()?;
+    let payload: (Option<String>, Option<Vec<u8>>) = if rank == root {
+        match ConCorpus::open_readonly(corpus_dir) {
+            Ok(db) => match db.pack_frame(FrameKey {
+                traj_id,
+                frame_idx,
+            }) {
+                Ok(bytes) => {
+                    db.close();
+                    (None, Some(bytes))
+                }
+                Err(e) => {
+                    db.close();
+                    (Some(e.to_string()), None)
+                }
+            },
+            Err(e) => (Some(e.to_string()), None),
+        }
+    } else {
+        (None, None)
+    };
+    let got = comm.call_method1("bcast", (payload, root))?;
+    let (err, blob): (Option<String>, Option<Vec<u8>>) = got.extract()?;
+    if let Some(msg) = err {
+        return Err(PyRuntimeError::new_err(msg));
+    }
+    blob.ok_or_else(|| PyRuntimeError::new_err("empty pack on root"))
+}
+
 #[pymodule]
 fn readcon_db(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyConCorpus>()?;
+    m.add_function(wrap_pyfunction!(bcast_packed_frame, m)?)?;
     Ok(())
 }

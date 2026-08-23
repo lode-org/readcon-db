@@ -81,6 +81,7 @@ select avoids decode.
             │
             ▼
      C ABI (rkrdb_*, incl. rkrdb_select_meta)  ◄── cdylib / staticlib
+     optional readcon-db-mpi.h (caller MPI_Comm only)
             │
             ▼
    Rust ConCorpus (Heed + readcon-core)

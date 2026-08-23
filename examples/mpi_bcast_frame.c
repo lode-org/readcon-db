@@ -1,30 +1,54 @@
-/* Rank 0 opens the corpus read-only, packs one frame as RCSO, and
- * MPI_Bcast the blob. Other ranks never open LMDB.
+/* Rank 0 of the *caller* communicator opens the corpus read-only, packs
+ * one frame as RCSO, and broadcasts the blob on that communicator. Other
+ * ranks never open LMDB.
  *
- *   mpicc -DREADCON_HAVE_MPI -Iinclude mpi_bcast_frame.c -lreadcon_db
+ * Hosts that already own MPI (LAMMPS pair/fix, mpi4py, a plugin) pass the
+ * communicator they already use — lmp->world, a sub-comm, a Dup/Split —
+ * and must not let this file call MPI_Init. This standalone main Dups the
+ * process-wide world handle only because it *is* the host; the helper
+ * never names that handle.
+ *
+ *   mpicc -DREADCON_HAVE_MPI -Iinclude examples/mpi_bcast_frame.c -lreadcon_db
  *
  * Without MPI the same pack/unpack still works on one process.
  */
 #include "readcon-db.h"
+#ifdef READCON_HAVE_MPI
+#include "readcon-db-mpi.h"
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 
-#ifdef READCON_HAVE_MPI
-#include <mpi.h>
-#endif
-
 int main(int argc, char **argv) {
     int rank = 0;
 #ifdef READCON_HAVE_MPI
-    MPI_Init(&argc, &argv);
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    int already = 0;
+    int we_inited = 0;
+    MPI_Comm comm = MPI_COMM_NULL;
+    MPI_Initialized(&already);
+    if (!already) {
+        MPI_Init(&argc, &argv);
+        we_inited = 1;
+    }
+    /* Host-owned comm. Standalone: Dup the process-wide handle so the
+     * helper sees a caller comm, not that handle. LAMMPS passes lmp->world
+     * here instead and never reaches this Dup. */
+    if (MPI_Comm_dup(MPI_COMM_WORLD, &comm) != MPI_SUCCESS) {
+        fprintf(stderr, "MPI_Comm_dup failed\n");
+        if (we_inited)
+            MPI_Finalize();
+        return 1;
+    }
+    MPI_Comm_rank(comm, &rank);
 #endif
     if (argc < 2) {
         if (rank == 0)
             fprintf(stderr, "usage: %s <corpus_dir> [traj] [frame]\n", argv[0]);
 #ifdef READCON_HAVE_MPI
-        MPI_Finalize();
+        MPI_Comm_free(&comm);
+        if (we_inited)
+            MPI_Finalize();
 #endif
         return 1;
     }
@@ -34,32 +58,31 @@ int main(int argc, char **argv) {
 
     uint8_t *buf = NULL;
     int nbytes = 0;
-    if (rank == 0) {
-        size_t id = 0;
-        if (rkrdb_open_readonly(dir, &id) != RKRDB_OK) {
-            fprintf(stderr, "open_readonly failed\n");
 #ifdef READCON_HAVE_MPI
-            MPI_Abort(MPI_COMM_WORLD, 2);
-#endif
-            return 2;
-        }
-        buf = (uint8_t *)malloc(1 << 20);
-        nbytes = rkrdb_pack_frame(id, traj, frame, buf, 1 << 20);
-        rkrdb_close(id);
-        if (nbytes < 0) {
-            fprintf(stderr, "pack_frame failed\n");
-            free(buf);
-#ifdef READCON_HAVE_MPI
-            MPI_Abort(MPI_COMM_WORLD, 3);
-#endif
-            return 3;
-        }
+    int st = rkrdb_bcast_packed_frame(comm, 0, dir, traj, frame, &buf, &nbytes);
+    if (st != RKRDB_OK) {
+        if (rank == 0)
+            fprintf(stderr, "bcast_packed_frame failed (%d)\n", st);
+        free(buf);
+        MPI_Comm_free(&comm);
+        if (we_inited)
+            MPI_Finalize();
+        return 2;
     }
-#ifdef READCON_HAVE_MPI
-    MPI_Bcast(&nbytes, 1, MPI_INT, 0, MPI_COMM_WORLD);
-    if (rank != 0)
-        buf = (uint8_t *)malloc((size_t)nbytes);
-    MPI_Bcast(buf, nbytes, MPI_BYTE, 0, MPI_COMM_WORLD);
+#else
+    size_t id = 0;
+    if (rkrdb_open_readonly(dir, &id) != RKRDB_OK) {
+        fprintf(stderr, "open_readonly failed\n");
+        return 2;
+    }
+    buf = (uint8_t *)malloc(1 << 20);
+    nbytes = rkrdb_pack_frame(id, traj, frame, buf, 1 << 20);
+    rkrdb_close(id);
+    if (nbytes < 0) {
+        fprintf(stderr, "pack_frame failed\n");
+        free(buf);
+        return 3;
+    }
 #endif
     uint32_t natoms = 0;
     double xyz[3 * 4096];
@@ -67,7 +90,9 @@ int main(int argc, char **argv) {
         fprintf(stderr, "rank %d unpack failed\n", rank);
         free(buf);
 #ifdef READCON_HAVE_MPI
-        MPI_Finalize();
+        MPI_Comm_free(&comm);
+        if (we_inited)
+            MPI_Finalize();
 #endif
         return 4;
     }
@@ -76,7 +101,9 @@ int main(int argc, char **argv) {
                xyz[0], xyz[1], xyz[2]);
     free(buf);
 #ifdef READCON_HAVE_MPI
-    MPI_Finalize();
+    MPI_Comm_free(&comm);
+    if (we_inited)
+        MPI_Finalize();
 #endif
     return 0;
 }

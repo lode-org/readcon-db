@@ -87,10 +87,15 @@ if(${READCON_DB_MAIN_PROJECT} AND NOT "${CACHED_LAST_CMAKE_BUILD_TYPE}" STREQUAL
 endif()
 
 set(READCON_DB_C_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/include/readcon-db.h")
+set(READCON_DB_MPI_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/include/readcon-db-mpi.h")
 if (NOT EXISTS ${READCON_DB_C_HEADER})
     message(FATAL_ERROR
         "missing shipped C header ${READCON_DB_C_HEADER}. "
         "The header is hand-maintained next to src/ffi.rs; cbindgen is not used.")
+endif()
+if (NOT EXISTS ${READCON_DB_MPI_HEADER})
+    message(FATAL_ERROR
+        "missing shipped MPI helper header ${READCON_DB_MPI_HEADER}.")
 endif()
 
 find_program(CARGO_EXE "cargo" DOC "path to cargo (Rust build system)")
@@ -288,6 +293,7 @@ add_dependencies(readcon-db::static cargo-build-readcon-db)
 
 set(READCON_DB_HEADERS
     ${READCON_DB_C_HEADER}
+    ${READCON_DB_MPI_HEADER}
 )
 set(READCON_DB_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include/)
 

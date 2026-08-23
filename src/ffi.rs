@@ -117,8 +117,9 @@ pub unsafe extern "C" fn rkrdb_open_readonly(path: *const c_char, out_id: *mut u
     }
 }
 
-/// Pack one frame as RCSO bytes for `MPI_Bcast`. Returns byte count, or error.
-/// Rank 0 calls this; other ranks never open the env.
+/// Pack one frame as RCSO bytes for `MPI_Bcast` on the *caller* communicator.
+/// Returns byte count, or error. Rank 0 of that comm calls this; other
+/// ranks never open the env.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_pack_frame(
     id: usize,

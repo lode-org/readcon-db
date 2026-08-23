@@ -17,6 +17,31 @@ call db_select_basic(id, 1_c_int64_t, "Cu", 1, 100000, 0, status)
 
 See helpers `db_open`, `db_append`, `db_select_basic`, `db_result_count`, `db_result_key`, `db_frame_hash`, `db_xxh3_128` in the module source. Point your build system at `include/` for the C header if needed and `target/release/`.
 
+## MPI: pack on root, Bcast on the caller INTEGER communicator
+
+Fortran MPI communicators are `INTEGER`. Pass the handle the host already
+has (LAMMPS world / sub-comm). `MPI_Bcast` on that integer; do not
+substitute `MPI_COMM_WORLD` unless that is the handle the host passed.
+Do not `MPI_Init` if the host already did (`MPI_Initialized`).
+
+```fortran
+use mpi
+use readcon_db
+! comm is the INTEGER the host owns (LAMMPS world / a Dup)
+if (rank == 0) then
+  call db_open_readonly(corpus, id, status)
+  call db_pack_frame(id, traj, frame, buf, buflen, nbytes, status)
+  call db_close(id, status)
+end if
+call MPI_Bcast(nbytes, 1, MPI_INTEGER, 0, comm, ierr)
+call MPI_Bcast(buf, nbytes, MPI_BYTE, 0, comm, ierr)
+call db_unpack_positions(buf, int(nbytes, c_size_t), xyz, cap, natoms, status)
+```
+
+C helper from Fortran INTEGER: `rkrdb_bcast_packed_frame_f` in
+`include/readcon-db-mpi.h` (`MPI_Comm_f2c`). Standalone:
+`examples/mpi_bcast_frame.f90`.
+
 ## Cooked SoA (RCSO)
 
 See `docs/orgmode/cooked-soa.org`. Tier is opt-in; CON text remains authority. Bindings expose cook / delete / has-valid / positions (and forces on C/Python/Rust).

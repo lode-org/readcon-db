@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Features
+- MPI pack/Bcast helper takes the **caller communicator** (`include/readcon-db-mpi.h`,
+  Python `bcast_packed_frame(comm, ...)`, Fortran pack + `MPI_Bcast` on the INTEGER
+  handle). Never `MPI_Init` if the host already did; never names the process-wide
+  world communicator inside the helper. LAMMPS / mpi4py pass the comm they own.
+
 ## 0.1.4 - 2026-08-15
 
 ### Packaging

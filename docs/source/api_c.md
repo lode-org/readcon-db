@@ -37,6 +37,31 @@ db.select_basic(1, "Cu", 1, 100000, 0);
 db.select_meta(-1, "Cu", 1, 100000, -50.0, 0.0, 1, 1u, 0);
 ```
 
+## MPI: pack on root, Bcast on the caller communicator
+
+Optional header [`include/readcon-db-mpi.h`](https://github.com/lode-org/readcon-db/blob/main/include/readcon-db-mpi.h)
+(not linked into `libreadcon_db`). Pass the communicator the host already
+uses. LAMMPS pair/fix code passes `lmp->world` or a sub-comm; a plugin
+must not call `MPI_Init` if the host already did.
+
+```c
+#include "readcon-db-mpi.h"   /* needs <mpi.h> */
+
+uint8_t *buf = NULL;
+int nbytes = 0;
+/* comm is lmp->world, a Dup, a Split — not substituted by this helper */
+int st = rkrdb_bcast_packed_frame(comm, /*root*/ 0, "/scratch/corpus",
+                                  /*traj*/ 1, /*frame*/ 0, &buf, &nbytes);
+uint32_t natoms = 0;
+double xyz[3 * 4096];
+rkrdb_unpack_positions(buf, (size_t)nbytes, xyz, 4096, &natoms);
+free(buf);
+```
+
+Fortran INTEGER handles go through `rkrdb_bcast_packed_frame_f`
+(`MPI_Comm_f2c` of the `MPI_Fint`). Standalone driver:
+`examples/mpi_bcast_frame.c` (`MPI_Initialized` + `MPI_Comm_dup`).
+
 ## Cooked SoA (RCSO)
 
 See `docs/orgmode/cooked-soa.org`. Tier is opt-in; CON text remains authority. Bindings expose cook / delete / has-valid / positions (and forces on C/Python/Rust).

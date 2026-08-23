@@ -9,15 +9,22 @@ fail=0
 die() { echo "check-cxx-dist: $*" >&2; fail=1; }
 
 # Shipped headers exist
-for h in include/readcon-db.h; do
+for h in include/readcon-db.h include/readcon-db-mpi.h; do
     [[ -f "$h" ]] || die "missing shipped header $h"
 done
+
+# MPI helper: caller comm only. Never Init; never name the process-wide world handle.
+if grep -vE '^[[:space:]]*(\*|//|/\*)' include/readcon-db-mpi.h \
+    | grep -nE 'MPI_COMM_WORLD|MPI_Init[[:space:]]*\('; then
+    die "readcon-db-mpi.h must not call MPI_Init or name MPI_COMM_WORLD"
+fi
 
 # CMake must not require cbindgen or Corrosion
 if grep -nE 'find_program[[:space:]]*\([[:space:]]*CBINDGEN|cbindgen[[:space:]]+REQUIRED|Corrosion' CMakeLists.txt; then
     die "CMakeLists.txt still requires cbindgen or Corrosion"
 fi
 grep -q 'readcon-db.h' CMakeLists.txt || die "CMakeLists.txt does not reference the shipped C header"
+grep -q 'readcon-db-mpi.h' CMakeLists.txt || die "CMakeLists.txt does not reference the MPI helper header"
 grep -q 'Name: readcon-db' cmake/readcon-db.pc.in || die "missing pkg-config template name"
 grep -q 'readcon-db::shared' CMakeLists.txt || die "CMakeLists.txt missing readcon-db::shared"
 grep -q 'FetchContent' cmake/readcon-db-config.in.cmake && die "installed cmake config must not FetchContent"
