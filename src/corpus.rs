@@ -546,8 +546,66 @@ impl ConCorpus {
     }
 
     pub fn append_trajectory_path(&self, traj_id: TrajId, file: impl AsRef<Path>) -> Result<u32> {
+        self.append_trajectory_path_units(traj_id, file, None)
+    }
+
+    /// Ingest a CON path and stamp canonical `units` into every frame's metadata.
+    pub fn append_trajectory_path_units(
+        &self,
+        traj_id: TrajId,
+        file: impl AsRef<Path>,
+        units: Option<serde_json::Value>,
+    ) -> Result<u32> {
         let text = fs::read_to_string(file.as_ref())?;
-        self.append_trajectory_str(traj_id, &text, file.as_ref().display().to_string())
+        let source = file.as_ref().display().to_string();
+        let Some(units) = units else {
+            return self.append_trajectory_str(traj_id, &text, source);
+        };
+        let units = crate::units_canon::canonicalize_units_object(units)?;
+        let mut frames = Vec::new();
+        for item in ConFrameIterator::new(&text) {
+            let mut fr = item.map_err(|e| Error::Parse(e.to_string()))?;
+            fr.header.set_units(units.clone());
+            frames.push(fr);
+        }
+        self.append_trajectory_frames(traj_id, &frames, source)
+    }
+
+    /// Canonicalize caller units and rewrite CON text for every frame of `traj_id`.
+    pub fn set_trajectory_units(&self, traj_id: TrajId, units: serde_json::Value) -> Result<u32> {
+        let units = crate::units_canon::canonicalize_units_object(units)?;
+        let keys = self.select(&Select::new().trajectory(traj_id))?;
+        if keys.is_empty() {
+            return Err(Error::Message("no frames for traj".into()));
+        }
+        let mut frames = Vec::with_capacity(keys.len());
+        let mut old_hashes = Vec::with_capacity(keys.len());
+        for k in &keys {
+            old_hashes.push(self.frame_hash(*k)?);
+            let mut fr = self.get_frame(*k)?;
+            fr.header.set_units(units.clone());
+            frames.push(fr);
+        }
+        let prepared = Self::prepare_trajectory_frames(traj_id, &frames, 0)?;
+        let mut wtxn = self.env.write_txn()?;
+        for (k, h) in keys.iter().zip(old_hashes.iter()) {
+            let fk_b = k.to_bytes();
+            let hb = h.to_bytes();
+            let _ = self.frame_by_hash.delete(&mut wtxn, &hb[..])?;
+            let _ = self.hash_by_frame.delete(&mut wtxn, &fk_b[..])?;
+            let _ = self.frames_soa.delete(&mut wtxn, &fk_b[..])?;
+        }
+        for p in &prepared {
+            self.put_index_puts(&mut wtxn, p)?;
+        }
+        wtxn.commit()?;
+        Ok(keys.len() as u32)
+    }
+
+    /// Units object on one frame (after canonicalize on write).
+    pub fn frame_units(&self, key: FrameKey) -> Result<Option<serde_json::Value>> {
+        let fr = self.get_frame(key)?;
+        Ok(fr.header.metadata.get("units").cloned())
     }
 
     pub fn append_trajectory_str(
@@ -1450,6 +1508,42 @@ mod tests {
             .append_trajectory_path(2, fixture("tiny_multi_cuh2.con"))
             .unwrap();
         assert!(n2 >= 2);
+    }
+
+    #[test]
+    fn caller_units_canonical_in_con_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path_units(
+            1,
+            fixture("tiny_cuh2.con"),
+            Some(serde_json::json!({
+                "length": "A",
+                "energy": "ev",
+                "time": "femtosecond"
+            })),
+        )
+        .unwrap();
+        let k = FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        let u = db.frame_units(k).unwrap().expect("units");
+        assert_eq!(u["length"], "angstrom");
+        assert_eq!(u["energy"], "eV");
+        assert_eq!(u["time"], "fs");
+        let text = db.get_frame_text(k).unwrap();
+        assert!(text.contains("angstrom"), "{text}");
+        assert!(text.contains("fs"), "{text}");
+        db.set_trajectory_units(
+            1,
+            serde_json::json!({"length": "nm", "energy": "hartree", "time": "ps"}),
+        )
+        .unwrap();
+        let u2 = db.frame_units(k).unwrap().expect("units");
+        assert_eq!(u2["length"], "nm");
+        assert_eq!(u2["energy"], "hartree");
+        assert_eq!(u2["time"], "ps");
     }
 
     #[test]

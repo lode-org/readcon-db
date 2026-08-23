@@ -4,7 +4,7 @@ from pathlib import Path
 
 import h5py
 import numpy as np
-from readcon_db import ConCorpus, unit_conversion_factor
+from readcon_db import ConCorpus, canonicalize_unit, unit_conversion_factor
 
 FIXTURE = Path(__file__).resolve().parents[2] / "resources" / "test"
 
@@ -122,6 +122,24 @@ def test_export_h5md_con_fallback_matches_rcso(tmp_path):
         )
         assert a["particles/all/position/value"].shape[0] == n
         assert a["particles/all/position/value"].ndim == 3
+
+
+def test_append_and_set_units_canonical(tmp_path):
+    db = ConCorpus(str(tmp_path / "corpus"))
+    db.append_trajectory(
+        1,
+        str(FIXTURE / "tiny_cuh2.con"),
+        units={"length": "A", "energy": "ev", "time": "femtosecond"},
+    )
+    raw = db.get_units(1, 0)
+    assert raw is not None
+    assert "angstrom" in raw
+    assert "eV" in raw
+    assert "fs" in raw
+    db.set_units(1, {"length": "nm", "energy": "hartree", "time": "ps"})
+    raw2 = db.get_units(1, 0)
+    assert "nm" in raw2
+    assert canonicalize_unit("A") == "angstrom"
 
 
 def test_unit_conversion_factor_length():

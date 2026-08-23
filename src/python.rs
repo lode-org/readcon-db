@@ -197,10 +197,37 @@ impl PyConCorpus {
             .collect())
     }
 
-    fn append_trajectory(&self, traj_id: u64, path: &str) -> PyResult<u32> {
+    #[pyo3(signature = (traj_id, path, units=None))]
+    fn append_trajectory(
+        &self,
+        traj_id: u64,
+        path: &str,
+        units: Option<Bound<'_, PyDict>>,
+    ) -> PyResult<u32> {
+        let u = units_from_pydict(units)?;
         self.inner
-            .append_trajectory_path(traj_id, path)
+            .append_trajectory_path_units(traj_id, path, u)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Write caller units onto every frame of `traj_id` (canonical names in CON text).
+    fn set_units(&self, traj_id: u64, units: Bound<'_, PyDict>) -> PyResult<u32> {
+        let u = units_from_pydict(Some(units))?
+            .ok_or_else(|| PyRuntimeError::new_err("units required"))?;
+        self.inner
+            .set_trajectory_units(traj_id, u)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    fn get_units(&self, traj_id: u64, frame_idx: u32) -> PyResult<Option<String>> {
+        let v = self
+            .inner
+            .frame_units(FrameKey {
+                traj_id,
+                frame_idx,
+            })
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(v.map(|x| x.to_string()))
     }
 
     /// Append frames to an existing trajectory (or create it).
@@ -602,11 +629,29 @@ fn bcast_packed_frames(
     blob.ok_or_else(|| PyRuntimeError::new_err("empty pack on root"))
 }
 
+fn units_from_pydict(units: Option<Bound<'_, PyDict>>) -> PyResult<Option<serde_json::Value>> {
+    let Some(d) = units else {
+        return Ok(None);
+    };
+    let mut map = serde_json::Map::new();
+    for (k, v) in d.iter() {
+        let key: String = k.extract()?;
+        let val: String = v.extract()?;
+        map.insert(key, serde_json::Value::String(val));
+    }
+    Ok(Some(serde_json::Value::Object(map)))
+}
+
 /// Metatomic-style conversion: `value_to = factor * value_from`.
 #[pyfunction]
 fn unit_conversion_factor(from_unit: &str, to_unit: &str) -> PyResult<f64> {
     readcon_core::units::unit_conversion_factor(from_unit, to_unit)
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+}
+
+#[pyfunction]
+fn canonicalize_unit(expr: &str) -> PyResult<String> {
+    crate::units_canon::canonicalize_unit(expr).map_err(|e| PyRuntimeError::new_err(e.to_string()))
 }
 
 #[pymodule]
@@ -615,5 +660,6 @@ fn readcon_db(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(bcast_packed_frame, m)?)?;
     m.add_function(wrap_pyfunction!(bcast_packed_frames, m)?)?;
     m.add_function(wrap_pyfunction!(unit_conversion_factor, m)?)?;
+    m.add_function(wrap_pyfunction!(canonicalize_unit, m)?)?;
     Ok(())
 }

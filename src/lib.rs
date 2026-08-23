@@ -11,6 +11,7 @@ mod error;
 mod export_h5md;
 mod export_xyz;
 mod keys;
+mod units_canon;
 mod select;
 mod shard;
 
@@ -20,6 +21,7 @@ pub use corpus::{frame_fmax, ConCorpus};
 pub use frame_scalars::{frame_cell_volume, frame_total_mass};
 pub use error::{Error, Result};
 pub use export_h5md::H5mdArrays;
+pub use units_canon::{canonicalize_unit, canonicalize_units_object};
 pub use export_xyz::{write_frame_extxyz, write_frames_extxyz};
 pub use keys::{
     composition_formula, hash_frame_bytes, species_counts_from_symbols, ContentHash, FrameIdx,

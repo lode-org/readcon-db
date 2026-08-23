@@ -5,6 +5,8 @@
 ### Features
 - Batched RCSO pack (`RCSB`): `pack_frames` / `rkrdb_pack_frames` / `bcast_packed_frames` on the caller comm
 - `readcon-db drain <local_root> <pfs_root>` copies shard dirs after node-local ingest
+- Callers write units (`append_trajectory(..., units=)`, `set_units`);
+  aliases are canonicalized into CON metadata (`A` → `angstrom`)
 - H5MD export uses one engine unit system (Å, ps, kJ mol^{-1} Å^{-1});
   CON units convert through `unit_conversion_factor`. Python exposes that
   function. Time is CON time or `i * timestep`, in ps.

@@ -71,7 +71,10 @@ engine): length `Angstrom`, time `ps`, force `kJ mol-1 Angstrom-1`.
 CON `units.length` / `units.time` / `units.energy` convert through
 `unit_conversion_factor` (SI). Time is CON `header.time()`, or
 `i * timestep`, else the frame index, all in `ps`.
-`unit_conversion_factor(from, to)` is on the Python module.
+`unit_conversion_factor(from, to)` and `canonicalize_unit(expr)` are
+on the Python module. Callers write aliases (`A`, `ev`, `femtosecond`);
+`append_trajectory(..., units={...})` and `set_units(traj_id, {...})`
+store canonical names (`angstrom`, `eV`, `fs`) in CON metadata.
 Mixed-force trajectories write a full `[T][N][3]` force dataset
 (zeros on frames without forces). Box `boundary` follows CON `pbc`
 (periodic when absent). `time` is CON `header.time()` or the frame
