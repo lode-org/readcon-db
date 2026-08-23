@@ -41,7 +41,13 @@ call db_unpack_positions(buf, int(nbytes, c_size_t), xyz, cap, natoms, status)
 C helpers from Fortran INTEGER: `rkrdb_bcast_packed_frame_f` and
 `rkrdb_bcast_packed_frames_f` in `include/readcon-db-mpi.h`
 (`MPI_Comm_f2c`). Batched helper packs an RCSB envelope on root and
-`MPI_Bcast`s it on `comm`. Standalone: `examples/mpi_bcast_frame.f90`.
+`MPI_Bcast`s it on `comm`. Module `db_pack_frames` is the same envelope
+without the helper. Standalone: `examples/mpi_bcast_frame.f90` (single
+`db_pack_frame` then `db_pack_frames`).
+
+H5MD interchange and caller units live on the Rust/Python/C corpus
+(`collect_h5md`, `append_trajectory_path_units`, CLI `--units`). CON
+line-2 `units` is the authority; dest export is Å / ps / kJ mol^{-1} Å^{-1}.
 
 ## Cooked SoA (RCSO)
 

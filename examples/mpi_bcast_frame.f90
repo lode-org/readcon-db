@@ -77,6 +77,25 @@ program mpi_bcast_frame
     if (we_inited == 1) call MPI_Finalize(ierr)
     stop 4
   end if
+  ! Batched pack (RCSB) on the same caller comm.
+  if (rank == 0) then
+    call db_open_readonly(trim(corpus), id, status)
+    if (status == rkrdb_ok) then
+      call db_pack_frames(id, [traj], [frame], 1_c_int32_t, buf, buflen, &
+                          nbytes, status)
+      call db_close(id, status)
+    end if
+  end if
+  call MPI_Bcast(nbytes, 1, MPI_INTEGER, 0, comm, ierr)
+  call MPI_Bcast(buf, nbytes, MPI_BYTE, 0, comm, ierr)
+  call db_unpack_batch_item(buf, int(nbytes, c_size_t), 0_c_int32_t, xyz, &
+                            4096_c_int32_t, natoms, status)
+  if (status /= rkrdb_ok) then
+    write (error_unit, '(a,i0,a)') 'rank ', rank, ' unpack failed'
+    call MPI_Comm_free(comm, ierr)
+    if (we_inited == 1) call MPI_Finalize(ierr)
+    stop 4
+  end if
   if (rank == 0) then
     write (*, '(a,i0,a,i0,a,f0.4,a,f0.4,a,f0.4,a)') &
       'bcast ', nbytes, ' bytes, natoms=', natoms, &

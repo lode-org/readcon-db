@@ -4,7 +4,8 @@
 
 ### Features
 - Batched RCSO pack (`RCSB`): `pack_frames` / `rkrdb_pack_frames` / `bcast_packed_frames` on the caller comm
-- `readcon-db drain <local_root> <pfs_root>` copies shard dirs after node-local ingest
+- `readcon-db drain <local_root> <pfs_root>` compact-snapshots `data.mdb`
+  (no `lock.mdb`) after node-local ingest and refuses dest overwrite
 - Callers write units (`append_trajectory(..., units=)`,
   `extend_trajectory(..., units=)`, `set_units`, CLI `--units`);
   aliases are canonicalized into CON metadata (`A` → `angstrom`).

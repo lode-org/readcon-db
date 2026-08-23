@@ -151,6 +151,8 @@ fn boxl_angles_to_edges33(boxl: &[f64; 3], angles: &[f64; 3]) -> [f64; 9] {
 
 impl ConCorpus {
     /// Collect one trajectory as H5MD-shaped arrays (fixed `N`).
+    /// Times are dest `ps`: CON `header.time()`, or `i * timestep`, else
+    /// the frame index. Missing `units.time` is CON default `fs`.
     pub fn collect_h5md(&self, traj_id: u64) -> Result<H5mdArrays> {
         let keys = self.select(&Select::new().trajectory(traj_id))?;
         if keys.is_empty() {

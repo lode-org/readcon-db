@@ -11,11 +11,13 @@ handle; workers unpack with no corpus. The library does not call
 ```c
 #include "readcon-db-mpi.h"
 rkrdb_bcast_packed_frame(lmp->world, 0, dir, traj, frame, &buf, &n);
+rkrdb_bcast_packed_frames(lmp->world, 0, dir, trajs, frames, nkeys, &buf, &n);
 ```
 
 ```python
-from readcon_db import bcast_packed_frame
+from readcon_db import bcast_packed_frame, bcast_packed_frames
 blob = bcast_packed_frame(lmp.world, dir, traj, frame)  # mpi4py Comm
+batch = bcast_packed_frames(lmp.world, dir, [(traj, 0), (traj, 1)])
 ```
 
 The other legal path: every rank `open_readonly` (shared mmap) when ranks

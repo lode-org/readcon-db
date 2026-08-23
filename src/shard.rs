@@ -646,6 +646,27 @@ mod compaction_tests {
     }
 
     #[test]
+    fn join_drained_roots_refuses_existing_dest() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let node = dir.path().join("node");
+        ShardedConCorpus::open(&node, 2).unwrap();
+        ShardedConCorpus::open_shard(&node, 0)
+            .unwrap()
+            .append_trajectory_str(0, &text, "a")
+            .unwrap();
+        let dest = dir.path().join("dest");
+        assert_eq!(ShardedConCorpus::drain_to(&node, &dest).unwrap(), 1);
+        let joined = dir.path().join("joined");
+        join_drained_roots(&[dest.clone()], &joined).unwrap();
+        let err = join_drained_roots(&[dest], &joined).unwrap_err();
+        assert!(
+            err.to_string().contains("join-drained dest exists"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn export_kinds_documented() {
         assert_eq!(CorpusExportKind::ShardedLmdb.as_str(), "sharded-lmdb");
         assert_eq!(CorpusExportKind::SingleEnvLmdb.as_str(), "single-env-lmdb");

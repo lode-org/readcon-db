@@ -1452,6 +1452,16 @@ impl ConCorpus {
         dir: impl AsRef<Path>,
         start_traj_id: TrajId,
     ) -> Result<Vec<(TrajId, u32, String)>> {
+        self.ingest_directory_units(dir, start_traj_id, None)
+    }
+
+    /// Ingest every `.con`/`.convel` in `dir`, optionally stamping `units`.
+    pub fn ingest_directory_units(
+        &self,
+        dir: impl AsRef<Path>,
+        start_traj_id: TrajId,
+        units: Option<serde_json::Value>,
+    ) -> Result<Vec<(TrajId, u32, String)>> {
         let mut out = Vec::new();
         let mut tid = start_traj_id;
         let mut paths: Vec<_> = fs::read_dir(dir)?
@@ -1464,7 +1474,7 @@ impl ConCorpus {
             .collect();
         paths.sort();
         for p in paths {
-            let n = self.append_trajectory_path(tid, &p)?;
+            let n = self.append_trajectory_path_units(tid, &p, units.clone())?;
             out.push((tid, n, p.display().to_string()));
             tid += 1;
         }

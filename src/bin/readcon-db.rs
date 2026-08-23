@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! readcon-db ingest <corpus_dir> --start-id 1 <file.con>...
-//! readcon-db ingest-dir <corpus_dir> <con_directory>
+//! readcon-db ingest-dir <corpus_dir> [--units JSON] <con_directory>
 //! readcon-db select <corpus_dir> [filters...] [--export out.xyz]
 //! readcon-db drain <local_root> <pfs_root>
 //! readcon-db join-drained <single_dst> <drained_root>...
@@ -23,7 +23,7 @@ fn usage() -> ExitCode {
     eprintln!(
         "Usage:
   readcon-db ingest <corpus_dir> [--start-id N] [--units JSON] <file.con>...
-  readcon-db ingest-dir <corpus_dir> <dir_with_con_files>
+  readcon-db ingest-dir <corpus_dir> [--units JSON] <dir_with_con_files>
   readcon-db select <corpus_dir> [--traj N] [--symbol S] [--natoms-min A] [--natoms-max B]
                      [--energy-min E] [--energy-max E] [--fmax-min F] [--fmax-max F]
                      [--elem SYM:COUNT] [--elem-min SYM:COUNT] [--formula Cu:2|H:2]
@@ -101,9 +101,22 @@ fn main() -> ExitCode {
             }
             "ingest-dir" => {
                 let corpus = args.first().ok_or("corpus")?.clone();
-                let dir = args.get(1).ok_or("dir")?.clone();
+                let mut units = None;
+                let mut dir = None;
+                let mut i = 1;
+                while i < args.len() {
+                    if args[i] == "--units" {
+                        let raw = args.get(i + 1).ok_or("units json")?;
+                        units = Some(serde_json::from_str(raw)?);
+                        i += 2;
+                        continue;
+                    }
+                    dir = Some(args[i].clone());
+                    i += 1;
+                }
+                let dir = dir.ok_or("dir")?;
                 let db = ConCorpus::open(&corpus)?;
-                for (tid, n, p) in db.ingest_directory(&dir, 1)? {
+                for (tid, n, p) in db.ingest_directory_units(&dir, 1, units)? {
                     println!("traj {tid}: {n} frames <- {p}");
                 }
             }
