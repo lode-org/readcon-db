@@ -82,7 +82,8 @@ Mixed-force trajectories write a full `[T][N][3]` force dataset
 (periodic when absent). Time is CON `header.time()`, or `i * timestep`,
 else the frame index. Missing `units.time` is CON default `fs` (then
 converted to dest `ps`). `author`/`creator`/`boundary` attrs are
-fixed-length ASCII; physical `unit` attrs are fixed-length UTF-8.
+fixed-length ASCII. Physical `unit` attrs are short H5MD strings
+(MDAnalysis 2.10 indexes them as dict keys).
 
 Standalone: `examples/mpi_bcast_frame.py`.
 

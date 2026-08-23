@@ -14,8 +14,9 @@
   CON units convert through `unit_conversion_factor`. Python exposes that
   function. Time is CON time or `i * timestep`, else the frame index, in
   dest `ps`. Missing `units.time` is CON default `fs` (not dest `ps`).
-- Edges from `lattice_vectors` or boxl+angles; author/creator/boundary/unit
-  attrs are fixed ASCII
+- Edges from `lattice_vectors` or boxl+angles; author/creator/boundary
+  attrs are fixed ASCII. Physical `unit` attrs are short H5MD strings
+  so MDAnalysis 2.10 `convert_units=True` can index them.
 - `join_to_single_env` / `compact-join` / `join_corpus_dirs` refuse dest overwrite
 - `join-drained` merges unique-dest drained roots when shard ids overlap
 - `drain_to` compact-snapshots `data.mdb` only and refuses dest overwrite

@@ -44,9 +44,9 @@ def test_export_h5md_tn3_and_units(tmp_path):
         _assert_fixed_ascii(f["h5md/creator"].attrs, "name")
         _assert_fixed_ascii(f["h5md/creator"].attrs, "version")
         _assert_fixed_ascii(f["particles/all/box"].attrs, "boundary")
-        _assert_fixed_ascii(f["particles/all/position/value"].attrs, "unit")
-        _assert_fixed_ascii(f["particles/all/position/time"].attrs, "unit")
-        _assert_fixed_ascii(f["particles/all/box/edges/value"].attrs, "unit")
+        assert _as_str(f["particles/all/position/value"].attrs["unit"]) == "Angstrom"
+        assert _as_str(f["particles/all/position/time"].attrs["unit"]) == "ps"
+        assert _as_str(f["particles/all/box/edges/value"].attrs["unit"]) == "Angstrom"
 
 
 def _as_str(x):
@@ -196,7 +196,7 @@ def test_export_h5md_mdanalysis_reader_with_forces(tmp_path):
     assert reader.n_frames == n
     with h5py.File(out, "r") as f:
         assert "force" in f["particles/all"]
-        _assert_fixed_ascii(f["particles/all/force/value"].attrs, "unit")
+        assert _as_str(f["particles/all/force/value"].attrs["unit"]) == "kJ mol-1 Angstrom-1"
 
 
 def test_export_h5md_append_nm_scales_positions(tmp_path):
