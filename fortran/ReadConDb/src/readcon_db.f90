@@ -3,7 +3,7 @@ module readcon_db
   implicit none
   private
   public :: rkrdb_ok, rkrdb_err, db_open, db_open_readonly, db_close, db_append, db_append_units, &
-            db_select_basic, &
+            db_extend, db_extend_units, db_select_basic, &
             db_result_count, db_result_key, db_frame_hash, db_frame_formula, db_xxh3_128, &
             db_get_frame, db_pack_frame, db_pack_frames, db_unpack_positions, &
             db_unpack_batch_nframes, db_unpack_batch_item, db_set_units, db_frame_units, &
@@ -85,6 +85,25 @@ module readcon_db
     end function
     function rkrdb_append_trajectory_units(id, traj_id, path, units_json, out_n) &
         bind(C, name="rkrdb_append_trajectory_units") result(st)
+      import :: c_char, c_int, c_size_t, c_int64_t, c_int32_t
+      integer(c_size_t), value :: id
+      integer(c_int64_t), value :: traj_id
+      character(kind=c_char), intent(in) :: path(*)
+      character(kind=c_char), intent(in) :: units_json(*)
+      integer(c_int32_t), intent(out) :: out_n
+      integer(c_int) :: st
+    end function
+    function rkrdb_extend_trajectory(id, traj_id, path, out_n) &
+        bind(C, name="rkrdb_extend_trajectory") result(st)
+      import :: c_char, c_int, c_size_t, c_int64_t, c_int32_t
+      integer(c_size_t), value :: id
+      integer(c_int64_t), value :: traj_id
+      character(kind=c_char), intent(in) :: path(*)
+      integer(c_int32_t), intent(out) :: out_n
+      integer(c_int) :: st
+    end function
+    function rkrdb_extend_trajectory_units(id, traj_id, path, units_json, out_n) &
+        bind(C, name="rkrdb_extend_trajectory_units") result(st)
       import :: c_char, c_int, c_size_t, c_int64_t, c_int32_t
       integer(c_size_t), value :: id
       integer(c_int64_t), value :: traj_id
@@ -339,6 +358,29 @@ contains
     cp = f_c_string(path)
     cu = f_c_string(units_json)
     status = rkrdb_append_trajectory_units(id, traj_id, cp, cu, n_frames)
+  end subroutine
+
+  subroutine db_extend(id, traj_id, path, n_frames, status)
+    integer(c_size_t), intent(in) :: id
+    integer(c_int64_t), intent(in) :: traj_id
+    character(len=*), intent(in) :: path
+    integer(c_int32_t), intent(out) :: n_frames
+    integer(c_int), intent(out) :: status
+    character(kind=c_char), allocatable :: cp(:)
+    cp = f_c_string(path)
+    status = rkrdb_extend_trajectory(id, traj_id, cp, n_frames)
+  end subroutine
+
+  subroutine db_extend_units(id, traj_id, path, units_json, n_frames, status)
+    integer(c_size_t), intent(in) :: id
+    integer(c_int64_t), intent(in) :: traj_id
+    character(len=*), intent(in) :: path, units_json
+    integer(c_int32_t), intent(out) :: n_frames
+    integer(c_int), intent(out) :: status
+    character(kind=c_char), allocatable :: cp(:), cu(:)
+    cp = f_c_string(path)
+    cu = f_c_string(units_json)
+    status = rkrdb_extend_trajectory_units(id, traj_id, cp, cu, n_frames)
   end subroutine
 
   subroutine db_set_units(id, traj_id, units_json, n_frames, status)
