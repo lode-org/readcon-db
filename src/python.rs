@@ -90,7 +90,8 @@ impl PyConCorpus {
             Ok(())
         };
         let ascii_attr = |obj: &Bound<'_, PyAny>, name: &str, val: &str, n: usize| -> PyResult<()> {
-            let dt = h5py.call_method("string_dtype", ("ascii", n), None)?;
+            // utf-8 fixed (not VL): H5MD forbids VL; MDA decodes utf-8 to str.
+            let dt = h5py.call_method("string_dtype", ("utf-8", n), None)?;
             let kw = PyDict::new(obj.py());
             kw.set_item("dtype", dt)?;
             obj.getattr("attrs")?

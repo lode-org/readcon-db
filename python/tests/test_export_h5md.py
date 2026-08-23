@@ -56,11 +56,13 @@ def _as_str(x):
 
 
 def _assert_fixed_ascii(attrs, key):
-    dt = attrs[key].dtype
+    dt = np.asarray(attrs[key]).dtype
     info = h5py.check_string_dtype(dt)
-    assert info is not None
-    assert info.length is not None
-    assert not info.encoding or info.encoding in ("ascii", "utf-8")
+    if info is not None:
+        assert info.length is not None
+        assert info.encoding in (None, "ascii", "utf-8")
+        return
+    assert dt.kind == "S" and dt.itemsize >= 1
 
 
 def test_export_h5md_mixed_forces_zero_pad(tmp_path):
