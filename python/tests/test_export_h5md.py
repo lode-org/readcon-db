@@ -62,7 +62,7 @@ def _assert_fixed_ascii(attrs, key):
         assert info.length is not None
         assert info.encoding in (None, "ascii", "utf-8")
         return
-    assert dt.kind == "S" and dt.itemsize >= 1
+    assert dt.kind in ("S", "U") and dt.itemsize >= 1
 
 
 def test_export_h5md_mixed_forces_zero_pad(tmp_path):
