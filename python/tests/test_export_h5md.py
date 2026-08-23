@@ -18,8 +18,8 @@ def test_export_h5md_tn3_and_units(tmp_path):
     assert written == n
     with h5py.File(out, "r") as f:
         assert tuple(f["h5md"].attrs["version"]) == (1, 1)
-        assert f["h5md/author"].attrs["name"] == "readcon-db"
-        assert f["h5md/creator"].attrs["name"] == "readcon-db"
+        assert _as_str(f["h5md/author"].attrs["name"]) == "readcon-db"
+        assert _as_str(f["h5md/creator"].attrs["name"]) == "readcon-db"
         assert "version" in f["h5md/creator"].attrs
         pos = f["particles/all/position/value"]
         assert pos.shape[0] == n
@@ -44,6 +44,12 @@ def test_export_h5md_tn3_and_units(tmp_path):
         _assert_fixed_ascii(f["h5md/creator"].attrs, "name")
         _assert_fixed_ascii(f["h5md/creator"].attrs, "version")
         _assert_fixed_ascii(f["particles/all/box"].attrs, "boundary")
+
+
+def _as_str(x):
+    if isinstance(x, (bytes, np.bytes_)):
+        return x.decode("ascii", "replace").rstrip("\x00")
+    return str(x)
 
 
 def _assert_fixed_ascii(attrs, key):
