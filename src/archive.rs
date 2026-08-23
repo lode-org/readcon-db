@@ -53,6 +53,10 @@ pub struct ObservationArchive {
     worker: Option<JoinHandle<()>>,
     committed: Arc<AtomicU64>,
     dropped: Arc<AtomicU64>,
+    /// Rows accepted by append (existing + enqueued), ahead of
+    /// `committed` while the writer drains. Readers key refreshes on
+    /// this so an in-flight row still triggers a flush + refetch.
+    appended: AtomicU64,
     natoms: usize,
     dir: PathBuf,
 }
@@ -105,6 +109,7 @@ impl ObservationArchive {
             worker: Some(worker),
             committed,
             dropped,
+            appended: AtomicU64::new(existing),
             natoms,
             dir,
         })
@@ -121,12 +126,17 @@ impl ObservationArchive {
         let Some(tx) = self.tx.as_ref() else {
             return false;
         };
-        tx.send(Msg::Row(Row {
-            positions: positions.to_vec(),
-            forces: forces.to_vec(),
-            energy,
-        }))
-        .is_ok()
+        let sent = tx
+            .send(Msg::Row(Row {
+                positions: positions.to_vec(),
+                forces: forces.to_vec(),
+                energy,
+            }))
+            .is_ok();
+        if sent {
+            self.appended.fetch_add(1, Ordering::Relaxed);
+        }
+        sent
     }
 
     /// Block until every previously enqueued row is committed (or
@@ -142,6 +152,13 @@ impl ObservationArchive {
     /// Rows committed to the corpus (including prior runs).
     pub fn committed(&self) -> u64 {
         self.committed.load(Ordering::Relaxed)
+    }
+
+    /// Rows accepted by append, including any still in the writer
+    /// queue (and prior runs). `appended - dropped` equals `committed`
+    /// once flushed.
+    pub fn appended(&self) -> u64 {
+        self.appended.load(Ordering::Relaxed)
     }
 
     /// Rows the writer could not persist.
@@ -357,6 +374,21 @@ pub unsafe extern "C" fn rkrdb_archive_count(id: usize, out_count: *mut u64) -> 
     .unwrap_or(RKRDB_NULL)
 }
 
+/// Rows accepted by append, including any still queued (prior runs
+/// included). Key cache refreshes on this; fetch bounds on
+/// rkrdb_archive_count after a flush.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_archive_appended(id: usize, out_count: *mut u64) -> c_int {
+    if out_count.is_null() {
+        return RKRDB_NULL;
+    }
+    with_archive(id, |a| {
+        unsafe { *out_count = a.appended() };
+        Ok(RKRDB_OK)
+    })
+    .unwrap_or(RKRDB_NULL)
+}
+
 /// Rows the writer thread could not persist.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_archive_dropped(id: usize, out_count: *mut u64) -> c_int {
@@ -435,7 +467,10 @@ mod tests {
         let frc: Vec<f64> = (0..9).map(|i| -(i as f64) * 0.01).collect();
         assert!(archive.append(&pos, &frc, -76.4));
         assert!(archive.append(&frc, &pos, -75.9));
+        // The refresh key sees in-flight rows before any flush.
+        assert_eq!(archive.appended(), 2);
         archive.flush();
+        assert_eq!(archive.appended(), 2);
         assert_eq!(archive.committed(), 2);
         assert_eq!(archive.dropped(), 0);
 
