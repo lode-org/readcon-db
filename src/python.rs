@@ -1,5 +1,6 @@
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 use crate::corpus::ConCorpus;
 use crate::keys::{ContentHash, FrameKey};
@@ -33,6 +34,129 @@ impl PyConCorpus {
                 frame_idx,
             })
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Many RCSO blobs in one RCSB envelope (one Bcast on the caller comm).
+    fn pack_frames(&self, keys: Vec<(u64, u32)>) -> PyResult<Vec<u8>> {
+        let fks: Vec<FrameKey> = keys
+            .into_iter()
+            .map(|(traj_id, frame_idx)| FrameKey {
+                traj_id,
+                frame_idx,
+            })
+            .collect();
+        self.inner
+            .pack_frames(&fks)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    #[staticmethod]
+    fn unpack_batch(buf: Vec<u8>) -> PyResult<Vec<Vec<(f64, f64, f64)>>> {
+        let parts = crate::cooked_soa::decode_batch(&buf)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let mut out = Vec::with_capacity(parts.len());
+        for p in parts {
+            let cooked = crate::cooked_soa::CookedSoa::decode(&p)
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+            out.push(
+                cooked
+                    .positions
+                    .into_iter()
+                    .map(|r| (r[0], r[1], r[2]))
+                    .collect(),
+            );
+        }
+        Ok(out)
+    }
+
+    /// Cooked H5MD interchange (h5py). CON text stays authority in the corpus.
+    /// One `[T][N][3]` dataset per trajectory. Fixed N only.
+    fn export_h5md(&self, py: Python<'_>, traj_id: u64, path: &str) -> PyResult<u32> {
+        let h5py = py
+            .import("h5py")
+            .map_err(|_| PyRuntimeError::new_err("export_h5md requires h5py"))?;
+        let keys = self
+            .inner
+            .select(&Select::new().trajectory(traj_id))
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        if keys.is_empty() {
+            return Err(PyRuntimeError::new_err("no frames for traj"));
+        }
+        let n_frames = keys.len();
+        let first = self
+            .inner
+            .get_frame(keys[0])
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let natoms = first.atom_data.len();
+        let boxl = first.header.boxl;
+        let species: Vec<String> = first
+            .atom_data
+            .iter()
+            .map(|a| a.symbol.as_ref().to_string())
+            .collect();
+        let mut pos = Vec::with_capacity(n_frames * natoms * 3);
+        let mut forces: Option<Vec<f64>> = None;
+        for k in &keys {
+            let cooked = crate::cooked_soa::CookedSoa::decode(
+                &self
+                    .inner
+                    .pack_frame(*k)
+                    .map_err(|e| PyRuntimeError::new_err(e.to_string()))?,
+            )
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+            if cooked.natoms as usize != natoms {
+                return Err(PyRuntimeError::new_err(
+                    "H5MD export needs fixed natoms in the trajectory",
+                ));
+            }
+            for p in &cooked.positions {
+                pos.extend_from_slice(p);
+            }
+            if let Some(f) = &cooked.forces {
+                let slot = forces.get_or_insert_with(Vec::new);
+                for row in f {
+                    slot.extend_from_slice(row);
+                }
+            }
+        }
+        let file = h5py.call_method1("File", (path, "w"))?;
+        let np = py.import("numpy")?;
+        let kw = |py: Python<'_>, key: &str, val: Bound<'_, PyAny>| -> PyResult<Bound<'_, PyDict>> {
+            let d = PyDict::new(py);
+            d.set_item(key, val)?;
+            Ok(d)
+        };
+        let h5md = file.call_method1("create_group", ("h5md",))?;
+        let h5md_attrs = h5md.getattr("attrs")?;
+        h5md_attrs.set_item("version", (1i32, 1i32))?;
+        let particles = file.call_method1("create_group", ("particles",))?;
+        let all = particles.call_method1("create_group", ("all",))?;
+        let boxg = all.call_method1("create_group", ("box",))?;
+        let attrs = boxg.getattr("attrs")?;
+        attrs.set_item("dimension", 3)?;
+        attrs.set_item("boundary", ("periodic", "periodic", "periodic"))?;
+        let edges = np.call_method1("asarray", ((boxl[0], boxl[1], boxl[2]),))?;
+        boxg.call_method("create_dataset", ("edges",), Some(&kw(py, "data", edges)?))?;
+        let dtype_kw = PyDict::new(py);
+        dtype_kw.set_item("dtype", "float64")?;
+        let pos_arr = np
+            .call_method("asarray", (pos,), Some(&dtype_kw))?
+            .call_method1("reshape", ((n_frames, natoms, 3),))?;
+        let posg = all.call_method1("create_group", ("position",))?;
+        posg.call_method("create_dataset", ("value",), Some(&kw(py, "data", pos_arr)?))?;
+        if let Some(f) = forces {
+            if f.len() == n_frames * natoms * 3 {
+                let f_arr = np
+                    .call_method("asarray", (f,), Some(&dtype_kw))?
+                    .call_method1("reshape", ((n_frames, natoms, 3),))?;
+                let fg = all.call_method1("create_group", ("force",))?;
+                fg.call_method("create_dataset", ("value",), Some(&kw(py, "data", f_arr)?))?;
+            }
+        }
+        let spec_arr = np.call_method1("asarray", (species,))?;
+        all.call_method("create_dataset", ("species",), Some(&kw(py, "data", spec_arr)?))?;
+        file.call_method0("close")?;
+        Ok(n_frames as u32)
     }
 
     #[staticmethod]
@@ -400,9 +524,54 @@ fn bcast_packed_frame(
     blob.ok_or_else(|| PyRuntimeError::new_err("empty pack on root"))
 }
 
+/// Many frames, one collective on the caller mpi4py comm.
+#[pyfunction]
+#[pyo3(signature = (comm, corpus_dir, keys, root=0))]
+fn bcast_packed_frames(
+    comm: Bound<'_, PyAny>,
+    corpus_dir: &str,
+    keys: Vec<(u64, u32)>,
+    root: i32,
+) -> PyResult<Vec<u8>> {
+    let rank: i32 = comm.call_method0("Get_rank")?.extract()?;
+    let payload: (Option<String>, Option<Vec<u8>>) = if rank == root {
+        match ConCorpus::open_readonly(corpus_dir) {
+            Ok(db) => {
+                let fks: Vec<FrameKey> = keys
+                    .into_iter()
+                    .map(|(traj_id, frame_idx)| FrameKey {
+                        traj_id,
+                        frame_idx,
+                    })
+                    .collect();
+                match db.pack_frames(&fks) {
+                    Ok(bytes) => {
+                        db.close();
+                        (None, Some(bytes))
+                    }
+                    Err(e) => {
+                        db.close();
+                        (Some(e.to_string()), None)
+                    }
+                }
+            }
+            Err(e) => (Some(e.to_string()), None),
+        }
+    } else {
+        (None, None)
+    };
+    let got = comm.call_method1("bcast", (payload, root))?;
+    let (err, blob): (Option<String>, Option<Vec<u8>>) = got.extract()?;
+    if let Some(msg) = err {
+        return Err(PyRuntimeError::new_err(msg));
+    }
+    blob.ok_or_else(|| PyRuntimeError::new_err("empty pack on root"))
+}
+
 #[pymodule]
 fn readcon_db(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyConCorpus>()?;
     m.add_function(wrap_pyfunction!(bcast_packed_frame, m)?)?;
+    m.add_function(wrap_pyfunction!(bcast_packed_frames, m)?)?;
     Ok(())
 }

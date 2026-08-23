@@ -4,7 +4,8 @@ module readcon_db
   private
   public :: rkrdb_ok, rkrdb_err, db_open, db_open_readonly, db_close, db_append, db_select_basic, &
             db_result_count, db_result_key, db_frame_hash, db_frame_formula, db_xxh3_128, &
-            db_get_frame, db_pack_frame, db_unpack_positions
+            db_get_frame, db_pack_frame, db_pack_frames, db_unpack_positions, &
+            db_unpack_batch_nframes, db_unpack_batch_item
 
   integer(c_int), parameter :: rkrdb_ok = 0
   integer(c_int), parameter :: rkrdb_err = -1
@@ -29,6 +30,34 @@ module readcon_db
       integer(c_int32_t), value :: frame_idx
       integer(c_int8_t), intent(out) :: buf(*)
       integer(c_int) :: n
+    end function
+    function rkrdb_pack_frames(id, traj_ids, frame_idxs, nkeys, buf, buflen) &
+        bind(C, name="rkrdb_pack_frames") result(n)
+      import :: c_int, c_size_t, c_int64_t, c_int32_t, c_int8_t
+      integer(c_size_t), value :: id, buflen
+      integer(c_int64_t), intent(in) :: traj_ids(*)
+      integer(c_int32_t), intent(in) :: frame_idxs(*)
+      integer(c_int32_t), value :: nkeys
+      integer(c_int8_t), intent(out) :: buf(*)
+      integer(c_int) :: n
+    end function
+    function rkrdb_unpack_batch_nframes(buf, buflen, out_n) &
+        bind(C, name="rkrdb_unpack_batch_nframes") result(st)
+      import :: c_int, c_size_t, c_int8_t, c_int32_t
+      integer(c_int8_t), intent(in) :: buf(*)
+      integer(c_size_t), value :: buflen
+      integer(c_int32_t), intent(out) :: out_n
+      integer(c_int) :: st
+    end function
+    function rkrdb_unpack_batch_item(buf, buflen, idx, out_xyz, cap, out_n) &
+        bind(C, name="rkrdb_unpack_batch_item") result(st)
+      import :: c_int, c_size_t, c_int8_t, c_double, c_int32_t
+      integer(c_int8_t), intent(in) :: buf(*)
+      integer(c_size_t), value :: buflen
+      integer(c_int32_t), value :: idx, cap
+      real(c_double), intent(out) :: out_xyz(*)
+      integer(c_int32_t), intent(out) :: out_n
+      integer(c_int) :: st
     end function
     function rkrdb_unpack_positions(buf, buflen, out_xyz, cap, out_n) bind(C, name="rkrdb_unpack_positions") result(st)
       import :: c_int, c_size_t, c_int8_t, c_double, c_int32_t
@@ -180,6 +209,43 @@ contains
       status = rkrdb_ok
       n = int(rc)
     end if
+  end subroutine
+
+  subroutine db_pack_frames(id, traj_ids, frame_idxs, nkeys, buf, buflen, n, status)
+    integer(c_size_t), intent(in) :: id, buflen
+    integer(c_int64_t), intent(in) :: traj_ids(*)
+    integer(c_int32_t), intent(in) :: frame_idxs(*)
+    integer(c_int32_t), intent(in) :: nkeys
+    integer(c_int8_t), intent(out) :: buf(*)
+    integer, intent(out) :: n
+    integer(c_int), intent(out) :: status
+    integer(c_int) :: rc
+    rc = rkrdb_pack_frames(id, traj_ids, frame_idxs, nkeys, buf, buflen)
+    if (rc < 0) then
+      status = rc
+      n = 0
+    else
+      status = rkrdb_ok
+      n = int(rc)
+    end if
+  end subroutine
+
+  subroutine db_unpack_batch_nframes(buf, buflen, nframes, status)
+    integer(c_int8_t), intent(in) :: buf(*)
+    integer(c_size_t), intent(in) :: buflen
+    integer(c_int32_t), intent(out) :: nframes
+    integer(c_int), intent(out) :: status
+    status = rkrdb_unpack_batch_nframes(buf, buflen, nframes)
+  end subroutine
+
+  subroutine db_unpack_batch_item(buf, buflen, idx, xyz, cap, natoms, status)
+    integer(c_int8_t), intent(in) :: buf(*)
+    integer(c_size_t), intent(in) :: buflen
+    integer(c_int32_t), intent(in) :: idx, cap
+    real(c_double), intent(out) :: xyz(*)
+    integer(c_int32_t), intent(out) :: natoms
+    integer(c_int), intent(out) :: status
+    status = rkrdb_unpack_batch_item(buf, buflen, idx, xyz, cap, natoms)
   end subroutine
 
   subroutine db_unpack_positions(buf, buflen, xyz, cap, natoms, status)

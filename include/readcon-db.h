@@ -25,6 +25,15 @@ int rkrdb_open_readonly(const char *path, size_t *out_id);
  */
 int rkrdb_pack_frame(size_t id, uint64_t traj_id, uint32_t frame_idx, uint8_t *buf,
                      size_t buflen);
+/**
+ * Pack many frames as one RCSB envelope (one Bcast on the caller comm).
+ * buf == NULL returns the required size.
+ */
+int rkrdb_pack_frames(size_t id, const uint64_t *traj_ids, const uint32_t *frame_idxs,
+                      uint32_t nkeys, uint8_t *buf, size_t buflen);
+int rkrdb_unpack_batch_nframes(const uint8_t *buf, size_t buflen, uint32_t *out_n);
+int rkrdb_unpack_batch_item(const uint8_t *buf, size_t buflen, uint32_t index, double *out_xyz,
+                            uint32_t capacity_atoms, uint32_t *out_natoms);
 /** Decode RCSO positions. No corpus handle. */
 int rkrdb_unpack_positions(const uint8_t *buf, size_t buflen, double *out_xyz,
                            uint32_t capacity_atoms, uint32_t *out_natoms);

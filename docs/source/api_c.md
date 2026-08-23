@@ -58,6 +58,8 @@ rkrdb_unpack_positions(buf, (size_t)nbytes, xyz, 4096, &natoms);
 free(buf);
 ```
 
+Many frames, one Bcast: `rkrdb_bcast_packed_frames(comm, 0, dir, trajs, frames, n, &buf, &nbytes)`.
+
 Fortran INTEGER handles go through `rkrdb_bcast_packed_frame_f`
 (`MPI_Comm_f2c` of the `MPI_Fint`). Standalone driver:
 `examples/mpi_bcast_frame.c` (`MPI_Initialized` + `MPI_Comm_dup`).

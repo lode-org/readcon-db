@@ -154,6 +154,104 @@ pub unsafe extern "C" fn rkrdb_pack_frame(
     .unwrap_or(RKRDB_NULL)
 }
 
+/// Pack many frames as one RCSB envelope. `buf == NULL` returns the required size.
+/// Rank 0 of the caller comm packs; others never open the env.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_pack_frames(
+    id: usize,
+    traj_ids: *const u64,
+    frame_idxs: *const u32,
+    nkeys: u32,
+    buf: *mut u8,
+    buflen: usize,
+) -> c_int {
+    if traj_ids.is_null() || frame_idxs.is_null() || nkeys == 0 {
+        return RKRDB_NULL;
+    }
+    let n = nkeys as usize;
+    let trajs = unsafe { std::slice::from_raw_parts(traj_ids, n) };
+    let frames = unsafe { std::slice::from_raw_parts(frame_idxs, n) };
+    let keys: Vec<FrameKey> = trajs
+        .iter()
+        .zip(frames.iter())
+        .map(|(&traj_id, &frame_idx)| FrameKey {
+            traj_id,
+            frame_idx,
+        })
+        .collect();
+    with_handle(id, |h| match h.corpus.pack_frames(&keys) {
+        Ok(bytes) => {
+            if buf.is_null() {
+                return Ok(bytes.len() as c_int);
+            }
+            if bytes.len() > buflen {
+                set_err(h, "buffer too small");
+                return Ok(RKRDB_ERR);
+            }
+            unsafe {
+                ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
+            }
+            Ok(bytes.len() as c_int)
+        }
+        Err(e) => {
+            set_err(h, e);
+            Ok(RKRDB_ERR)
+        }
+    })
+    .unwrap_or(RKRDB_NULL)
+}
+
+/// Number of RCSO blobs in an RCSB envelope. No corpus handle.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_unpack_batch_nframes(
+    buf: *const u8,
+    buflen: usize,
+    out_n: *mut u32,
+) -> c_int {
+    if buf.is_null() || out_n.is_null() {
+        return RKRDB_NULL;
+    }
+    let slice = unsafe { std::slice::from_raw_parts(buf, buflen) };
+    match crate::cooked_soa::decode_batch(slice) {
+        Ok(parts) => {
+            unsafe { *out_n = parts.len() as u32 };
+            RKRDB_OK
+        }
+        Err(_) => RKRDB_ERR,
+    }
+}
+
+/// Unpack one RCSO item from an RCSB envelope into xyz. No corpus handle.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_unpack_batch_item(
+    buf: *const u8,
+    buflen: usize,
+    index: u32,
+    out_xyz: *mut f64,
+    capacity_atoms: u32,
+    out_natoms: *mut u32,
+) -> c_int {
+    if buf.is_null() || out_xyz.is_null() || out_natoms.is_null() {
+        return RKRDB_NULL;
+    }
+    let slice = unsafe { std::slice::from_raw_parts(buf, buflen) };
+    let parts = match crate::cooked_soa::decode_batch(slice) {
+        Ok(p) => p,
+        Err(_) => return RKRDB_ERR,
+    };
+    let item = match parts.get(index as usize) {
+        Some(b) => b,
+        None => return RKRDB_NOT_FOUND,
+    };
+    rkrdb_unpack_positions(
+        item.as_ptr(),
+        item.len(),
+        out_xyz,
+        capacity_atoms,
+        out_natoms,
+    )
+}
+
 /// Unpack RCSO positions (no corpus handle — MPI worker side).
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_unpack_positions(

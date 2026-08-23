@@ -48,6 +48,19 @@ xyz = ConCorpus.unpack_positions(blob)
 comm.Free()
 ```
 
+Many frames, one collective:
+
+```python
+blob = bcast_packed_frames(comm, "/scratch/corpus", [(1, 0), (1, 1), (1, 2)])
+frames = ConCorpus.unpack_batch(blob)
+```
+
+Cooked H5MD interchange (h5py; fixed `natoms`; CON stays authority):
+
+```python
+db.export_h5md(traj_id=1, path="traj.h5")
+```
+
 Standalone: `examples/mpi_bcast_frame.py`.
 
 ## Cooked SoA (RCSO)

@@ -21,6 +21,21 @@ blob = bcast_packed_frame(lmp.world, dir, traj, frame)  # mpi4py Comm
 The other legal path: every rank `open_readonly` (shared mmap) when ranks
 touch **different** keys.
 
+Many frames on one collective: `rkrdb_bcast_packed_frames` / Python
+`bcast_packed_frames` (RCSB envelope). Grain is a NEB band or dump
+window, not one EndStep per image.
+
+Node-local ingest, then drain to the PFS (Frontier `/mnt/bb`, Aurora
+`/tmp`):
+
+```bash
+readcon-db shard-init /mnt/bb/$USER/campaign --shards 64
+readcon-db shard-ingest /mnt/bb/$USER/campaign --shard $S --start-id $T run.con
+# ranks close
+readcon-db drain /mnt/bb/$USER/campaign /lustre/orion/proj/campaign
+readcon-db compact-join /lustre/orion/proj/campaign /lustre/orion/proj/campaign_single
+```
+
 ## CON-native (default)
 
 Optimizers → **CON files** → `readcon-db` ingest → `select` / `get_frame` / C/`readcon` decode.

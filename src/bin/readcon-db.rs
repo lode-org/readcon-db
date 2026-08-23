@@ -34,6 +34,7 @@ fn usage() -> ExitCode {
   readcon-db shard-init <root> [--shards N]
   readcon-db shard-ingest <root> --shard S --start-id T <file.con>...
   readcon-db shard-select <root> [--symbol S] ...
+  readcon-db drain <local_root> <pfs_root>
   readcon-db compact-join <sharded_root> <single_dst>
   readcon-db compact-split <single_src> <sharded_dst> [--shards N]
   readcon-db compact-export-extxyz <corpus_or_shard_root> <out.xyz> [--sharded] [--symbol S]
@@ -414,6 +415,12 @@ fn main() -> ExitCode {
                 }
             }
 
+            "drain" => {
+                let src = args.first().ok_or("local_root")?.clone();
+                let dst = args.get(1).ok_or("pfs_root")?.clone();
+                let n = ShardedConCorpus::drain_to(&src, &dst)?;
+                println!("drained {n} shards {src} -> {dst} (close writers first)");
+            }
             "compact-join" => {
                 let src = args.first().ok_or("sharded_root")?.clone();
                 let dst = args.get(1).ok_or("single_dst")?.clone();

@@ -3,6 +3,9 @@
 ## Unreleased
 
 ### Features
+- Batched RCSO pack (`RCSB`): `pack_frames` / `rkrdb_pack_frames` / `bcast_packed_frames` on the caller comm
+- `readcon-db drain <local_root> <pfs_root>` copies shard dirs after node-local ingest
+- Python `export_h5md` writes cooked `[T][N][3]` via h5py (CON stays authority)
 - MPI pack/Bcast helper takes the **caller communicator** (`include/readcon-db-mpi.h`,
   Python `bcast_packed_frame(comm, ...)`, Fortran pack + `MPI_Bcast` on the INTEGER
   handle). Never `MPI_Init` if the host already did; never names the process-wide

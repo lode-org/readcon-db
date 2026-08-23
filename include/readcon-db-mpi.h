@@ -124,6 +124,99 @@ static inline int rkrdb_bcast_packed_frame(MPI_Comm comm, int root,
 }
 
 /**
+ * Pack many frames on `root` of `comm` as one RCSB envelope and Bcast
+ * that blob on `comm`. One collective for a NEB band / dump window.
+ */
+static inline int rkrdb_bcast_packed_frames(MPI_Comm comm, int root,
+                                            const char *corpus_dir,
+                                            const uint64_t *traj_ids,
+                                            const uint32_t *frame_idxs,
+                                            uint32_t nkeys, uint8_t **out_buf,
+                                            int *out_nbytes) {
+  int rank = 0;
+  int nbytes = 0;
+  uint8_t *buf = NULL;
+  int have_buf = 0;
+  int all_have = 0;
+
+  if (out_buf == NULL || out_nbytes == NULL)
+    return RKRDB_NULL;
+  *out_buf = NULL;
+  *out_nbytes = 0;
+
+  if (MPI_Comm_rank(comm, &rank) != MPI_SUCCESS)
+    return RKRDB_ERR;
+
+  if (rank == root) {
+    size_t id = 0;
+    if (corpus_dir == NULL || traj_ids == NULL || frame_idxs == NULL || nkeys == 0)
+      nbytes = RKRDB_NULL;
+    else if (rkrdb_open_readonly(corpus_dir, &id) != RKRDB_OK)
+      nbytes = RKRDB_ERR;
+    else {
+      int need = rkrdb_pack_frames(id, traj_ids, frame_idxs, nkeys, NULL, 0);
+      if (need < 0)
+        nbytes = need;
+      else {
+        buf = (uint8_t *)malloc((size_t)need);
+        if (buf == NULL)
+          nbytes = RKRDB_ERR;
+        else {
+          int n = rkrdb_pack_frames(id, traj_ids, frame_idxs, nkeys, buf,
+                                    (size_t)need);
+          if (n < 0) {
+            free(buf);
+            buf = NULL;
+            nbytes = n;
+          } else {
+            nbytes = n;
+          }
+        }
+      }
+      rkrdb_close(id);
+    }
+  }
+
+  if (MPI_Bcast(&nbytes, 1, MPI_INT, root, comm) != MPI_SUCCESS) {
+    free(buf);
+    return RKRDB_ERR;
+  }
+  if (nbytes < 0) {
+    free(buf);
+    return nbytes;
+  }
+
+  if (rank != root) {
+    if (nbytes == 0)
+      buf = NULL;
+    else
+      buf = (uint8_t *)malloc((size_t)nbytes);
+  }
+
+  have_buf = (nbytes == 0 || buf != NULL) ? 1 : 0;
+  if (MPI_Allreduce(&have_buf, &all_have, 1, MPI_INT, MPI_MIN, comm) !=
+      MPI_SUCCESS) {
+    free(buf);
+    return RKRDB_ERR;
+  }
+  if (!all_have) {
+    free(buf);
+    return RKRDB_ERR;
+  }
+
+  if (nbytes > 0) {
+    if (MPI_Bcast(buf, nbytes, MPI_BYTE, root, comm) != MPI_SUCCESS) {
+      free(buf);
+      return RKRDB_ERR;
+    }
+  }
+
+  *out_buf = buf;
+  *out_nbytes = nbytes;
+  return RKRDB_OK;
+}
+
+/**
  * Same helper for a Fortran INTEGER communicator (`MPI_Fint`).
  * Converts with MPI_Comm_f2c, then broadcasts on that handle.
  */
@@ -137,6 +230,17 @@ static inline int rkrdb_bcast_packed_frame_f(MPI_Fint comm_f, int root,
                                   traj_id, frame_idx, out_buf, out_nbytes);
 }
 
+static inline int rkrdb_bcast_packed_frames_f(MPI_Fint comm_f, int root,
+                                              const char *corpus_dir,
+                                              const uint64_t *traj_ids,
+                                              const uint32_t *frame_idxs,
+                                              uint32_t nkeys, uint8_t **out_buf,
+                                              int *out_nbytes) {
+  return rkrdb_bcast_packed_frames(MPI_Comm_f2c(comm_f), root, corpus_dir,
+                                   traj_ids, frame_idxs, nkeys, out_buf,
+                                   out_nbytes);
+}
+
 #ifdef __cplusplus
 } /* extern "C" */
 
@@ -147,6 +251,14 @@ inline int bcast_packed_frame(MPI_Comm comm, int root, const char *corpus_dir,
                               uint8_t **out_buf, int *out_nbytes) {
   return rkrdb_bcast_packed_frame(comm, root, corpus_dir, traj_id, frame_idx,
                                   out_buf, out_nbytes);
+}
+
+inline int bcast_packed_frames(MPI_Comm comm, int root, const char *corpus_dir,
+                               const uint64_t *traj_ids,
+                               const uint32_t *frame_idxs, uint32_t nkeys,
+                               uint8_t **out_buf, int *out_nbytes) {
+  return rkrdb_bcast_packed_frames(comm, root, corpus_dir, traj_ids, frame_idxs,
+                                   nkeys, out_buf, out_nbytes);
 }
 
 } // namespace readcon_db

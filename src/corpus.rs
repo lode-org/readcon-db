@@ -273,6 +273,15 @@ impl ConCorpus {
         crate::cooked_soa::CookedSoa::encode_frame(&fr)
     }
 
+    /// Many RCSO blobs in one RCSB envelope for a single Bcast on the caller comm.
+    pub fn pack_frames(&self, keys: &[FrameKey]) -> Result<Vec<u8>> {
+        let mut blobs = Vec::with_capacity(keys.len());
+        for k in keys {
+            blobs.push(self.pack_frame(*k)?);
+        }
+        crate::cooked_soa::encode_batch(&blobs)
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -1449,6 +1458,12 @@ mod tests {
         let ro = ConCorpus::open_readonly(dir.path()).unwrap();
         let packed2 = ro.pack_frame(key).unwrap();
         assert_eq!(packed, packed2);
+        let batch = ro
+            .pack_frames(&[key, key])
+            .unwrap();
+        let parts = crate::cooked_soa::decode_batch(&batch).unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0], packed);
         assert!(ConCorpus::open_readonly("/no/such/corpus-dir-readonly").is_err());
         assert!(ro
             .append_trajectory_path(9, fixture("tiny_cuh2.con"))

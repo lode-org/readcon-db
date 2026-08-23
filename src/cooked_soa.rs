@@ -169,6 +169,60 @@ impl CookedSoa {
     }
 }
 
+/// Length-prefixed RCSO blobs for one collective on the caller comm.
+/// Grain: many frames per Bcast (ADIOS BP5 `MinDeferredSize` is 4 MiB).
+pub const BATCH_MAGIC: &[u8; 4] = b"RCSB";
+pub const BATCH_VERSION: u32 = 1;
+
+pub fn encode_batch(blobs: &[Vec<u8>]) -> Result<Vec<u8>> {
+    if blobs.len() > u32::MAX as usize {
+        return Err(Error::Message("too many frames in pack batch".into()));
+    }
+    let mut out = Vec::new();
+    out.extend_from_slice(BATCH_MAGIC);
+    out.extend_from_slice(&BATCH_VERSION.to_le_bytes());
+    out.extend_from_slice(&(blobs.len() as u32).to_le_bytes());
+    for b in blobs {
+        if b.len() > u32::MAX as usize {
+            return Err(Error::Message("RCSO blob exceeds u32 length".into()));
+        }
+        out.extend_from_slice(&(b.len() as u32).to_le_bytes());
+        out.extend_from_slice(b);
+    }
+    Ok(out)
+}
+
+pub fn decode_batch(bytes: &[u8]) -> Result<Vec<Vec<u8>>> {
+    if bytes.len() < 12 {
+        return Err(Error::Message("RCSO batch truncated header".into()));
+    }
+    if &bytes[0..4] != BATCH_MAGIC {
+        return Err(Error::Message("RCSO batch bad magic".into()));
+    }
+    let version = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+    if version != BATCH_VERSION {
+        return Err(Error::Message(format!(
+            "RCSO batch unsupported version {version}"
+        )));
+    }
+    let n = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let mut off = 12usize;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        if off + 4 > bytes.len() {
+            return Err(Error::Message("RCSO batch truncated length".into()));
+        }
+        let ln = u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap()) as usize;
+        off += 4;
+        if off + ln > bytes.len() {
+            return Err(Error::Message("RCSO batch truncated blob".into()));
+        }
+        out.push(bytes[off..off + ln].to_vec());
+        off += ln;
+    }
+    Ok(out)
+}
+
 fn read_vec3_block(bytes: &[u8], n: usize) -> Result<Vec<[f64; 3]>> {
     let mut out = Vec::with_capacity(n);
     let mut i = 0;
