@@ -496,6 +496,17 @@ impl ConCorpus {
         Ok(n_frames)
     }
 
+    /// [`Self::extend_trajectory_frames`] from a CON path: create the
+    /// trajectory or append frames after the live count.
+    pub fn extend_trajectory_path(&self, traj_id: TrajId, file: impl AsRef<Path>) -> Result<u32> {
+        let text = fs::read_to_string(file.as_ref())?;
+        let mut frames = Vec::new();
+        for item in ConFrameIterator::new(&text) {
+            frames.push(item.map_err(|e| Error::Parse(e.to_string()))?);
+        }
+        self.extend_trajectory_frames(traj_id, &frames, file.as_ref().display().to_string())
+    }
+
     fn clear_secondary(&self, wtxn: &mut RwTxn) -> Result<()> {
         self.idx_natoms.clear(wtxn)?;
         self.idx_symbol.clear(wtxn)?;
@@ -1501,6 +1512,17 @@ mod tests {
 
         let n3 = db.extend_trajectory_frames(10, &[fr], "mem-ext").unwrap();
         assert_eq!(n3, 2);
+    }
+
+    #[test]
+    fn extend_trajectory_path_creates_then_appends() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let path = fixture("tiny_cuh2.con");
+        let n1 = db.extend_trajectory_path(3, &path).unwrap();
+        assert!(n1 >= 1);
+        let n2 = db.extend_trajectory_path(3, &path).unwrap();
+        assert_eq!(n2, n1 * 2);
     }
 
     #[test]

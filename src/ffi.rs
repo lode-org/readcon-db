@@ -156,6 +156,40 @@ pub unsafe extern "C" fn rkrdb_append_trajectory(
     }
 }
 
+/// Create the trajectory or append frames after the live count.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_extend_trajectory(
+    id: usize,
+    traj_id: u64,
+    path: *const c_char,
+    out_n_frames: *mut u32,
+) -> c_int {
+    if path.is_null() {
+        return RKRDB_NULL;
+    }
+    let cpath = unsafe { CStr::from_ptr(path) };
+    let path = match cpath.to_str() {
+        Ok(s) => s,
+        Err(_) => return RKRDB_ERR,
+    };
+    let corpus = match corpus_arc(id) {
+        Ok(c) => c,
+        Err(c) => return c,
+    };
+    match corpus.extend_trajectory_path(traj_id, path) {
+        Ok(n) => {
+            if !out_n_frames.is_null() {
+                unsafe { *out_n_frames = n };
+            }
+            RKRDB_OK
+        }
+        Err(e) => {
+            set_err_id(id, e);
+            RKRDB_ERR
+        }
+    }
+}
+
 /// Select by required symbol (optional) and natoms range (use 0, UINT32_MAX for any).
 /// Results stored internally; use rkrdb_result_count / rkrdb_result_key.
 #[no_mangle]

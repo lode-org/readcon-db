@@ -18,6 +18,8 @@ int rkrdb_open(const char *path, size_t *out_id);
 int rkrdb_close(size_t id);
 int rkrdb_last_error(size_t id, char *buf, size_t buflen);
 int rkrdb_append_trajectory(size_t id, uint64_t traj_id, const char *path, uint32_t *out_n_frames);
+/** Create the trajectory or append CON frames after the live count. */
+int rkrdb_extend_trajectory(size_t id, uint64_t traj_id, const char *path, uint32_t *out_n_frames);
 int rkrdb_select_basic(size_t id, int64_t traj_id, const char *symbol, uint32_t natoms_min,
                        uint32_t natoms_max, uint32_t limit);
 int rkrdb_select_hash(size_t id, const uint8_t *hash16);
@@ -105,6 +107,13 @@ public:
     uint32_t n = 0;
     if (rkrdb_append_trajectory(id_, traj_id, path, &n) != RKRDB_OK)
       throw std::runtime_error("append failed");
+    return n;
+  }
+
+  uint32_t extend_trajectory(uint64_t traj_id, const char *path) {
+    uint32_t n = 0;
+    if (rkrdb_extend_trajectory(id_, traj_id, path, &n) != RKRDB_OK)
+      throw std::runtime_error("extend failed");
     return n;
   }
 
