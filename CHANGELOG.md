@@ -5,11 +5,15 @@
 ### Features
 - Batched RCSO pack (`RCSB`): `pack_frames` / `rkrdb_pack_frames` / `bcast_packed_frames` on the caller comm
 - `readcon-db drain <local_root> <pfs_root>` copies shard dirs after node-local ingest
-- Callers write units (`append_trajectory(..., units=)`, `set_units`);
-  aliases are canonicalized into CON metadata (`A` → `angstrom`)
+- Callers write units (`append_trajectory(..., units=)`,
+  `extend_trajectory(..., units=)`, `set_units`, CLI `--units`);
+  aliases are canonicalized into CON metadata (`A` → `angstrom`).
+  `set_units` converts stored numbers; append/extend stamp incoming
+  values.
 - H5MD export uses one engine unit system (Å, ps, kJ mol^{-1} Å^{-1});
   CON units convert through `unit_conversion_factor`. Python exposes that
-  function. Time is CON time or `i * timestep`, in ps.
+  function. Time is CON time or `i * timestep`, else the frame index, in
+  dest `ps`. Missing `units.time` is CON default `fs` (not dest `ps`).
 - Edges from `lattice_vectors` or boxl+angles; author/creator/boundary/unit
   attrs are fixed ASCII
 - `join_to_single_env` / `compact-join` / `join_corpus_dirs` refuse dest overwrite

@@ -33,6 +33,8 @@ pub const H5MD_LENGTH_CORE: &str = "angstrom";
 pub const H5MD_LENGTH_ATTR: &str = "Angstrom";
 pub const H5MD_TIME_CORE: &str = "ps";
 pub const H5MD_TIME_ATTR: &str = "ps";
+/// CON v3 default when `units.time` is absent (`default_v3_units_json`).
+pub const CON_TIME_DEFAULT: &str = "fs";
 pub const H5MD_FORCE_ATTR: &str = "kJ mol-1 Angstrom-1";
 /// 1 kJ mol^{-1} Å^{-1} in N. CODATA 2018 N_A.
 const KJ_MOL_ANGSTROM_SI: f64 = (1000.0 / 6.022_140_76e23) / 1e-10;
@@ -85,7 +87,7 @@ fn time_scale_to_ps(from: &str) -> Result<f64> {
 }
 
 fn frame_time_ps(h: &readcon_core::types::FrameHeader, frame_idx: u32) -> Result<f64> {
-    let from = header_unit(h, "time", H5MD_TIME_CORE);
+    let from = header_unit(h, "time", CON_TIME_DEFAULT);
     if let Some(t) = h.time() {
         return Ok(t * time_scale_to_ps(&from)?);
     }
@@ -400,5 +402,85 @@ mod tests {
         assert!(a.edges[3].abs() > 1e-9, "b_x from gamma != 90");
         let ortho = boxl_to_edges33(&frames[0].header.boxl);
         assert_ne!(a.edges, ortho.to_vec());
+    }
+
+    #[test]
+    fn collect_h5md_undeclared_time_is_con_fs() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let mut frames = Vec::new();
+        for item in readcon_core::iterators::ConFrameIterator::new(&text) {
+            frames.push(item.unwrap());
+        }
+        frames[0].header.set_time(12.5);
+        frames[0].header.metadata.remove("units");
+        db.append_trajectory_frames(1, &frames, "t").unwrap();
+        let a = db.collect_h5md(1).unwrap();
+        assert!(
+            (a.times[0] - 0.0125).abs() < 1e-12,
+            "12.5 with no units.time is CON fs -> 0.0125 ps, got {}",
+            a.times[0]
+        );
+    }
+
+    #[test]
+    fn collect_h5md_uses_i_times_timestep() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_multi_cuh2.con")).unwrap();
+        let mut frames = Vec::new();
+        for item in readcon_core::iterators::ConFrameIterator::new(&text) {
+            frames.push(item.unwrap());
+        }
+        assert!(frames.len() >= 2);
+        for fr in &mut frames {
+            fr.header.metadata.remove("time");
+            fr.header.set_timestep(10.0);
+            fr.header.metadata.remove("units");
+        }
+        db.append_trajectory_frames(1, &frames, "t").unwrap();
+        let a = db.collect_h5md(1).unwrap();
+        assert!(a.times.len() >= 2);
+        assert!((a.times[0] - 0.0).abs() < 1e-12, "got {}", a.times[0]);
+        assert!(
+            (a.times[1] - 0.01).abs() < 1e-12,
+            "i=1 * 10 fs -> 0.01 ps, got {}",
+            a.times[1]
+        );
+    }
+
+    #[test]
+    fn collect_h5md_set_units_converts_then_export_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let mut frames = Vec::new();
+        for item in readcon_core::iterators::ConFrameIterator::new(&text) {
+            frames.push(item.unwrap());
+        }
+        let box0 = frames[0].header.boxl[0];
+        frames[0].header.metadata.insert(
+            "units".into(),
+            serde_json::json!({"length":"angstrom","energy":"eV"}),
+        );
+        db.append_trajectory_frames(1, &frames, "t").unwrap();
+        let before = db.collect_h5md(1).unwrap();
+        db.set_trajectory_units(
+            1,
+            serde_json::json!({"length":"nm","energy":"eV"}),
+        )
+        .unwrap();
+        let after = db.collect_h5md(1).unwrap();
+        assert!((before.edges[0] - box0).abs() < 1e-9);
+        assert!((after.edges[0] - box0).abs() < 1e-9);
+        let u = db
+            .frame_units(crate::keys::FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(u["length"], "nm");
     }
 }

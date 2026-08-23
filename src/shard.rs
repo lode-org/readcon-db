@@ -142,9 +142,18 @@ impl ShardedConCorpus {
         traj_id: TrajId,
         file: impl AsRef<Path>,
     ) -> Result<u32> {
+        self.append_trajectory_path_units(traj_id, file, None)
+    }
+
+    pub fn append_trajectory_path_units(
+        &mut self,
+        traj_id: TrajId,
+        file: impl AsRef<Path>,
+        units: Option<serde_json::Value>,
+    ) -> Result<u32> {
         let sid = Self::shard_for_traj(traj_id, self.n_shards);
         let c = self.shard_mut(sid)?;
-        c.append_trajectory_path(traj_id, file)
+        c.append_trajectory_path_units(traj_id, file, units)
     }
 
     pub fn append_trajectory_str(
@@ -233,7 +242,7 @@ impl ShardedConCorpus {
             let to = dst.join(&name);
             if to.join("data.mdb").is_file() {
                 return Err(Error::Message(format!(
-                    "drain: dest {name} exists; refuse overwrite. Drain each node to a unique dest, then join."
+                    "drain: dest {name} exists; refuse overwrite. Drain each node to a unique dest, then join-drained."
                 )));
             }
             let ro = ConCorpus::open_readonly(&from)?;
@@ -633,6 +642,7 @@ mod compaction_tests {
         tids.sort_unstable();
         tids.dedup();
         assert_eq!(tids, vec![0, 2]);
+        assert!(join_drained_roots(&[dest_a, dest_b], &joined).is_err());
     }
 
     #[test]

@@ -136,10 +136,19 @@ def test_append_and_set_units_canonical(tmp_path):
     assert "angstrom" in raw
     assert "eV" in raw
     assert "fs" in raw
+    pos_a = np.asarray(db.get_positions(1, 0))
     db.set_units(1, {"length": "nm", "energy": "hartree", "time": "ps"})
     raw2 = db.get_units(1, 0)
     assert "nm" in raw2
+    pos_nm = np.asarray(db.get_positions(1, 0))
+    np.testing.assert_allclose(pos_nm, pos_a * 0.1)
     assert canonicalize_unit("A") == "angstrom"
+    out = tmp_path / "alias.h5"
+    db.export_h5md(1, str(out))
+    with h5py.File(out, "r") as f:
+        exported = f["particles/all/position/value"][0]
+        np.testing.assert_allclose(exported, pos_a, atol=1e-6)
+        assert _as_str(f["particles/all/position/time"].attrs["unit"]) == "ps"
 
 
 def test_unit_conversion_factor_length():
@@ -157,21 +166,9 @@ def test_pack_frames_unpack_batch(tmp_path):
     np.testing.assert_allclose(np.asarray(frames[0]), np.asarray(pos0))
 
 
-def _mda_accepts_bytes_units():
-    """H5MD 1.1 units are fixed ASCII. MDA 2.10 indexes attrs as dict keys
-    and does not decode bytes, so teach it the byte keys."""
+def test_export_h5md_mdanalysis_reader(tmp_path):
     from MDAnalysis.coordinates.H5MD import H5MDReader
 
-    for table in H5MDReader._unit_translation.values():
-        for key, val in list(table.items()):
-            if isinstance(key, str):
-                table[key.encode("ascii")] = val
-                table[np.bytes_(key.encode("ascii"))] = val
-    return H5MDReader
-
-
-def test_export_h5md_mdanalysis_reader(tmp_path):
-    H5MDReader = _mda_accepts_bytes_units()
     db = ConCorpus(str(tmp_path / "corpus"))
     n = db.append_trajectory(1, str(FIXTURE / "tiny_multi_cuh2.con"))
     out = tmp_path / "mda.h5"
@@ -184,10 +181,15 @@ def test_export_h5md_mdanalysis_reader(tmp_path):
 
 
 def test_export_h5md_mdanalysis_reader_with_forces(tmp_path):
-    H5MDReader = _mda_accepts_bytes_units()
+    from MDAnalysis.coordinates.H5MD import H5MDReader
+
     db = ConCorpus(str(tmp_path / "corpus"))
     db.append_trajectory(1, str(FIXTURE / "tiny_cuh2.con"))
-    n = db.extend_trajectory(1, str(FIXTURE / "tiny_cuh2_forces.con"))
+    n = db.extend_trajectory(
+        1,
+        str(FIXTURE / "tiny_cuh2_forces.con"),
+        units={"length": "angstrom", "energy": "eV"},
+    )
     out = tmp_path / "mda_f.h5"
     db.export_h5md(1, str(out))
     reader = H5MDReader(str(out), convert_units=True)
@@ -195,3 +197,35 @@ def test_export_h5md_mdanalysis_reader_with_forces(tmp_path):
     with h5py.File(out, "r") as f:
         assert "force" in f["particles/all"]
         _assert_fixed_ascii(f["particles/all/force/value"].attrs, "unit")
+
+
+def test_export_h5md_append_nm_scales_positions(tmp_path):
+    db = ConCorpus(str(tmp_path / "corpus"))
+    db.append_trajectory(
+        1,
+        str(FIXTURE / "tiny_cuh2.con"),
+        units={"length": "nm", "energy": "eV"},
+    )
+    native = np.asarray(db.get_positions(1, 0))
+    out = tmp_path / "nm.h5"
+    db.export_h5md(1, str(out))
+    with h5py.File(out, "r") as f:
+        t = f["particles/all/position/time"][:]
+        pos = f["particles/all/position/value"][0]
+        np.testing.assert_allclose(pos, native * 10.0)
+        assert t.shape[0] == 1
+
+
+def test_export_h5md_writes_header_time(tmp_path):
+    db = ConCorpus(str(tmp_path / "corpus"))
+    db.append_trajectory(
+        1,
+        str(FIXTURE / "tiny_cuh2.con"),
+        units={"length": "angstrom", "energy": "eV", "time": "fs"},
+    )
+    out = tmp_path / "t.h5"
+    db.export_h5md(1, str(out))
+    with h5py.File(out, "r") as f:
+        t = f["particles/all/position/time"][:]
+        assert t.shape == (1,)
+        assert np.isfinite(t).all()

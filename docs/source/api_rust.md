@@ -31,11 +31,24 @@ let hits = db.select(&sel)?;
 See crate docs (`cargo doc --open`) for `Error` variants and `ContentHash::to_hex`.
 
 ```rust
+use readcon_db::{
+    canonicalize_unit, join_drained_roots, ConCorpus, ShardedConCorpus,
+};
+
 let blob = db.pack_frames(&keys)?;
 let a = db.collect_h5md(1)?;
+db.append_trajectory_path_units(1, "run.con", Some(serde_json::json!({
+    "length": "A", "energy": "ev", "time": "femtosecond"
+})))?;
+db.set_trajectory_units(1, serde_json::json!({"length": "nm", "energy": "eV"}))?;
+let _ = canonicalize_unit("A")?;
 ShardedConCorpus::drain_to(src, dest)?;
 join_drained_roots(&[dest_a, dest_b], joined)?;
 ```
+
+`set_trajectory_units` converts stored numbers. `append_trajectory_path_units`
+and `extend_trajectory_path_units` stamp incoming frames. Missing
+`units.time` is CON `fs` when `collect_h5md` converts to dest `ps`.
 
 ## Cooked SoA (RCSO)
 

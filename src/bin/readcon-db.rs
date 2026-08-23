@@ -22,7 +22,7 @@ use readcon_db::{
 fn usage() -> ExitCode {
     eprintln!(
         "Usage:
-  readcon-db ingest <corpus_dir> [--start-id N] <file.con>...
+  readcon-db ingest <corpus_dir> [--start-id N] [--units JSON] <file.con>...
   readcon-db ingest-dir <corpus_dir> <dir_with_con_files>
   readcon-db select <corpus_dir> [--traj N] [--symbol S] [--natoms-min A] [--natoms-max B]
                      [--energy-min E] [--energy-max E] [--fmax-min F] [--fmax-max F]
@@ -37,7 +37,7 @@ fn usage() -> ExitCode {
   readcon-db dedup-export <corpus_dir> [same filters as select] -o out.xyz
   readcon-db reindex <corpus_dir>
   readcon-db shard-init <root> [--shards N]
-  readcon-db shard-ingest <root> --shard S --start-id T <file.con>...
+  readcon-db shard-ingest <root> --shard S --start-id T [--units JSON] <file.con>...
   readcon-db shard-select <root> [--symbol S] ...
   readcon-db drain <local_root> <pfs_root>
   readcon-db join-drained <single_dst> <drained_root>...
@@ -74,10 +74,17 @@ fn main() -> ExitCode {
                 let corpus = args.first().ok_or("corpus_dir")?.clone();
                 let mut start = 1u64;
                 let mut files = Vec::new();
+                let mut units = None;
                 let mut i = 1;
                 while i < args.len() {
                     if args[i] == "--start-id" {
                         start = args.get(i + 1).ok_or("id")?.parse()?;
+                        i += 2;
+                        continue;
+                    }
+                    if args[i] == "--units" {
+                        let raw = args.get(i + 1).ok_or("units json")?;
+                        units = Some(serde_json::from_str(raw)?);
                         i += 2;
                         continue;
                     }
@@ -87,7 +94,7 @@ fn main() -> ExitCode {
                 let db = ConCorpus::open(&corpus)?;
                 let mut tid = start;
                 for f in files {
-                    let n = db.append_trajectory_path(tid, &f)?;
+                    let n = db.append_trajectory_path_units(tid, &f, units.clone())?;
                     println!("traj {tid}: {n} frames from {f}");
                     tid += 1;
                 }
@@ -348,6 +355,7 @@ fn main() -> ExitCode {
                 let mut shard = None::<u32>;
                 let mut start = 1u64;
                 let mut files = Vec::new();
+                let mut units = None;
                 let mut i = 1;
                 while i < args.len() {
                     match args[i].as_str() {
@@ -357,6 +365,11 @@ fn main() -> ExitCode {
                         }
                         "--start-id" => {
                             start = args.get(i + 1).ok_or("id")?.parse()?;
+                            i += 2;
+                        }
+                        "--units" => {
+                            let raw = args.get(i + 1).ok_or("units json")?;
+                            units = Some(serde_json::from_str(raw)?);
                             i += 2;
                         }
                         _ => {
@@ -384,7 +397,7 @@ fn main() -> ExitCode {
                         )
                         .into());
                     }
-                    let n = db.append_trajectory_path(tid, &f)?;
+                    let n = db.append_trajectory_path_units(tid, &f, units.clone())?;
                     println!("shard {sid} traj {tid}: {n} frames from {f}");
                     tid += 1;
                     // skip ids that don't map to this shard

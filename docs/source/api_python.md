@@ -73,13 +73,16 @@ CON `units.length` / `units.time` / `units.energy` convert through
 `i * timestep`, else the frame index, all in `ps`.
 `unit_conversion_factor(from, to)` and `canonicalize_unit(expr)` are
 on the Python module. Callers write aliases (`A`, `ev`, `femtosecond`);
-`append_trajectory(..., units={...})` and `set_units(traj_id, {...})`
-store canonical names (`angstrom`, `eV`, `fs`) in CON metadata.
+`append_trajectory(..., units={...})`, `extend_trajectory(..., units={...})`,
+and `set_units(traj_id, {...})` store canonical names (`angstrom`, `eV`,
+`fs`) in CON metadata. `append` / `extend` stamp the incoming numbers;
+`set_units` converts stored numbers so the new label is honest.
 Mixed-force trajectories write a full `[T][N][3]` force dataset
 (zeros on frames without forces). Box `boundary` follows CON `pbc`
-(periodic when absent). `time` is CON `header.time()` or the frame
-index when that field is absent. `author`/`creator`/`boundary` attrs
-are fixed-length ASCII.
+(periodic when absent). Time is CON `header.time()`, or `i * timestep`,
+else the frame index. Missing `units.time` is CON default `fs` (then
+converted to dest `ps`). `author`/`creator`/`boundary` attrs are
+fixed-length ASCII; physical `unit` attrs are fixed-length UTF-8.
 
 Standalone: `examples/mpi_bcast_frame.py`.
 

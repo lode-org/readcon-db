@@ -30,7 +30,8 @@ Node-local ingest, then drain to the PFS (Frontier `/mnt/bb`, Aurora
 
 ```bash
 readcon-db shard-init /mnt/bb/$USER/campaign --shards 64
-readcon-db shard-ingest /mnt/bb/$USER/campaign --shard $S --start-id $T run.con
+readcon-db shard-ingest /mnt/bb/$USER/campaign --shard $S --start-id $T \
+    --units '{"length":"angstrom","energy":"eV","time":"fs"}' run.con
 # ranks close
 # One writer per shard id can drain to a shared dest.
 # Overlapping shard ids (more writers than shards): unique dest per node, then join.
@@ -48,6 +49,9 @@ from readcon_db import ConCorpus
 db = ConCorpus("/lustre/orion/proj/campaign_single")
 db.export_h5md(traj_id=1, path="traj.h5")
 ```
+
+Time on the file is dest `ps`: CON `header.time()`, or `i * timestep`,
+else the frame index. Missing `units.time` is CON `fs`.
 
 ## CON-native (default)
 

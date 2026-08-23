@@ -84,6 +84,12 @@ Foreign trajectories: **`readcon.read_chemfiles("traj.xyz")` → frames → inge
   `bcast_packed_frames`). The library never `MPI_Init`s and never names
   the process-wide world communicator; LAMMPS / mpi4py pass the comm they
   already own.
+- **H5MD interchange** — `export_h5md` / `collect_h5md` writes one
+  `[T][N][3]` trajectory (CON stays authority). Engine dest is Å / ps /
+  kJ mol^{-1} Angstrom^{-1}. Callers stamp units on ingest; missing `units.time` is
+  CON `fs`.
+- **Node-local drain/join** — `shard-ingest` then `drain` to a unique
+  dest (`data.mdb` only, refuse overwrite), then `join-drained`.
 
 Full ABI table, logo, Sphinx docs, and site: see `docs/`, `website/`, `assets/logo/`, `CHANGELOG.md`. Fortran module notes: `fortran/ReadConDb/`.
 

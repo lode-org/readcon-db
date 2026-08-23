@@ -69,6 +69,24 @@ int main(int argc, char **argv) {
             MPI_Finalize();
         return 2;
     }
+    {
+        uint8_t *batch = NULL;
+        int bn = 0;
+        uint64_t tids[1] = {traj};
+        uint32_t fids[1] = {frame};
+        int st2 = rkrdb_bcast_packed_frames(comm, 0, dir, tids, fids, 1, &batch, &bn);
+        if (st2 != RKRDB_OK) {
+            if (rank == 0)
+                fprintf(stderr, "bcast_packed_frames failed (%d)\n", st2);
+            free(buf);
+            free(batch);
+            MPI_Comm_free(&comm);
+            if (we_inited)
+                MPI_Finalize();
+            return 2;
+        }
+        free(batch);
+    }
 #else
     size_t id = 0;
     if (rkrdb_open_readonly(dir, &id) != RKRDB_OK) {

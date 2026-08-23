@@ -571,9 +571,9 @@ impl ConCorpus {
         self.append_trajectory_frames(traj_id, &frames, source)
     }
 
-    /// Canonicalize caller units and rewrite CON text for every frame of `traj_id`.
+    /// Rewrite every frame of `traj_id` into `units`. Stored numbers are
+    /// converted so the new label matches the values (not a silent relabel).
     pub fn set_trajectory_units(&self, traj_id: TrajId, units: serde_json::Value) -> Result<u32> {
-        let units = crate::units_canon::canonicalize_units_object(units)?;
         let keys = self.select(&Select::new().trajectory(traj_id))?;
         if keys.is_empty() {
             return Err(Error::Message("no frames for traj".into()));
@@ -583,7 +583,9 @@ impl ConCorpus {
         for k in &keys {
             old_hashes.push(self.frame_hash(*k)?);
             let mut fr = self.get_frame(*k)?;
-            fr.header.set_units(units.clone());
+            let merged = crate::units_canon::merge_units(fr.header.units(), units.clone())?;
+            crate::units_canon::rescale_frame_units(&mut fr, &merged)?;
+            fr.header.set_units(merged);
             frames.push(fr);
         }
         let prepared = Self::prepare_trajectory_frames(traj_id, &frames, 0)?;
@@ -702,10 +704,28 @@ impl ConCorpus {
     /// [`Self::extend_trajectory_frames`] from a CON path: create the
     /// trajectory or append frames after the live count.
     pub fn extend_trajectory_path(&self, traj_id: TrajId, file: impl AsRef<Path>) -> Result<u32> {
+        self.extend_trajectory_path_units(traj_id, file, None)
+    }
+
+    /// Append a CON path, optionally stamping canonical `units` on the new frames.
+    pub fn extend_trajectory_path_units(
+        &self,
+        traj_id: TrajId,
+        file: impl AsRef<Path>,
+        units: Option<serde_json::Value>,
+    ) -> Result<u32> {
         let text = fs::read_to_string(file.as_ref())?;
         let mut frames = Vec::new();
+        let units = match units {
+            Some(u) => Some(crate::units_canon::canonicalize_units_object(u)?),
+            None => None,
+        };
         for item in ConFrameIterator::new(&text) {
-            frames.push(item.map_err(|e| Error::Parse(e.to_string()))?);
+            let mut fr = item.map_err(|e| Error::Parse(e.to_string()))?;
+            if let Some(ref u) = units {
+                fr.header.set_units(u.clone());
+            }
+            frames.push(fr);
         }
         self.extend_trajectory_frames(traj_id, &frames, file.as_ref().display().to_string())
     }
