@@ -32,6 +32,8 @@ Node-local ingest, then drain to the PFS (Frontier `/mnt/bb`, Aurora
 readcon-db shard-init /mnt/bb/$USER/campaign --shards 64
 readcon-db shard-ingest /mnt/bb/$USER/campaign --shard $S --start-id $T run.con
 # ranks close
+# Partition shards (or traj ids) so two nodes never own the same shard_id,
+# then drain to one dest. drain refuses dest/shard_XXXX/data.mdb overwrite.
 readcon-db drain /mnt/bb/$USER/campaign /lustre/orion/proj/campaign
 readcon-db compact-join /lustre/orion/proj/campaign /lustre/orion/proj/campaign_single
 ```

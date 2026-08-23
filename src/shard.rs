@@ -290,6 +290,13 @@ mod tests {
         assert!(drained.join("shards.json").is_file());
         assert!(drained.join("shard_0000").join("data.mdb").is_file());
         assert!(!drained.join("shard_0000").join("lock.mdb").is_file());
+        let dest_sz = std::fs::metadata(drained.join("shard_0000").join("data.mdb"))
+            .unwrap()
+            .len();
+        assert!(
+            dest_sz < 64 * 1024 * 1024,
+            "compact snapshot must not materialize the 2 GiB map, got {dest_sz}"
+        );
         assert!(ShardedConCorpus::drain_to(root.as_path(), &drained).is_err());
         assert_eq!(keys.len(), 8);
     }
