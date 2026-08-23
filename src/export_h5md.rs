@@ -58,21 +58,42 @@ fn normalize_time_unit(raw: &str) -> String {
     }
 }
 
-fn time_unit_of(header: &readcon_core::types::ConFrameHeader) -> String {
+fn time_unit_of(header: &readcon_core::types::FrameHeader) -> String {
     header
-        .units()
+        .metadata
+        .get("units")
         .and_then(|u| u.get("time"))
         .and_then(|v| v.as_str())
         .map(normalize_time_unit)
         .unwrap_or_else(|| "ps".into())
 }
 
-fn edges33_from_header(h: &readcon_core::types::ConFrameHeader) -> [f64; 9] {
-    if let Some(lat) = h.lattice_vectors() {
-        return [
-            lat[0][0], lat[0][1], lat[0][2], lat[1][0], lat[1][1], lat[1][2], lat[2][0],
-            lat[2][1], lat[2][2],
-        ];
+fn edges33_from_header(h: &readcon_core::types::FrameHeader) -> [f64; 9] {
+    if let Some(arr) = h.metadata.get("lattice_vectors").and_then(|v| v.as_array()) {
+        if arr.len() == 3 {
+            let mut out = [0.0f64; 9];
+            let mut ok = true;
+            for (i, row) in arr.iter().enumerate() {
+                let Some(r) = row.as_array() else {
+                    ok = false;
+                    break;
+                };
+                if r.len() != 3 {
+                    ok = false;
+                    break;
+                }
+                for (j, c) in r.iter().enumerate() {
+                    let Some(x) = c.as_f64() else {
+                        ok = false;
+                        break;
+                    };
+                    out[i * 3 + j] = x;
+                }
+            }
+            if ok {
+                return out;
+            }
+        }
     }
     boxl_angles_to_edges33(&h.boxl, &h.angles)
 }
