@@ -299,6 +299,13 @@ mod tests {
         );
         assert!(ShardedConCorpus::drain_to(root.as_path(), &drained).is_err());
         assert_eq!(keys.len(), 8);
+        let joined = dir.path().join("joined");
+        let mut drained_root = ShardedConCorpus::open(&drained, n_shards).unwrap();
+        let njoin = drained_root.join_to_single_env(&joined).unwrap();
+        assert!(njoin >= n_shards);
+        let single = ConCorpus::open(&joined).unwrap();
+        let jk = single.select(&Select::new().require_symbol("Cu")).unwrap();
+        assert_eq!(jk.len(), keys.len());
     }
 
     #[test]
