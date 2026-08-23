@@ -303,7 +303,8 @@ impl ConCorpus {
                 data.display()
             )));
         }
-        self.env.copy_to_path(&data, CompactionOption::Enabled)?;
+        let mut f = fs::File::create(&data)?;
+        self.env.copy_to_file(&mut f, CompactionOption::Enabled)?;
         Ok(())
     }
 
