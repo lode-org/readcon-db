@@ -40,8 +40,17 @@ int rkrdb_unpack_positions(const uint8_t *buf, size_t buflen, double *out_xyz,
 int rkrdb_close(size_t id);
 int rkrdb_last_error(size_t id, char *buf, size_t buflen);
 int rkrdb_append_trajectory(size_t id, uint64_t traj_id, const char *path, uint32_t *out_n_frames);
+/** Optional `units_json` (`{"length":"A","energy":"ev"}`); NULL stamps nothing. */
+int rkrdb_append_trajectory_units(size_t id, uint64_t traj_id, const char *path,
+                                  const char *units_json, uint32_t *out_n_frames);
 /** Create the trajectory or append CON frames after the live count. */
 int rkrdb_extend_trajectory(size_t id, uint64_t traj_id, const char *path, uint32_t *out_n_frames);
+int rkrdb_extend_trajectory_units(size_t id, uint64_t traj_id, const char *path,
+                                  const char *units_json, uint32_t *out_n_frames);
+/** Convert stored numbers and rewrite CON units. `units_json` required. */
+int rkrdb_set_units(size_t id, uint64_t traj_id, const char *units_json, uint32_t *out_n_frames);
+/** Frame units JSON into `buf` (NUL-terminated). */
+int rkrdb_frame_units(size_t id, uint64_t traj_id, uint32_t frame_idx, char *buf, size_t buflen);
 int rkrdb_select_basic(size_t id, int64_t traj_id, const char *symbol, uint32_t natoms_min,
                        uint32_t natoms_max, uint32_t limit);
 int rkrdb_select_hash(size_t id, const uint8_t *hash16);
@@ -129,17 +138,26 @@ public:
   Corpus(const Corpus &) = delete;
   Corpus &operator=(const Corpus &) = delete;
 
-  uint32_t append_trajectory(uint64_t traj_id, const char *path) {
+  uint32_t append_trajectory(uint64_t traj_id, const char *path,
+                             const char *units_json = nullptr) {
     uint32_t n = 0;
-    if (rkrdb_append_trajectory(id_, traj_id, path, &n) != RKRDB_OK)
+    if (rkrdb_append_trajectory_units(id_, traj_id, path, units_json, &n) != RKRDB_OK)
       throw std::runtime_error("append failed");
     return n;
   }
 
-  uint32_t extend_trajectory(uint64_t traj_id, const char *path) {
+  uint32_t extend_trajectory(uint64_t traj_id, const char *path,
+                             const char *units_json = nullptr) {
     uint32_t n = 0;
-    if (rkrdb_extend_trajectory(id_, traj_id, path, &n) != RKRDB_OK)
+    if (rkrdb_extend_trajectory_units(id_, traj_id, path, units_json, &n) != RKRDB_OK)
       throw std::runtime_error("extend failed");
+    return n;
+  }
+
+  uint32_t set_units(uint64_t traj_id, const char *units_json) {
+    uint32_t n = 0;
+    if (rkrdb_set_units(id_, traj_id, units_json, &n) != RKRDB_OK)
+      throw std::runtime_error("set_units failed");
     return n;
   }
 

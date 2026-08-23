@@ -12,6 +12,8 @@ integer(c_int) :: status
 integer(c_int32_t) :: n
 call db_open("/tmp/corpus"//c_null_char, id, status)
 call db_append(id, 1_c_int64_t, "run.con", n, status)
+call db_append_units(id, 1_c_int64_t, "run.con", &
+  '{"length":"A","energy":"ev"}', n, status)
 call db_select_basic(id, 1_c_int64_t, "Cu", 1, 100000, 0, status)
 ```
 

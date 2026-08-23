@@ -313,11 +313,24 @@ pub unsafe extern "C" fn rkrdb_last_error(id: usize, buf: *mut c_char, buflen: u
     .unwrap_or(RKRDB_NULL)
 }
 
+fn parse_units_json(p: *const c_char) -> Result<Option<serde_json::Value>, c_int> {
+    if p.is_null() {
+        return Ok(None);
+    }
+    let s = unsafe { CStr::from_ptr(p) }.to_str().map_err(|_| RKRDB_ERR)?;
+    if s.is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str(s).map(Some).map_err(|_| RKRDB_ERR)
+}
+
+/// `units_json` is optional JSON (`{"length":"A","energy":"ev"}`). NULL stamps nothing.
 #[no_mangle]
-pub unsafe extern "C" fn rkrdb_append_trajectory(
+pub unsafe extern "C" fn rkrdb_append_trajectory_units(
     id: usize,
     traj_id: u64,
     path: *const c_char,
+    units_json: *const c_char,
     out_n_frames: *mut u32,
 ) -> c_int {
     if path.is_null() {
@@ -328,12 +341,15 @@ pub unsafe extern "C" fn rkrdb_append_trajectory(
         Ok(s) => s,
         Err(_) => return RKRDB_ERR,
     };
-    // Prepare+commit on Arc corpus **outside** handle mutex (concurrent writers on distinct handles).
+    let units = match parse_units_json(units_json) {
+        Ok(u) => u,
+        Err(c) => return c,
+    };
     let corpus = match corpus_arc(id) {
         Ok(c) => c,
         Err(c) => return c,
     };
-    match corpus.append_trajectory_path(traj_id, path) {
+    match corpus.append_trajectory_path_units(traj_id, path, units) {
         Ok(n) => {
             if !out_n_frames.is_null() {
                 unsafe { *out_n_frames = n };
@@ -347,12 +363,24 @@ pub unsafe extern "C" fn rkrdb_append_trajectory(
     }
 }
 
-/// Create the trajectory or append frames after the live count.
 #[no_mangle]
-pub unsafe extern "C" fn rkrdb_extend_trajectory(
+pub unsafe extern "C" fn rkrdb_append_trajectory(
     id: usize,
     traj_id: u64,
     path: *const c_char,
+    out_n_frames: *mut u32,
+) -> c_int {
+    rkrdb_append_trajectory_units(id, traj_id, path, ptr::null(), out_n_frames)
+}
+
+/// Create the trajectory or append frames after the live count.
+/// `units_json` is optional; NULL stamps nothing on the new frames.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_extend_trajectory_units(
+    id: usize,
+    traj_id: u64,
+    path: *const c_char,
+    units_json: *const c_char,
     out_n_frames: *mut u32,
 ) -> c_int {
     if path.is_null() {
@@ -363,17 +391,105 @@ pub unsafe extern "C" fn rkrdb_extend_trajectory(
         Ok(s) => s,
         Err(_) => return RKRDB_ERR,
     };
+    let units = match parse_units_json(units_json) {
+        Ok(u) => u,
+        Err(c) => return c,
+    };
     let corpus = match corpus_arc(id) {
         Ok(c) => c,
         Err(c) => return c,
     };
-    match corpus.extend_trajectory_path(traj_id, path) {
+    match corpus.extend_trajectory_path_units(traj_id, path, units) {
         Ok(n) => {
             if !out_n_frames.is_null() {
                 unsafe { *out_n_frames = n };
             }
             RKRDB_OK
         }
+        Err(e) => {
+            set_err_id(id, e);
+            RKRDB_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_extend_trajectory(
+    id: usize,
+    traj_id: u64,
+    path: *const c_char,
+    out_n_frames: *mut u32,
+) -> c_int {
+    rkrdb_extend_trajectory_units(id, traj_id, path, ptr::null(), out_n_frames)
+}
+
+/// Convert stored numbers and rewrite CON `units` for every frame of `traj_id`.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_set_units(
+    id: usize,
+    traj_id: u64,
+    units_json: *const c_char,
+    out_n_frames: *mut u32,
+) -> c_int {
+    if units_json.is_null() {
+        return RKRDB_NULL;
+    }
+    let units = match parse_units_json(units_json) {
+        Ok(Some(u)) => u,
+        Ok(None) => return RKRDB_ERR,
+        Err(c) => return c,
+    };
+    let corpus = match corpus_arc(id) {
+        Ok(c) => c,
+        Err(c) => return c,
+    };
+    match corpus.set_trajectory_units(traj_id, units) {
+        Ok(n) => {
+            if !out_n_frames.is_null() {
+                unsafe { *out_n_frames = n };
+            }
+            RKRDB_OK
+        }
+        Err(e) => {
+            set_err_id(id, e);
+            RKRDB_ERR
+        }
+    }
+}
+
+/// Write the frame `units` object as JSON into `buf` (NUL-terminated).
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_frame_units(
+    id: usize,
+    traj_id: u64,
+    frame_idx: u32,
+    buf: *mut c_char,
+    buflen: usize,
+) -> c_int {
+    if buf.is_null() || buflen == 0 {
+        return RKRDB_NULL;
+    }
+    let corpus = match corpus_arc(id) {
+        Ok(c) => c,
+        Err(c) => return c,
+    };
+    match corpus.frame_units(FrameKey {
+        traj_id,
+        frame_idx,
+    }) {
+        Ok(Some(v)) => {
+            let s = v.to_string();
+            if s.len() + 1 > buflen {
+                set_err_id(id, "frame_units buffer too small");
+                return RKRDB_ERR;
+            }
+            unsafe {
+                ptr::copy_nonoverlapping(s.as_ptr(), buf as *mut u8, s.len());
+                *buf.add(s.len()) = 0;
+            }
+            RKRDB_OK
+        }
+        Ok(None) => RKRDB_NOT_FOUND,
         Err(e) => {
             set_err_id(id, e);
             RKRDB_ERR
@@ -956,4 +1072,46 @@ fn _cs(s: &str) -> Result<CString, c_int> {
 #[allow(dead_code)]
 fn _ch(b: [u8; 16]) -> ContentHash {
     ContentHash(b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+    use std::path::PathBuf;
+
+    fn fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources/test")
+            .join(name)
+    }
+
+    #[test]
+    fn c_abi_append_units_canonical() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = CString::new(dir.path().to_str().unwrap()).unwrap();
+        let con = CString::new(fixture("tiny_cuh2.con").to_str().unwrap()).unwrap();
+        let units = CString::new(r#"{"length":"A","energy":"ev","time":"femtosecond"}"#).unwrap();
+        let mut id = 0usize;
+        let mut n = 0u32;
+        unsafe {
+            assert_eq!(rkrdb_open(path.as_ptr(), &mut id), RKRDB_OK);
+            assert_eq!(
+                rkrdb_append_trajectory_units(id, 1, con.as_ptr(), units.as_ptr(), &mut n),
+                RKRDB_OK
+            );
+            assert!(n >= 1);
+            let mut buf = vec![0i8; 256];
+            assert_eq!(
+                rkrdb_frame_units(id, 1, 0, buf.as_mut_ptr(), buf.len()),
+                RKRDB_OK
+            );
+            let s = CStr::from_ptr(buf.as_ptr()).to_str().unwrap();
+            assert!(s.contains("angstrom"), "{s}");
+            assert!(s.contains("eV"), "{s}");
+            assert!(s.contains("fs"), "{s}");
+            assert!(!s.contains("\"A\""), "{s}");
+            assert_eq!(rkrdb_close(id), RKRDB_OK);
+        }
+    }
 }

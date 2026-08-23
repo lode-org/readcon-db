@@ -9,6 +9,9 @@ size_t id;
 rkrdb_open("/tmp/corpus", &id);
 uint32_t n;
 rkrdb_append_trajectory(id, 1, "run.con", &n);
+rkrdb_append_trajectory_units(id, 1, "run.con",
+    "{\"length\":\"A\",\"energy\":\"ev\"}", &n);
+rkrdb_set_units(id, 1, "{\"length\":\"nm\",\"energy\":\"eV\"}", &n);
 rkrdb_select_basic(id, 1, "Cu", 1, 100000, 0);
 /* Metadata filters: flags bit0=forces, bit1=velocities, bit2=energy present */
 rkrdb_select_meta(id, /*traj*/ -1, "Cu", 1, 100000,
@@ -32,7 +35,8 @@ C++ RAII:
 ```cpp
 #include "readcon-db.h"
 readcon_db::Corpus db("/tmp/corpus");
-db.append_trajectory(1, "run.con");
+db.append_trajectory(1, "run.con", "{\"length\":\"A\",\"energy\":\"ev\"}");
+db.set_units(1, "{\"length\":\"nm\",\"energy\":\"eV\"}");
 db.select_basic(1, "Cu", 1, 100000, 0);
 db.select_meta(-1, "Cu", 1, 100000, -50.0, 0.0, 1, 1u, 0);
 ```

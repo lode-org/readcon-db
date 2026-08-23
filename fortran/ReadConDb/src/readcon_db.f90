@@ -2,10 +2,11 @@ module readcon_db
   use, intrinsic :: iso_c_binding
   implicit none
   private
-  public :: rkrdb_ok, rkrdb_err, db_open, db_open_readonly, db_close, db_append, db_select_basic, &
+  public :: rkrdb_ok, rkrdb_err, db_open, db_open_readonly, db_close, db_append, db_append_units, &
+            db_select_basic, &
             db_result_count, db_result_key, db_frame_hash, db_frame_formula, db_xxh3_128, &
             db_get_frame, db_pack_frame, db_pack_frames, db_unpack_positions, &
-            db_unpack_batch_nframes, db_unpack_batch_item
+            db_unpack_batch_nframes, db_unpack_batch_item, db_set_units, db_frame_units
 
   integer(c_int), parameter :: rkrdb_ok = 0
   integer(c_int), parameter :: rkrdb_err = -1
@@ -79,6 +80,33 @@ module readcon_db
       integer(c_int64_t), value :: traj_id
       character(kind=c_char), intent(in) :: path(*)
       integer(c_int32_t), intent(out) :: out_n
+      integer(c_int) :: st
+    end function
+    function rkrdb_append_trajectory_units(id, traj_id, path, units_json, out_n) &
+        bind(C, name="rkrdb_append_trajectory_units") result(st)
+      import :: c_char, c_int, c_size_t, c_int64_t, c_int32_t
+      integer(c_size_t), value :: id
+      integer(c_int64_t), value :: traj_id
+      character(kind=c_char), intent(in) :: path(*)
+      character(kind=c_char), intent(in) :: units_json(*)
+      integer(c_int32_t), intent(out) :: out_n
+      integer(c_int) :: st
+    end function
+    function rkrdb_set_units(id, traj_id, units_json, out_n) bind(C, name="rkrdb_set_units") result(st)
+      import :: c_char, c_int, c_size_t, c_int64_t, c_int32_t
+      integer(c_size_t), value :: id
+      integer(c_int64_t), value :: traj_id
+      character(kind=c_char), intent(in) :: units_json(*)
+      integer(c_int32_t), intent(out) :: out_n
+      integer(c_int) :: st
+    end function
+    function rkrdb_frame_units(id, traj_id, frame_idx, buf, buflen) &
+        bind(C, name="rkrdb_frame_units") result(st)
+      import :: c_char, c_int, c_size_t, c_int64_t, c_int32_t
+      integer(c_size_t), value :: id, buflen
+      integer(c_int64_t), value :: traj_id
+      integer(c_int32_t), value :: frame_idx
+      character(kind=c_char), intent(out) :: buf(*)
       integer(c_int) :: st
     end function
     function rkrdb_select_basic(id, traj_id, symbol, nmin, nmax, limit) bind(C, name="rkrdb_select_basic") result(st)
@@ -273,6 +301,53 @@ contains
     character(kind=c_char), allocatable :: cp(:)
     cp = f_c_string(path)
     status = rkrdb_append_trajectory(id, traj_id, cp, n_frames)
+  end subroutine
+
+  subroutine db_append_units(id, traj_id, path, units_json, n_frames, status)
+    integer(c_size_t), intent(in) :: id
+    integer(c_int64_t), intent(in) :: traj_id
+    character(len=*), intent(in) :: path, units_json
+    integer(c_int32_t), intent(out) :: n_frames
+    integer(c_int), intent(out) :: status
+    character(kind=c_char), allocatable :: cp(:), cu(:)
+    cp = f_c_string(path)
+    cu = f_c_string(units_json)
+    status = rkrdb_append_trajectory_units(id, traj_id, cp, cu, n_frames)
+  end subroutine
+
+  subroutine db_set_units(id, traj_id, units_json, n_frames, status)
+    integer(c_size_t), intent(in) :: id
+    integer(c_int64_t), intent(in) :: traj_id
+    character(len=*), intent(in) :: units_json
+    integer(c_int32_t), intent(out) :: n_frames
+    integer(c_int), intent(out) :: status
+    character(kind=c_char), allocatable :: cu(:)
+    cu = f_c_string(units_json)
+    status = rkrdb_set_units(id, traj_id, cu, n_frames)
+  end subroutine
+
+  subroutine db_frame_units(id, traj_id, frame_idx, buf, status)
+    integer(c_size_t), intent(in) :: id
+    integer(c_int64_t), intent(in) :: traj_id
+    integer(c_int32_t), intent(in) :: frame_idx
+    character(len=*), intent(out) :: buf
+    integer(c_int), intent(out) :: status
+    character(kind=c_char) :: tmp(len(buf)+1)
+    integer :: i, n
+    tmp = c_null_char
+    status = rkrdb_frame_units(id, traj_id, frame_idx, tmp, int(size(tmp), c_size_t))
+    buf = ' '
+    if (status /= rkrdb_ok) return
+    n = 0
+    do i = 1, size(tmp)
+      if (tmp(i) == c_null_char) exit
+      n = i
+    end do
+    if (n > 0) then
+      do i = 1, min(n, len(buf))
+        buf(i:i) = tmp(i)
+      end do
+    end if
   end subroutine
 
   subroutine db_select_basic(id, traj_id, symbol, nmin, nmax, limit, status)
