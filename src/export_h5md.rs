@@ -23,8 +23,12 @@ pub struct H5mdArrays {
     pub boundary: [String; 3],
     /// `[T]` CON `header.time()` when present, else frame index.
     pub times: Vec<f64>,
-    /// H5MD time unit (`fs` when CON units.time is fs; `ps` for dummy index).
+    /// H5MD time unit after metatomic conversion (`fs`/`ps`/`ns`/`s`).
     pub time_unit: String,
+    /// H5MD length unit of `positions` / `edges` (always Angstrom after convert).
+    pub length_unit: String,
+    /// H5MD force unit of `forces` (`kJ mol-1 Angstrom-1` after convert).
+    pub force_unit: String,
 }
 
 fn boundary_from_pbc(pbc: Option<[bool; 3]>) -> [String; 3] {
@@ -44,28 +48,32 @@ fn boxl_to_edges33(boxl: &[f64; 3]) -> [f64; 9] {
     ]
 }
 
-fn normalize_time_unit(raw: &str) -> String {
-    let s = raw.trim();
-    if s.eq_ignore_ascii_case("fs")
-        || s.eq_ignore_ascii_case("femtosecond")
-        || s.eq_ignore_ascii_case("femtoseconds")
-    {
-        "fs".into()
-    } else if s.eq_ignore_ascii_case("ns") || s.eq_ignore_ascii_case("nanosecond") {
-        "ns".into()
-    } else {
-        "ps".into()
-    }
+fn uc(from: &str, to: &str) -> Result<f64> {
+    readcon_core::units::unit_conversion_factor(from, to)
+        .map_err(|e| crate::error::Error::Message(e.to_string()))
 }
 
-fn time_unit_of(header: &readcon_core::types::FrameHeader) -> String {
-    header
-        .metadata
-        .get("units")
-        .and_then(|u| u.get("time"))
-        .and_then(|v| v.as_str())
-        .map(normalize_time_unit)
-        .unwrap_or_else(|| "ps".into())
+fn header_unit(h: &readcon_core::types::FrameHeader, dim: &str, default: &str) -> String {
+    h.unit_for(dim)
+        .map(str::to_string)
+        .unwrap_or_else(|| default.to_string())
+}
+
+/// MDA H5MD time attr for a CON time unit. Convert values with `uc(from, dest)`.
+fn h5md_time_dest(con_time: Option<&str>) -> &'static str {
+    let Some(u) = con_time else {
+        return "ps";
+    };
+    let l = u.to_ascii_lowercase();
+    if l == "fs" || l.starts_with("femto") {
+        "fs"
+    } else if l == "ns" || l.starts_with("nano") {
+        "ns"
+    } else if l == "s" || l.starts_with("sec") {
+        "s"
+    } else {
+        "ps"
+    }
 }
 
 fn edges33_from_header(h: &readcon_core::types::FrameHeader) -> [f64; 9] {
@@ -131,15 +139,26 @@ impl ConCorpus {
             .collect();
         let n_frames = keys.len();
         let boundary = boundary_from_pbc(first.header.pbc());
-        let time_unit = time_unit_of(&first.header);
+        let time_dest = h5md_time_dest(first.header.unit_for("time"));
         let mut positions = Vec::with_capacity(n_frames * natoms * 3);
         let mut edges = Vec::with_capacity(n_frames * 9);
         let mut times = Vec::with_capacity(n_frames);
         let mut force_rows: Vec<Option<Vec<[f64; 3]>>> = Vec::with_capacity(n_frames);
         for k in &keys {
             let fr = self.get_frame(*k)?;
-            times.push(fr.header.time().unwrap_or(f64::from(k.frame_idx)));
-            edges.extend_from_slice(&edges33_from_header(&fr.header));
+            let length_u = header_unit(&fr.header, "length", "angstrom");
+            let energy_u = header_unit(&fr.header, "energy", "eV");
+            let len_scale = uc(&length_u, "angstrom")?;
+            if let Some(t) = fr.header.time() {
+                let from_t = header_unit(&fr.header, "time", time_dest);
+                times.push(t * uc(&from_t, time_dest)?);
+            } else {
+                times.push(f64::from(k.frame_idx));
+            }
+            let e33 = edges33_from_header(&fr.header);
+            for x in e33 {
+                edges.push(x * len_scale);
+            }
             let packed = self.pack_frame(*k)?;
             let cooked = crate::cooked_soa::CookedSoa::decode(&packed)?;
             if cooked.natoms as usize != natoms {
@@ -148,9 +167,15 @@ impl ConCorpus {
                 ));
             }
             for p in &cooked.positions {
-                positions.extend_from_slice(p);
+                positions.extend_from_slice(&[p[0] * len_scale, p[1] * len_scale, p[2] * len_scale]);
             }
-            force_rows.push(cooked.forces);
+            let force_from = format!("{energy_u} / {length_u}");
+            let fscale = uc(&force_from, "kJ / mol / angstrom")?;
+            force_rows.push(cooked.forces.map(|rows| {
+                rows.into_iter()
+                    .map(|r| [r[0] * fscale, r[1] * fscale, r[2] * fscale])
+                    .collect()
+            }));
         }
         let forces = if force_rows.iter().any(|f| f.is_some()) {
             let mut fbuf = vec![0.0f64; n_frames * natoms * 3];
@@ -177,7 +202,9 @@ impl ConCorpus {
             forces,
             boundary,
             times,
-            time_unit,
+            time_unit: time_dest.to_string(),
+            length_unit: "Angstrom".into(),
+            force_unit: "kJ mol-1 Angstrom-1".into(),
         })
     }
 }
@@ -267,6 +294,34 @@ mod tests {
         let a = db.collect_h5md(1).unwrap();
         assert_eq!(a.times[0], 12.5);
         assert_eq!(a.time_unit, "fs");
+    }
+
+    #[test]
+    fn collect_h5md_converts_force_via_core_units() {
+        let factor = readcon_core::units::unit_conversion_factor(
+            "eV / angstrom",
+            "kJ / mol / angstrom",
+        )
+        .unwrap();
+        assert!(factor > 90.0 && factor < 100.0, "got {factor}");
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2_forces.con"))
+            .unwrap();
+        let a = db.collect_h5md(1).unwrap();
+        let f = a.forces.expect("forces");
+        let cooked = crate::cooked_soa::CookedSoa::decode(
+            &db.pack_frame(crate::keys::FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let native = cooked.forces.expect("native");
+        assert!((f[0] - native[0][0] * factor).abs() < 1e-8);
+        assert_eq!(a.force_unit, "kJ mol-1 Angstrom-1");
+        assert_eq!(a.length_unit, "Angstrom");
     }
 
     #[test]

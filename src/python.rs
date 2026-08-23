@@ -151,7 +151,7 @@ impl PyConCorpus {
             pos_arr,
             step.clone(),
             time.clone(),
-            "Angstrom",
+            a.length_unit.as_str(),
             a.time_unit.as_str(),
         )?;
         let edges_arr = np
@@ -163,15 +163,12 @@ impl PyConCorpus {
             edges_arr,
             step.clone(),
             time.clone(),
-            "Angstrom",
+            a.length_unit.as_str(),
             a.time_unit.as_str(),
         )?;
         if let Some(fbuf) = a.forces {
-            // CON native eV/A -> MDA H5MD table "kJ mol-1 Angstrom-1"
-            const EV_TO_KJ_MOL: f64 = 96.485_332_123_310_02;
-            let kj: Vec<f64> = fbuf.iter().map(|x| x * EV_TO_KJ_MOL).collect();
             let f_arr = np
-                .call_method("asarray", (kj,), Some(&dtype_kw))?
+                .call_method("asarray", (fbuf,), Some(&dtype_kw))?
                 .call_method1("reshape", ((n_frames, natoms, 3),))?;
             write_td(
                 &all,
@@ -179,7 +176,7 @@ impl PyConCorpus {
                 f_arr,
                 step,
                 time,
-                "kJ mol-1 Angstrom-1",
+                a.force_unit.as_str(),
                 a.time_unit.as_str(),
             )?;
         }
@@ -605,10 +602,18 @@ fn bcast_packed_frames(
     blob.ok_or_else(|| PyRuntimeError::new_err("empty pack on root"))
 }
 
+/// Metatomic-style conversion: `value_to = factor * value_from`.
+#[pyfunction]
+fn unit_conversion_factor(from_unit: &str, to_unit: &str) -> PyResult<f64> {
+    readcon_core::units::unit_conversion_factor(from_unit, to_unit)
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+}
+
 #[pymodule]
 fn readcon_db(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyConCorpus>()?;
     m.add_function(wrap_pyfunction!(bcast_packed_frame, m)?)?;
     m.add_function(wrap_pyfunction!(bcast_packed_frames, m)?)?;
+    m.add_function(wrap_pyfunction!(unit_conversion_factor, m)?)?;
     Ok(())
 }

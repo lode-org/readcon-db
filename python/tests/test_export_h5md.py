@@ -4,7 +4,7 @@ from pathlib import Path
 
 import h5py
 import numpy as np
-from readcon_db import ConCorpus
+from readcon_db import ConCorpus, unit_conversion_factor
 
 FIXTURE = Path(__file__).resolve().parents[2] / "resources" / "test"
 
@@ -86,7 +86,8 @@ def test_export_h5md_mixed_forces_zero_pad(tmp_path):
                 idx = i
                 break
         assert native is not None
-        np.testing.assert_allclose(force[idx], native * 96.48533212331002)
+        scale = unit_conversion_factor("eV / angstrom", "kJ / mol / angstrom")
+        np.testing.assert_allclose(force[idx], native * scale)
         bnd = f["particles/all/box"].attrs["boundary"]
         assert len(bnd) == 3
 
