@@ -290,4 +290,14 @@ mod tests {
         assert!(CookedSoa::decode(b"XXXX").is_err());
         assert!(CookedSoa::try_decode(b"XXXX").is_none());
     }
+
+    #[test]
+    fn rcsb_batch_roundtrip() {
+        let a = vec![1u8, 2, 3];
+        let b = vec![4u8, 5];
+        let enc = encode_batch(&[a.clone(), b.clone()]).unwrap();
+        let dec = decode_batch(&enc).unwrap();
+        assert_eq!(dec, vec![a, b]);
+        assert!(decode_batch(&enc[..8]).is_err());
+    }
 }
