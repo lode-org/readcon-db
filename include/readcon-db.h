@@ -67,6 +67,9 @@ int rkrdb_archive_append(size_t id, const double *positions, const double *force
 int rkrdb_archive_flush(size_t id);
 /** Rows committed to the corpus (including prior runs). */
 int rkrdb_archive_count(size_t id, uint64_t *out_count);
+/** Rows accepted by append, including any still queued (prior runs
+ *  included); key cache refreshes on this. */
+int rkrdb_archive_appended(size_t id, uint64_t *out_count);
 /** Rows the writer thread could not persist. */
 int rkrdb_archive_dropped(size_t id, uint64_t *out_count);
 /** Fetch committed row `index` in caller atom order; buffers hold 3*natoms
