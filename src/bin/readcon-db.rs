@@ -4,6 +4,9 @@
 //! readcon-db ingest <corpus_dir> --start-id 1 <file.con>...
 //! readcon-db ingest-dir <corpus_dir> <con_directory>
 //! readcon-db select <corpus_dir> [filters...] [--export out.xyz]
+//! readcon-db drain <local_root> <pfs_root>
+//! readcon-db join-drained <single_dst> <drained_root>...
+//! readcon-db compact-join <sharded_root> <single_dst>
 //! readcon-db dedup-export <corpus_dir> [filters...] -o train.xyz
 //! readcon-db reindex <corpus_dir>
 //! readcon-db hash-file <file.con>

@@ -58,7 +58,19 @@ rkrdb_unpack_positions(buf, (size_t)nbytes, xyz, 4096, &natoms);
 free(buf);
 ```
 
-Many frames, one Bcast: `rkrdb_bcast_packed_frames(comm, 0, dir, trajs, frames, n, &buf, &nbytes)`.
+Many frames, one Bcast:
+
+```c
+int st = rkrdb_bcast_packed_frames(comm, 0, dir, trajs, frames, nkeys, &buf, &nbytes);
+uint32_t nfr = 0;
+rkrdb_unpack_batch_nframes(buf, (size_t)nbytes, &nfr);
+uint32_t natoms = 0;
+double xyz[3 * 4096];
+rkrdb_unpack_batch_item(buf, (size_t)nbytes, 0, xyz, 4096, &natoms);
+free(buf);
+```
+
+C++ `readcon_db::Corpus::pack_frames` / `unpack_batch_nframes` / `unpack_batch_item`.
 
 Fortran INTEGER handles go through `rkrdb_bcast_packed_frame_f`
 (`MPI_Comm_f2c` of the `MPI_Fint`). Standalone driver:

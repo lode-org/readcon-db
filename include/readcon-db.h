@@ -190,6 +190,20 @@ public:
     return rkrdb_pack_frame(id_, traj_id, frame_idx, buf, buflen);
   }
 
+  int pack_frames(const uint64_t *traj_ids, const uint32_t *frame_idxs, uint32_t nkeys,
+                  uint8_t *buf, size_t buflen) {
+    return rkrdb_pack_frames(id_, traj_ids, frame_idxs, nkeys, buf, buflen);
+  }
+
+  static int unpack_batch_nframes(const uint8_t *buf, size_t buflen, uint32_t *out_n) {
+    return rkrdb_unpack_batch_nframes(buf, buflen, out_n);
+  }
+
+  static int unpack_batch_item(const uint8_t *buf, size_t buflen, uint32_t index, double *out_xyz,
+                               uint32_t capacity_atoms, uint32_t *out_natoms) {
+    return rkrdb_unpack_batch_item(buf, buflen, index, out_xyz, capacity_atoms, out_natoms);
+  }
+
   size_t id() const { return id_; }
 };
 

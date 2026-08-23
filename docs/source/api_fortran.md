@@ -38,9 +38,10 @@ call MPI_Bcast(buf, nbytes, MPI_BYTE, 0, comm, ierr)
 call db_unpack_positions(buf, int(nbytes, c_size_t), xyz, cap, natoms, status)
 ```
 
-C helper from Fortran INTEGER: `rkrdb_bcast_packed_frame_f` in
-`include/readcon-db-mpi.h` (`MPI_Comm_f2c`). Standalone:
-`examples/mpi_bcast_frame.f90`.
+C helpers from Fortran INTEGER: `rkrdb_bcast_packed_frame_f` and
+`rkrdb_bcast_packed_frames_f` in `include/readcon-db-mpi.h`
+(`MPI_Comm_f2c`). Batched helper packs an RCSB envelope on root and
+`MPI_Bcast`s it on `comm`. Standalone: `examples/mpi_bcast_frame.f90`.
 
 ## Cooked SoA (RCSO)
 

@@ -39,6 +39,16 @@ readcon-db join-drained /lustre/orion/proj/campaign_single \
     /lustre/orion/proj/campaign/node_*
 ```
 
+## H5MD interchange
+
+Cooked `[T][N][3]` export (CON stays authority in the corpus):
+
+```python
+from readcon_db import ConCorpus
+db = ConCorpus("/lustre/orion/proj/campaign_single")
+db.export_h5md(traj_id=1, path="traj.h5")
+```
+
 ## CON-native (default)
 
 Optimizers → **CON files** → `readcon-db` ingest → `select` / `get_frame` / C/`readcon` decode.

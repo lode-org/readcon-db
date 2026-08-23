@@ -39,7 +39,7 @@ never names the process-wide world handle.
 
 ```python
 from mpi4py import MPI
-from readcon_db import ConCorpus, bcast_packed_frame
+from readcon_db import ConCorpus, bcast_packed_frame, bcast_packed_frames
 
 # Host-owned comm. A LAMMPS Python fix passes lmp.world (or a split).
 comm = MPI.COMM_WORLD.Dup()
@@ -51,6 +51,7 @@ comm.Free()
 Many frames, one collective:
 
 ```python
+from readcon_db import ConCorpus, bcast_packed_frames
 blob = bcast_packed_frames(comm, "/scratch/corpus", [(1, 0), (1, 1), (1, 2)])
 frames = ConCorpus.unpack_batch(blob)
 ```
@@ -62,13 +63,16 @@ db.export_h5md(traj_id=1, path="traj.h5")
 ```
 
 The file has `/h5md` version `[1,1]` with `author`/`creator`,
-`particles/all/position/{value,step,time}` of shape `[T][N][3]`,
-`box/edges/{value,step,time}` of shape `[T][3][3]`, integer-Z `species`,
-and unit attributes (`Angstrom`, time `ps`, force `kJ mol-1 Angstrom-1`
-converted from CON eV/A). Mixed-force trajectories write a full
-`[T][N][3]` force dataset (zeros on frames without forces). Box
-`boundary` follows CON `pbc` (periodic when absent). `time` is CON
-`header.time()` or the frame index when that field is absent.
+`particles/all/position/value` of shape `[T][N][3]`,
+`position/step` and `position/time` of shape `[T]`,
+`box/edges/value` of shape `[T][3][3]`, integer-Z `species`,
+and unit attributes (`Angstrom`, time `fs` when CON `units.time` is
+`fs` else `ps`, force `kJ mol-1 Angstrom-1` converted from CON eV/A).
+Mixed-force trajectories write a full `[T][N][3]` force dataset
+(zeros on frames without forces). Box `boundary` follows CON `pbc`
+(periodic when absent). `time` is CON `header.time()` or the frame
+index when that field is absent. `author`/`creator`/`boundary` attrs
+are fixed-length ASCII.
 
 Standalone: `examples/mpi_bcast_frame.py`.
 

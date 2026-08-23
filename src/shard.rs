@@ -1,8 +1,9 @@
 //! HPC multi-writer: one LMDB env **per shard** so writers do not serialize on a single
 //! write_txn. Route `traj_id % n_shards` (or explicit `writer_id`) to a shard directory.
 //!
-//! Millions of ranks: assign `shard = rank % n_shards` or use traj_id space partitioned by
-//! site; each rank opens **only its shard** for append. Global select fans out across shards.
+//! One writer owns each `shard_id` across the job (`traj_id % n_shards`). If many
+//! ranks share a shard id, each node keeps a private tree, `drain`s to a unique dest,
+//! then `join_drained_roots`. Global select fans out across shards.
 //!
 //! This is **not** multi-writer inside one LMDB env (impossible). It is **partitioned writers**,
 //! the standard embedded pattern for high write concurrency on one filesystem.
@@ -115,7 +116,8 @@ impl ShardedConCorpus {
         Ok((sid, corpus))
     }
 
-    /// Open a **single** shard by id (rank `r` uses `open_shard(root, r % n)`).
+    /// Open a **single** shard by id. That rank must be the only writer of
+    /// `shard_id` in the job, or drain to a unique dest and `join_drained_roots`.
     pub fn open_shard(root: impl AsRef<Path>, shard_id: u32) -> Result<ConCorpus> {
         let root = root.as_ref();
         let manifest_path = root.join(MANIFEST);
@@ -405,7 +407,10 @@ impl ShardedConCorpus {
     pub fn join_to_single_env(&mut self, dst: impl AsRef<Path>) -> Result<u32> {
         let dst = dst.as_ref();
         if dst.exists() {
-            std::fs::remove_dir_all(dst).ok();
+            return Err(Error::Message(format!(
+                "join dest exists: {}",
+                dst.display()
+            )));
         }
         let out = ConCorpus::open(dst)?;
         let mut seen_traj = std::collections::BTreeSet::new();
@@ -424,7 +429,10 @@ impl ShardedConCorpus {
         }
         let dst_root = dst_root.as_ref();
         if dst_root.exists() {
-            std::fs::remove_dir_all(dst_root).ok();
+            return Err(Error::Message(format!(
+                "split dest exists: {}",
+                dst_root.display()
+            )));
         }
         let mut sharded = ShardedConCorpus::open(dst_root, n_shards)?;
         let keys = single.list_frame_keys()?;
@@ -508,7 +516,10 @@ pub fn join_drained_roots(sources: &[PathBuf], dst: impl AsRef<Path>) -> Result<
 pub fn join_corpus_dirs(sources: &[PathBuf], dst: impl AsRef<Path>) -> Result<u32> {
     let dst = dst.as_ref();
     if dst.exists() {
-        std::fs::remove_dir_all(dst).ok();
+        return Err(Error::Message(format!(
+            "join dest exists: {}",
+            dst.display()
+        )));
     }
     let out = ConCorpus::open(dst)?;
     let mut n = 0u32;
@@ -567,6 +578,7 @@ mod compaction_tests {
         let joined = dir.path().join("joined");
         let n = s.join_to_single_env(&joined).unwrap();
         assert_eq!(n, 4);
+        assert!(s.join_to_single_env(&joined).is_err());
         let joined_c = ConCorpus::open(&joined).unwrap();
         let mid = joined_c.select(&Select::new()).unwrap();
         assert_eq!(mid.len(), 4);

@@ -89,7 +89,7 @@ impl PyConCorpus {
             obj.call_method("create_dataset", (name,), Some(&d))?;
             Ok(())
         };
-        let write_td = |parent: &Bound<'_, PyAny>, name: &str, value: Bound<'_, PyAny>, step: Bound<'_, PyAny>, time: Bound<'_, PyAny>, unit: &str| -> PyResult<()> {
+        let write_td = |parent: &Bound<'_, PyAny>, name: &str, value: Bound<'_, PyAny>, step: Bound<'_, PyAny>, time: Bound<'_, PyAny>, unit: &str, tunit: &str| -> PyResult<()> {
             let g = parent.call_method1("create_group", (name,))?;
             put(&g, "value", value)?;
             put(&g, "step", step)?;
@@ -97,31 +97,43 @@ impl PyConCorpus {
             let val = g.call_method1("__getitem__", ("value",))?;
             val.getattr("attrs")?.set_item("unit", unit)?;
             let tm = g.call_method1("__getitem__", ("time",))?;
-            tm.getattr("attrs")?.set_item("unit", "ps")?;
+            tm.getattr("attrs")?.set_item("unit", tunit)?;
+            Ok(())
+        };
+        let ascii_attr = |obj: &Bound<'_, PyAny>, name: &str, val: &str, n: usize| -> PyResult<()> {
+            let dt = h5py.call_method("string_dtype", ("ascii", n), None)?;
+            let kw = PyDict::new(obj.py());
+            kw.set_item("dtype", dt)?;
+            obj.getattr("attrs")?
+                .call_method("create", (name, val), Some(&kw))?;
             Ok(())
         };
         let h5md = file.call_method1("create_group", ("h5md",))?;
         let h5md_attrs = h5md.getattr("attrs")?;
         h5md_attrs.set_item("version", (1i32, 1i32))?;
         let author = h5md.call_method1("create_group", ("author",))?;
-        author.getattr("attrs")?.set_item("name", "readcon-db")?;
+        ascii_attr(&author, "name", "readcon-db", 32)?;
         let creator = h5md.call_method1("create_group", ("creator",))?;
-        let creator_attrs = creator.getattr("attrs")?;
-        creator_attrs.set_item("name", "readcon-db")?;
-        creator_attrs.set_item("version", env!("CARGO_PKG_VERSION"))?;
+        ascii_attr(&creator, "name", "readcon-db", 32)?;
+        ascii_attr(&creator, "version", env!("CARGO_PKG_VERSION"), 16)?;
         let particles = file.call_method1("create_group", ("particles",))?;
         let all = particles.call_method1("create_group", ("all",))?;
         let boxg = all.call_method1("create_group", ("box",))?;
         let attrs = boxg.getattr("attrs")?;
         attrs.set_item("dimension", 3)?;
-        attrs.set_item(
-            "boundary",
-            (
+        let dt8 = h5py.call_method("string_dtype", ("ascii", 8), None)?;
+        let bnd_kw = PyDict::new(py);
+        bnd_kw.set_item("dtype", dt8)?;
+        let bnd = np.call_method(
+            "array",
+            ((
                 a.boundary[0].as_str(),
                 a.boundary[1].as_str(),
                 a.boundary[2].as_str(),
-            ),
+            ),),
+            Some(&bnd_kw),
         )?;
+        attrs.call_method("create", ("boundary", bnd), None)?;
         let dtype_kw = PyDict::new(py);
         dtype_kw.set_item("dtype", "float64")?;
         let i64_kw = PyDict::new(py);
@@ -133,11 +145,27 @@ impl PyConCorpus {
         let pos_arr = np
             .call_method("asarray", (a.positions,), Some(&dtype_kw))?
             .call_method1("reshape", ((n_frames, natoms, 3),))?;
-        write_td(&all, "position", pos_arr, step.clone(), time.clone(), "Angstrom")?;
+        write_td(
+            &all,
+            "position",
+            pos_arr,
+            step.clone(),
+            time.clone(),
+            "Angstrom",
+            a.time_unit.as_str(),
+        )?;
         let edges_arr = np
             .call_method("asarray", (a.edges,), Some(&dtype_kw))?
             .call_method1("reshape", ((n_frames, 3, 3),))?;
-        write_td(&boxg, "edges", edges_arr, step.clone(), time.clone(), "Angstrom")?;
+        write_td(
+            &boxg,
+            "edges",
+            edges_arr,
+            step.clone(),
+            time.clone(),
+            "Angstrom",
+            a.time_unit.as_str(),
+        )?;
         if let Some(fbuf) = a.forces {
             // CON native eV/A -> MDA H5MD table "kJ mol-1 Angstrom-1"
             const EV_TO_KJ_MOL: f64 = 96.485_332_123_310_02;
@@ -152,6 +180,7 @@ impl PyConCorpus {
                 step,
                 time,
                 "kJ mol-1 Angstrom-1",
+                a.time_unit.as_str(),
             )?;
         }
         let spec_arr = np.call_method("asarray", (a.species_z,), Some(&i32_kw))?;

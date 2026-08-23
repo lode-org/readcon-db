@@ -5,6 +5,9 @@
 ### Features
 - Batched RCSO pack (`RCSB`): `pack_frames` / `rkrdb_pack_frames` / `bcast_packed_frames` on the caller comm
 - `readcon-db drain <local_root> <pfs_root>` copies shard dirs after node-local ingest
+- H5MD time unit follows CON `units.time` (`fs` default); edges from
+  `lattice_vectors` or boxl+angles; author/creator/boundary are fixed ASCII
+- `join_to_single_env` / `compact-join` / `join_corpus_dirs` refuse dest overwrite
 - `join-drained` merges unique-dest drained roots when shard ids overlap
 - `drain_to` compact-snapshots `data.mdb` only and refuses dest overwrite
 - Python `export_h5md` writes H5MD 1.1 interchange via h5py (CON stays authority):

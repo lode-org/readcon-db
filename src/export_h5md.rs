@@ -23,6 +23,8 @@ pub struct H5mdArrays {
     pub boundary: [String; 3],
     /// `[T]` CON `header.time()` when present, else frame index.
     pub times: Vec<f64>,
+    /// H5MD time unit (`fs` when CON units.time is fs; `ps` for dummy index).
+    pub time_unit: String,
 }
 
 fn boundary_from_pbc(pbc: Option<[bool; 3]>) -> [String; 3] {
@@ -42,6 +44,56 @@ fn boxl_to_edges33(boxl: &[f64; 3]) -> [f64; 9] {
     ]
 }
 
+fn normalize_time_unit(raw: &str) -> String {
+    let s = raw.trim();
+    if s.eq_ignore_ascii_case("fs")
+        || s.eq_ignore_ascii_case("femtosecond")
+        || s.eq_ignore_ascii_case("femtoseconds")
+    {
+        "fs".into()
+    } else if s.eq_ignore_ascii_case("ns") || s.eq_ignore_ascii_case("nanosecond") {
+        "ns".into()
+    } else {
+        "ps".into()
+    }
+}
+
+fn time_unit_of(header: &readcon_core::types::ConFrameHeader) -> String {
+    header
+        .units()
+        .and_then(|u| u.get("time"))
+        .and_then(|v| v.as_str())
+        .map(normalize_time_unit)
+        .unwrap_or_else(|| "ps".into())
+}
+
+fn edges33_from_header(h: &readcon_core::types::ConFrameHeader) -> [f64; 9] {
+    if let Some(lat) = h.lattice_vectors() {
+        return [
+            lat[0][0], lat[0][1], lat[0][2], lat[1][0], lat[1][1], lat[1][2], lat[2][0],
+            lat[2][1], lat[2][2],
+        ];
+    }
+    boxl_angles_to_edges33(&h.boxl, &h.angles)
+}
+
+fn boxl_angles_to_edges33(boxl: &[f64; 3], angles: &[f64; 3]) -> [f64; 9] {
+    let ortho = angles.iter().all(|&a| a == 0.0 || (a - 90.0).abs() < 1e-9);
+    if ortho {
+        return boxl_to_edges33(boxl);
+    }
+    let deg = |a: f64| a * std::f64::consts::PI / 180.0;
+    let (lx, ly, lz) = (boxl[0], boxl[1], boxl[2]);
+    let (alpha, beta, gamma) = (deg(angles[0]), deg(angles[1]), deg(angles[2]));
+    let ax = lx;
+    let bx = ly * gamma.cos();
+    let by = ly * gamma.sin();
+    let cx = lz * beta.cos();
+    let cy = lz * (alpha.cos() - beta.cos() * gamma.cos()) / gamma.sin();
+    let cz = (lz * lz - cx * cx - cy * cy).max(0.0).sqrt();
+    [ax, 0.0, 0.0, bx, by, 0.0, cx, cy, cz]
+}
+
 impl ConCorpus {
     /// Collect one trajectory as H5MD-shaped arrays (fixed `N`).
     pub fn collect_h5md(&self, traj_id: u64) -> Result<H5mdArrays> {
@@ -58,6 +110,7 @@ impl ConCorpus {
             .collect();
         let n_frames = keys.len();
         let boundary = boundary_from_pbc(first.header.pbc());
+        let time_unit = time_unit_of(&first.header);
         let mut positions = Vec::with_capacity(n_frames * natoms * 3);
         let mut edges = Vec::with_capacity(n_frames * 9);
         let mut times = Vec::with_capacity(n_frames);
@@ -65,7 +118,7 @@ impl ConCorpus {
         for k in &keys {
             let fr = self.get_frame(*k)?;
             times.push(fr.header.time().unwrap_or(f64::from(k.frame_idx)));
-            edges.extend_from_slice(&boxl_to_edges33(&fr.header.boxl));
+            edges.extend_from_slice(&edges33_from_header(&fr.header));
             let packed = self.pack_frame(*k)?;
             let cooked = crate::cooked_soa::CookedSoa::decode(&packed)?;
             if cooked.natoms as usize != natoms {
@@ -103,6 +156,7 @@ impl ConCorpus {
             forces,
             boundary,
             times,
+            time_unit,
         })
     }
 }
@@ -172,5 +226,43 @@ mod tests {
         assert_eq!(from_con.positions, from_rcso.positions);
         assert_eq!(from_con.edges, from_rcso.edges);
         assert_eq!(from_con.species_z, from_rcso.species_z);
+    }
+
+    #[test]
+    fn collect_h5md_uses_con_time_and_fs_unit() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let mut frames = Vec::new();
+        for item in readcon_core::iterators::ConFrameIterator::new(&text) {
+            frames.push(item.unwrap());
+        }
+        frames[0].header.set_time(12.5);
+        frames[0].header.metadata.insert(
+            "units".into(),
+            serde_json::json!({"length":"angstrom","energy":"eV","mass":"amu","time":"fs"}),
+        );
+        db.append_trajectory_frames(1, &frames, "t").unwrap();
+        let a = db.collect_h5md(1).unwrap();
+        assert_eq!(a.times[0], 12.5);
+        assert_eq!(a.time_unit, "fs");
+    }
+
+    #[test]
+    fn collect_h5md_triclinic_edges_from_angles() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let mut frames = Vec::new();
+        for item in readcon_core::iterators::ConFrameIterator::new(&text) {
+            frames.push(item.unwrap());
+        }
+        frames[0].header.angles = [60.0, 90.0, 70.0];
+        db.append_trajectory_frames(1, &frames, "t").unwrap();
+        let a = db.collect_h5md(1).unwrap();
+        assert_eq!(a.edges.len(), 9);
+        assert!(a.edges[3].abs() > 1e-9, "b_x from gamma != 90");
+        let ortho = boxl_to_edges33(&frames[0].header.boxl);
+        assert_ne!(a.edges, ortho.to_vec());
     }
 }
