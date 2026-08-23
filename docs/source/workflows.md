@@ -36,7 +36,7 @@ readcon-db shard-ingest /mnt/bb/$USER/campaign --shard $S --start-id $T \
     --units '{"length":"angstrom","energy":"eV","time":"fs"}' run.con
 # ranks close
 # One writer per shard id can drain to a shared dest.
-# Overlapping shard ids (more writers than shards): unique dest per node, then join.
+# Overlapping shard ids (more writers than shards): unique dest per node, then join-drained.
 readcon-db drain /mnt/bb/$USER/campaign /lustre/orion/proj/campaign/node_$SLURM_NODEID
 readcon-db join-drained /lustre/orion/proj/campaign_single \
     /lustre/orion/proj/campaign/node_*
