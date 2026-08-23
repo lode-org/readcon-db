@@ -196,8 +196,9 @@ impl ShardedConCorpus {
         Ok(n)
     }
 
-    /// Copy `shards.json` and every present `shard_XXXX` from a node-local
-    /// root onto a PFS root. Writers must have closed the envs first.
+    /// Compact-copy each present shard onto `dst` (data.mdb only, no lockfile).
+    /// Refuses a dest shard that already exists so two node-local trees that
+    /// share a shard id cannot last-writer-wins.
     pub fn drain_to(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> Result<u32> {
         let src = src.as_ref();
         let dst = dst.as_ref();
@@ -206,33 +207,40 @@ impl ShardedConCorpus {
             return Err(Error::Message("drain: missing shards.json".into()));
         }
         std::fs::create_dir_all(dst)?;
-        std::fs::copy(&man, dst.join(MANIFEST))?;
+        let dest_man = dst.join(MANIFEST);
+        if dest_man.is_file() {
+            let existing: ShardManifest =
+                serde_json::from_str(&std::fs::read_to_string(&dest_man)?)?;
+            let incoming: ShardManifest = serde_json::from_str(&std::fs::read_to_string(&man)?)?;
+            if existing.n_shards != incoming.n_shards {
+                return Err(Error::Message(
+                    "drain: dest shards.json n_shards does not match src".into(),
+                ));
+            }
+        } else {
+            std::fs::copy(&man, &dest_man)?;
+        }
         let m: ShardManifest = serde_json::from_str(&std::fs::read_to_string(&man)?)?;
         let mut n = 0u32;
         for i in 0..m.n_shards {
             let name = format!("shard_{i:04}");
             let from = src.join(&name);
-            if from.is_dir() {
-                copy_dir(&from, &dst.join(&name))?;
-                n += 1;
+            if !from.is_dir() {
+                continue;
             }
+            let to = dst.join(&name);
+            if to.join("data.mdb").is_file() {
+                return Err(Error::Message(format!(
+                    "drain: dest {name} exists; refuse overwrite. Drain each node to a unique dest, then join."
+                )));
+            }
+            let ro = ConCorpus::open_readonly(&from)?;
+            ro.snapshot_to(&to)?;
+            ro.close();
+            n += 1;
         }
         Ok(n)
     }
-}
-
-fn copy_dir(from: &Path, to: &Path) -> Result<()> {
-    std::fs::create_dir_all(to)?;
-    for e in std::fs::read_dir(from)? {
-        let e = e?;
-        let t = to.join(e.file_name());
-        if e.file_type()?.is_dir() {
-            copy_dir(&e.path(), &t)?;
-        } else {
-            std::fs::copy(e.path(), t)?;
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -280,6 +288,9 @@ mod tests {
         let ncopy = ShardedConCorpus::drain_to(root.as_path(), &drained).unwrap();
         assert_eq!(ncopy, n_shards);
         assert!(drained.join("shards.json").is_file());
+        assert!(drained.join("shard_0000").join("data.mdb").is_file());
+        assert!(!drained.join("shard_0000").join("lock.mdb").is_file());
+        assert!(ShardedConCorpus::drain_to(root.as_path(), &drained).is_err());
         assert_eq!(keys.len(), 8);
     }
 

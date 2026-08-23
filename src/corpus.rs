@@ -4,7 +4,7 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 use heed::types::{Bytes, Str, Unit};
-use heed::{Database, Env, EnvFlags, EnvOpenOptions, RwTxn};
+use heed::{CompactionOption, Database, Env, EnvFlags, EnvOpenOptions, RwTxn};
 use readcon_core::iterators::ConFrameIterator;
 use readcon_core::types::ConFrame;
 use readcon_core::writer::ConFrameWriter;
@@ -290,6 +290,21 @@ impl ConCorpus {
     /// `open_readonly` on the same path in the same process.
     pub fn close(self) {
         self.env.prepare_for_closing().wait();
+    }
+
+    /// Compact snapshot of `data.mdb` only. No lockfile. Dest must not exist.
+    pub fn snapshot_to(&self, dest_dir: impl AsRef<Path>) -> Result<()> {
+        let dest = dest_dir.as_ref();
+        fs::create_dir_all(dest)?;
+        let data = dest.join("data.mdb");
+        if data.exists() {
+            return Err(Error::Message(format!(
+                "snapshot dest exists: {}",
+                data.display()
+            )));
+        }
+        self.env.copy_to_path(&data, CompactionOption::Enabled)?;
+        Ok(())
     }
 
     /// All frame keys in this env (for compaction / export pipelines).
