@@ -27,6 +27,8 @@ def test_export_h5md_tn3_and_units(tmp_path):
         assert pos.ndim == 3
         assert "step" in f["particles/all/position"]
         assert f["particles/all/position/step"].shape == (n,)
+        assert f["particles/all/position/time"].shape == (n,)
+        assert f["particles/all/position/time"].attrs["unit"] == "ps"
         assert pos.attrs["unit"] == "Angstrom"
         edges = f["particles/all/box/edges/value"]
         assert edges.shape == (n, 3, 3)
@@ -48,7 +50,9 @@ def test_export_h5md_mixed_forces_zero_pad(tmp_path):
         force = f["particles/all/force/value"]
         assert force.shape[0] == n
         assert force.shape[2] == 3
-        assert force.attrs["unit"] == "eV/Angstrom"
+        assert force.attrs["unit"] == "kJ mol-1 Angstrom-1"
+        assert f["particles/all/force/time"].shape == (n,)
+        assert f["particles/all/force/time"].attrs["unit"] == "ps"
         first = force[0]
         rest = force[1:]
         assert np.all(first == 0.0)

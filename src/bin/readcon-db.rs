@@ -12,7 +12,9 @@
 use std::env;
 use std::process::ExitCode;
 
-use readcon_db::{ConCorpus, FrameKey, Select, ShardedConCorpus, DEFAULT_N_SHARDS};
+use readcon_db::{
+    join_drained_roots, ConCorpus, FrameKey, Select, ShardedConCorpus, DEFAULT_N_SHARDS,
+};
 
 fn usage() -> ExitCode {
     eprintln!(
@@ -35,6 +37,7 @@ fn usage() -> ExitCode {
   readcon-db shard-ingest <root> --shard S --start-id T <file.con>...
   readcon-db shard-select <root> [--symbol S] ...
   readcon-db drain <local_root> <pfs_root>
+  readcon-db join-drained <single_dst> <drained_root>...
   readcon-db compact-join <sharded_root> <single_dst>
   readcon-db compact-split <single_src> <sharded_dst> [--shards N]
   readcon-db compact-export-extxyz <corpus_or_shard_root> <out.xyz> [--sharded] [--symbol S]
@@ -359,7 +362,9 @@ fn main() -> ExitCode {
                         }
                     }
                 }
-                let sid = shard.ok_or("--shard required (HPC: use $SLURM_PROCID % n_shards)")?;
+                let sid = shard.ok_or(
+                    "--shard required (one writer per shard id across the job; overlapping shard ids drain to unique dests then join-drained)",
+                )?;
                 let db = ShardedConCorpus::open_shard(&root, sid)?;
                 let mut tid = start;
                 for f in files {
@@ -420,6 +425,19 @@ fn main() -> ExitCode {
                 let dst = args.get(1).ok_or("pfs_root")?.clone();
                 let n = ShardedConCorpus::drain_to(&src, &dst)?;
                 println!("drained {n} shards {src} -> {dst} (close writers first)");
+            }
+            "join-drained" => {
+                let dst = args.first().ok_or("single_dst")?.clone();
+                let srcs: Vec<std::path::PathBuf> = args
+                    .iter()
+                    .skip(1)
+                    .map(std::path::PathBuf::from)
+                    .collect();
+                if srcs.is_empty() {
+                    return Err("join-drained needs at least one drained root".into());
+                }
+                let n = join_drained_roots(&srcs, &dst)?;
+                println!("joined {n} frames from {} roots -> {dst}", srcs.len());
             }
             "compact-join" => {
                 let src = args.first().ok_or("sharded_root")?.clone();

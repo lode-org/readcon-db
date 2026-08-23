@@ -408,41 +408,8 @@ impl ShardedConCorpus {
             std::fs::remove_dir_all(dst).ok();
         }
         let out = ConCorpus::open(dst)?;
-        let mut n = 0u32;
         let mut seen_traj = std::collections::BTreeSet::new();
-        for sid in 0..self.n_shards {
-            if !self.shard_path(sid).is_dir() {
-                continue;
-            }
-            let shard = self.shard_mut(sid)?;
-            for fk in shard.list_frame_keys()? {
-                if fk.frame_idx == 0 {
-                    if !seen_traj.insert(fk.traj_id) {
-                        return Err(Error::Message(format!(
-                            "traj_id {} appears in multiple shards; cannot join without remap",
-                            fk.traj_id
-                        )));
-                    }
-                }
-            }
-            // second pass: append full trajectories by concatenating blobs in order
-            let keys = shard.list_frame_keys()?;
-            let mut by_traj: std::collections::BTreeMap<u64, Vec<FrameKey>> =
-                std::collections::BTreeMap::new();
-            for fk in keys {
-                by_traj.entry(fk.traj_id).or_default().push(fk);
-            }
-            for (tid, mut fks) in by_traj {
-                fks.sort();
-                let mut concat = String::new();
-                for fk in &fks {
-                    concat.push_str(&shard.get_frame_text(*fk)?);
-                }
-                let nf = out.append_trajectory_str(tid, &concat, format!("join-from-shard-{sid}"))?;
-                n += nf;
-            }
-        }
-        Ok(n)
+        append_sharded_into(self, &out, &mut seen_traj)
     }
 
     /// **Split:** read a **single-env** corpus and write a new sharded root at `dst_root`
@@ -478,6 +445,63 @@ impl ShardedConCorpus {
         }
         Ok(n)
     }
+}
+
+fn append_sharded_into(
+    sh: &mut ShardedConCorpus,
+    out: &ConCorpus,
+    seen_traj: &mut std::collections::BTreeSet<u64>,
+) -> Result<u32> {
+    let mut n = 0u32;
+    for sid in 0..sh.n_shards {
+        if !sh.shard_path(sid).is_dir() {
+            continue;
+        }
+        let shard = sh.shard_mut(sid)?;
+        let keys = shard.list_frame_keys()?;
+        let mut by_traj: std::collections::BTreeMap<u64, Vec<FrameKey>> =
+            std::collections::BTreeMap::new();
+        for fk in keys {
+            by_traj.entry(fk.traj_id).or_default().push(fk);
+        }
+        for (tid, mut fks) in by_traj {
+            if !seen_traj.insert(tid) {
+                return Err(Error::Message(format!(
+                    "traj_id {tid} appears in multiple shards or join sources"
+                )));
+            }
+            fks.sort();
+            let mut concat = String::new();
+            for fk in &fks {
+                concat.push_str(&shard.get_frame_text(*fk)?);
+            }
+            n += out.append_trajectory_str(tid, &concat, format!("join-from-shard-{sid}"))?;
+        }
+    }
+    Ok(n)
+}
+
+/// Join several drained sharded roots (unique dests after refuse-overwrite)
+/// into one single-env corpus. Traj ids must be unique across sources.
+pub fn join_drained_roots(sources: &[PathBuf], dst: impl AsRef<Path>) -> Result<u32> {
+    if sources.is_empty() {
+        return Err(Error::Message("join-drained: no sources".into()));
+    }
+    let dst = dst.as_ref();
+    if dst.exists() {
+        return Err(Error::Message(format!(
+            "join-drained dest exists: {}",
+            dst.display()
+        )));
+    }
+    let out = ConCorpus::open(dst)?;
+    let mut n = 0u32;
+    let mut seen = std::collections::BTreeSet::new();
+    for src in sources {
+        let mut sh = ShardedConCorpus::open(src, 1)?;
+        n += append_sharded_into(&mut sh, &out, &mut seen)?;
+    }
+    Ok(n)
 }
 
 /// Join any set of **single-env** corpus directories into one destination (traj_id must be unique).
@@ -559,6 +583,44 @@ mod compaction_tests {
         bt.sort();
         at.sort();
         assert_eq!(bt, at);
+    }
+
+    #[test]
+    fn join_drained_roots_keeps_disjoint_trajs_same_shard() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let n_shards = 2u32;
+        let node_a = dir.path().join("node_a");
+        let node_b = dir.path().join("node_b");
+        ShardedConCorpus::open(&node_a, n_shards).unwrap();
+        ShardedConCorpus::open(&node_b, n_shards).unwrap();
+        // traj 0 and traj 2 both route to shard_0000
+        ShardedConCorpus::open_shard(&node_a, 0)
+            .unwrap()
+            .append_trajectory_str(0, &text, "a")
+            .unwrap();
+        ShardedConCorpus::open_shard(&node_b, 0)
+            .unwrap()
+            .append_trajectory_str(2, &text, "b")
+            .unwrap();
+        let dest_a = dir.path().join("dest_a");
+        let dest_b = dir.path().join("dest_b");
+        assert_eq!(ShardedConCorpus::drain_to(&node_a, &dest_a).unwrap(), 1);
+        assert_eq!(ShardedConCorpus::drain_to(&node_b, &dest_b).unwrap(), 1);
+        assert!(ShardedConCorpus::drain_to(&node_a, &dest_a).is_err());
+        let joined = dir.path().join("joined");
+        let n = join_drained_roots(
+            &[dest_a.clone(), dest_b.clone()],
+            &joined,
+        )
+        .unwrap();
+        assert!(n >= 2);
+        let db = ConCorpus::open(&joined).unwrap();
+        let keys = db.select(&Select::new()).unwrap();
+        let mut tids: Vec<u64> = keys.iter().map(|k| k.traj_id).collect();
+        tids.sort_unstable();
+        tids.dedup();
+        assert_eq!(tids, vec![0, 2]);
     }
 
     #[test]

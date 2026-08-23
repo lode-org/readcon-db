@@ -180,8 +180,9 @@ A **single** LMDB environment cannot run concurrent `write_txn`s. For site-scale
 ingest (many SLURM tasks uploading CON), use **`ShardedConCorpus`**:
 
 1. `readcon-db shard-init /scratch/campaign --shards 256` once on the shared FS.
-2. Each rank opens **only its shard**: `shard_id = $SLURM_PROCID % n_shards` (or
-   `traj_id % n_shards`) via `ShardedConCorpus::open_shard` / CLI `shard-ingest --shard S`.
+2. Each rank opens **only its shard**. One writer owns each `shard_id` across
+   the job (`traj_id % n_shards`). If many ranks share a shard id, each node
+   keeps a private tree, `drain`s to a unique dest, then `join-drained`.
 3. Writers on **different shards never share a write lock** — up to `n_shards`
    parallel commits on one filesystem (bounded by FS, not one LMDB mutex).
 4. Global queries: `shard-select` / `ShardedConCorpus::select` fans out read-only

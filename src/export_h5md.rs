@@ -21,6 +21,8 @@ pub struct H5mdArrays {
     pub forces: Option<Vec<f64>>,
     /// H5MD `box` boundary strings, from CON `pbc` (periodic when absent).
     pub boundary: [String; 3],
+    /// `[T]` CON `header.time()` when present, else frame index.
+    pub times: Vec<f64>,
 }
 
 fn boundary_from_pbc(pbc: Option<[bool; 3]>) -> [String; 3] {
@@ -58,9 +60,11 @@ impl ConCorpus {
         let boundary = boundary_from_pbc(first.header.pbc());
         let mut positions = Vec::with_capacity(n_frames * natoms * 3);
         let mut edges = Vec::with_capacity(n_frames * 9);
+        let mut times = Vec::with_capacity(n_frames);
         let mut force_rows: Vec<Option<Vec<[f64; 3]>>> = Vec::with_capacity(n_frames);
         for k in &keys {
             let fr = self.get_frame(*k)?;
+            times.push(fr.header.time().unwrap_or(f64::from(k.frame_idx)));
             edges.extend_from_slice(&boxl_to_edges33(&fr.header.boxl));
             let packed = self.pack_frame(*k)?;
             let cooked = crate::cooked_soa::CookedSoa::decode(&packed)?;
@@ -98,6 +102,7 @@ impl ConCorpus {
             species_z,
             forces,
             boundary,
+            times,
         })
     }
 }
@@ -129,6 +134,7 @@ mod tests {
         assert_eq!(a.species_z.len(), a.natoms);
         assert!(a.species_z.iter().all(|&z| z > 0));
         assert_eq!(a.boundary.len(), 3);
+        assert_eq!(a.times.len(), a.n_frames);
     }
 
     #[test]

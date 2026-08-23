@@ -89,12 +89,15 @@ impl PyConCorpus {
             obj.call_method("create_dataset", (name,), Some(&d))?;
             Ok(())
         };
-        let write_td = |parent: &Bound<'_, PyAny>, name: &str, value: Bound<'_, PyAny>, step: Bound<'_, PyAny>, unit: &str| -> PyResult<()> {
+        let write_td = |parent: &Bound<'_, PyAny>, name: &str, value: Bound<'_, PyAny>, step: Bound<'_, PyAny>, time: Bound<'_, PyAny>, unit: &str| -> PyResult<()> {
             let g = parent.call_method1("create_group", (name,))?;
             put(&g, "value", value)?;
             put(&g, "step", step)?;
+            put(&g, "time", time)?;
             let val = g.call_method1("__getitem__", ("value",))?;
             val.getattr("attrs")?.set_item("unit", unit)?;
+            let tm = g.call_method1("__getitem__", ("time",))?;
+            tm.getattr("attrs")?.set_item("unit", "ps")?;
             Ok(())
         };
         let h5md = file.call_method1("create_group", ("h5md",))?;
@@ -126,19 +129,30 @@ impl PyConCorpus {
         let i32_kw = PyDict::new(py);
         i32_kw.set_item("dtype", "int32")?;
         let step = np.call_method("arange", (n_frames as i64,), Some(&i64_kw))?;
+        let time = np.call_method("asarray", (a.times,), Some(&dtype_kw))?;
         let pos_arr = np
             .call_method("asarray", (a.positions,), Some(&dtype_kw))?
             .call_method1("reshape", ((n_frames, natoms, 3),))?;
-        write_td(&all, "position", pos_arr, step.clone(), "Angstrom")?;
+        write_td(&all, "position", pos_arr, step.clone(), time.clone(), "Angstrom")?;
         let edges_arr = np
             .call_method("asarray", (a.edges,), Some(&dtype_kw))?
             .call_method1("reshape", ((n_frames, 3, 3),))?;
-        write_td(&boxg, "edges", edges_arr, step.clone(), "Angstrom")?;
+        write_td(&boxg, "edges", edges_arr, step.clone(), time.clone(), "Angstrom")?;
         if let Some(fbuf) = a.forces {
+            // CON native eV/A -> MDA H5MD table "kJ mol-1 Angstrom-1"
+            const EV_TO_KJ_MOL: f64 = 96.485_332_123_310_02;
+            let kj: Vec<f64> = fbuf.iter().map(|x| x * EV_TO_KJ_MOL).collect();
             let f_arr = np
-                .call_method("asarray", (fbuf,), Some(&dtype_kw))?
+                .call_method("asarray", (kj,), Some(&dtype_kw))?
                 .call_method1("reshape", ((n_frames, natoms, 3),))?;
-            write_td(&all, "force", f_arr, step, "eV/Angstrom")?;
+            write_td(
+                &all,
+                "force",
+                f_arr,
+                step,
+                time,
+                "kJ mol-1 Angstrom-1",
+            )?;
         }
         let spec_arr = np.call_method("asarray", (a.species_z,), Some(&i32_kw))?;
         put(&all, "species", spec_arr)?;

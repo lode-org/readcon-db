@@ -62,12 +62,13 @@ db.export_h5md(traj_id=1, path="traj.h5")
 ```
 
 The file has `/h5md` version `[1,1]` with `author`/`creator`,
-`particles/all/position/{value,step}` of shape `[T][N][3]`,
-`box/edges/{value,step}` of shape `[T][3][3]`, integer-Z `species`,
-and unit attributes (`Angstrom`, `eV/Angstrom`). Mixed-force
-trajectories write a full `[T][N][3]` force dataset (zeros on frames
-without forces). Box `boundary` follows CON `pbc` (periodic when
-absent).
+`particles/all/position/{value,step,time}` of shape `[T][N][3]`,
+`box/edges/{value,step,time}` of shape `[T][3][3]`, integer-Z `species`,
+and unit attributes (`Angstrom`, time `ps`, force `kJ mol-1 Angstrom-1`
+converted from CON eV/A). Mixed-force trajectories write a full
+`[T][N][3]` force dataset (zeros on frames without forces). Box
+`boundary` follows CON `pbc` (periodic when absent). `time` is CON
+`header.time()` or the frame index when that field is absent.
 
 Standalone: `examples/mpi_bcast_frame.py`.
 
