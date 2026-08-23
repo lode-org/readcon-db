@@ -35,5 +35,5 @@ cargo test -p readcon-db
 ```
 
 ```{admonition} Logo
-The logo (teal tile, page stack, B-tree, hash spark) is under `assets/logo/` — SVG for docs and the project website.
+The logo is the readcon CON frame, stacked on a teal tile (corpus). SVG kit under `assets/logo/`.
 ```

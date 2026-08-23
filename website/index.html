@@ -8,14 +8,14 @@
   <link rel="icon" href="assets/logo.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="css/site.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
 </head>
 <body>
   <div class="wrap">
     <header class="hero">
       <img class="logo" src="assets/logo.svg" width="112" height="112" alt="readcon-db logo" />
       <div>
-        <h1>readcon-db</h1>
+        <h1 class="wordmark"><span class="read">read</span><span class="con">con</span><span class="db">-db</span></h1>
         <p class="tag">
           Mmap-backed <strong>CON / convel</strong> corpus store — LMDB via Heed,
           non-SQL selection, <strong>xxHash3</strong> exact match, bindings for
@@ -86,7 +86,7 @@ db.append_trajectory_path(1, <span class="s">"run.con"</span>)?;
     <footer>
       <div class="brand">
         <img src="assets/logo.svg" alt="" width="36" height="36" />
-        <strong>readcon-db</strong>
+        <strong class="wordmark"><span class="read">read</span><span class="con">con</span><span class="db">-db</span></strong>
       </div>
       <p>MIT licensed · Companion to readcon-core / LODE · Logo and site assets in-repo under <code>assets/logo</code> and <code>website/</code>.</p>
     </footer>

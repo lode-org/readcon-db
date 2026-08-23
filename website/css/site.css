@@ -42,6 +42,21 @@ header.hero h1 {
   font-size: clamp(1.8rem, 4vw, 2.6rem);
   color: var(--teal-900);
   letter-spacing: -0.02em;
+  font-weight: 700;
+}
+.wordmark .read {
+  font-family: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+  font-weight: 700;
+}
+.wordmark .con {
+  font-family: "JetBrains Mono", ui-monospace, "Cascadia Code", monospace;
+  font-weight: 700;
+  letter-spacing: -0.06em;
+}
+.wordmark .db {
+  font-family: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+  font-weight: 400;
+  color: var(--teal-500);
 }
 header.hero .tag {
   margin: 0;
