@@ -89,23 +89,23 @@ impl PyConCorpus {
             obj.call_method("create_dataset", (name,), Some(&d))?;
             Ok(())
         };
-        let write_td = |parent: &Bound<'_, PyAny>, name: &str, value: Bound<'_, PyAny>, step: Bound<'_, PyAny>, time: Bound<'_, PyAny>, unit: &str, tunit: &str| -> PyResult<()> {
-            let g = parent.call_method1("create_group", (name,))?;
-            put(&g, "value", value)?;
-            put(&g, "step", step)?;
-            put(&g, "time", time)?;
-            let val = g.call_method1("__getitem__", ("value",))?;
-            val.getattr("attrs")?.set_item("unit", unit)?;
-            let tm = g.call_method1("__getitem__", ("time",))?;
-            tm.getattr("attrs")?.set_item("unit", tunit)?;
-            Ok(())
-        };
         let ascii_attr = |obj: &Bound<'_, PyAny>, name: &str, val: &str, n: usize| -> PyResult<()> {
             let dt = h5py.call_method("string_dtype", ("ascii", n), None)?;
             let kw = PyDict::new(obj.py());
             kw.set_item("dtype", dt)?;
             obj.getattr("attrs")?
                 .call_method("create", (name, val), Some(&kw))?;
+            Ok(())
+        };
+        let write_td = |parent: &Bound<'_, PyAny>, name: &str, value: Bound<'_, PyAny>, step: Bound<'_, PyAny>, time: Bound<'_, PyAny>, unit: &str, tunit: &str| -> PyResult<()> {
+            let g = parent.call_method1("create_group", (name,))?;
+            put(&g, "value", value)?;
+            put(&g, "step", step)?;
+            put(&g, "time", time)?;
+            let val = g.call_method1("__getitem__", ("value",))?;
+            ascii_attr(&val, "unit", unit, 32)?;
+            let tm = g.call_method1("__getitem__", ("time",))?;
+            ascii_attr(&tm, "unit", tunit, 8)?;
             Ok(())
         };
         let h5md = file.call_method1("create_group", ("h5md",))?;

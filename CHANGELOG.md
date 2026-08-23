@@ -8,16 +8,16 @@
 - H5MD export uses one engine unit system (Å, ps, kJ mol^{-1} Å^{-1});
   CON units convert through `unit_conversion_factor`. Python exposes that
   function. Time is CON time or `i * timestep`, in ps.
-- H5MD time unit follows CON `units.time` (`fs` default); edges from
-  `lattice_vectors` or boxl+angles; author/creator/boundary are fixed ASCII
+- Edges from `lattice_vectors` or boxl+angles; author/creator/boundary/unit
+  attrs are fixed ASCII
 - `join_to_single_env` / `compact-join` / `join_corpus_dirs` refuse dest overwrite
 - `join-drained` merges unique-dest drained roots when shard ids overlap
 - `drain_to` compact-snapshots `data.mdb` only and refuses dest overwrite
 - Python `export_h5md` writes H5MD 1.1 interchange via h5py (CON stays authority):
-  `/h5md` author/creator, `position/step`+`value` `[T][N][3]`, `box/edges/value` `[T][3][3]`,
-  integer-Z species, unit attributes, CON `pbc` on `box/boundary`. Mixed-force
-  frames pad zeros. `ConCorpus::collect_h5md` owns the arrays; `extend_trajectory`
-  is exposed on the Python binding.
+  `/h5md` author/creator, `position/value` `[T][N][3]`, `position/step` and
+  `position/time` `[T]`, `box/edges/value` `[T][3][3]`, integer-Z species,
+  CON `pbc` on `box/boundary`. Mixed-force frames pad zeros.
+  `ConCorpus::collect_h5md` owns the arrays; `extend_trajectory` is on Python.
 - MPI pack/Bcast helper takes the **caller communicator** (`include/readcon-db-mpi.h`,
   Python `bcast_packed_frame(comm, ...)`, Fortran pack + `MPI_Bcast` on the INTEGER
   handle). Never `MPI_Init` if the host already did; never names the process-wide

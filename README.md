@@ -80,9 +80,10 @@ Foreign trajectories: **`readcon.read_chemfiles("traj.xyz")` → frames → inge
 - **xxHash3-128** on stored blobs — exact dedup / `find_by_hash`.
 - **Many readers, one writer** (LMDB). Same-frame MPI: rank 0 of the
   **caller communicator** packs RCSO and `MPI_Bcast` on that handle
-  (`include/readcon-db-mpi.h`, Python `bcast_packed_frame(comm, ...)`).
-  The library never `MPI_Init`s and never names the process-wide world
-  communicator; LAMMPS / mpi4py pass the comm they already own.
+  (`include/readcon-db-mpi.h`, Python `bcast_packed_frame` /
+  `bcast_packed_frames`). The library never `MPI_Init`s and never names
+  the process-wide world communicator; LAMMPS / mpi4py pass the comm they
+  already own.
 
 Full ABI table, logo, Sphinx docs, and site: see `docs/`, `website/`, `assets/logo/`, `CHANGELOG.md`. Fortran module notes: `fortran/ReadConDb/`.
 

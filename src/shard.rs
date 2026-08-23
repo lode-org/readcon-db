@@ -1,5 +1,5 @@
 //! HPC multi-writer: one LMDB env **per shard** so writers do not serialize on a single
-//! write_txn. Route `traj_id % n_shards` (or explicit `writer_id`) to a shard directory.
+//! write_txn. Route `traj_id % n_shards` to a shard directory.
 //!
 //! One writer owns each `shard_id` across the job (`traj_id % n_shards`). If many
 //! ranks share a shard id, each node keeps a private tree, `drain`s to a unique dest,

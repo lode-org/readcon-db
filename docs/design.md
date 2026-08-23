@@ -69,9 +69,9 @@ Formula encoding: sorted non-empty symbols, `Sym:count` joined by `|` (e.g. `Cu:
 2. **Single writer** for ingest/reindex; analysis is read-only
    (`ConCorpus::open_readonly` / `MDB_RDONLY`). MPI ranks that all
    need the **same** frames should not each open the env: rank 0 of
-   the **caller communicator** `pack_frame` (RCSO) and `MPI_Bcast` on
-   that same handle (`include/readcon-db-mpi.h`, Python
-   `bcast_packed_frame(comm, ...)`). The host already owns MPI
+   the **caller communicator** `pack_frame` / `pack_frames` (RCSO) and
+   `MPI_Bcast` on that same handle (`include/readcon-db-mpi.h`, Python
+   `bcast_packed_frame` / `bcast_packed_frames`). The host already owns MPI
    (LAMMPS `lmp->world` / a sub-comm, mpi4py `Comm`); the library
    never calls `MPI_Init` and never names the process-wide world
    communicator. Workers `unpack` with no handle. Shared mmap

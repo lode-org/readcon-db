@@ -13,7 +13,7 @@ pub struct H5mdArrays {
     pub natoms: usize,
     /// `[T][N][3]` row-major f64.
     pub positions: Vec<f64>,
-    /// `[T][3][3]` H5MD box/edges (diagonal from CON `boxl`).
+    /// `[T][3][3]` H5MD box/edges (lattice vectors, or boxl+angles).
     pub edges: Vec<f64>,
     /// Integer Z, length `N`.
     pub species_z: Vec<i32>,
@@ -72,10 +72,22 @@ fn force_scale_to_engine(energy_u: &str, length_u: &str) -> Result<f64> {
     Ok((e_j / l_m) / KJ_MOL_ANGSTROM_SI)
 }
 
+fn time_scale_to_ps(from: &str) -> Result<f64> {
+    match uc(from, H5MD_TIME_CORE) {
+        Ok(f) => Ok(f),
+        Err(_)
+            if from.eq_ignore_ascii_case("ns") || from.eq_ignore_ascii_case("nanosecond") =>
+        {
+            Ok(1e3)
+        }
+        Err(e) => Err(e),
+    }
+}
+
 fn frame_time_ps(h: &readcon_core::types::FrameHeader, frame_idx: u32) -> Result<f64> {
     let from = header_unit(h, "time", H5MD_TIME_CORE);
     if let Some(t) = h.time() {
-        return Ok(t * uc(&from, H5MD_TIME_CORE)?);
+        return Ok(t * time_scale_to_ps(&from)?);
     }
     if let Some(dt) = h
         .metadata
@@ -83,7 +95,7 @@ fn frame_time_ps(h: &readcon_core::types::FrameHeader, frame_idx: u32) -> Result
         .and_then(|v| v.as_f64())
         .filter(|x| x.is_finite() && *x > 0.0)
     {
-        return Ok(f64::from(frame_idx) * dt * uc(&from, H5MD_TIME_CORE)?);
+        return Ok(f64::from(frame_idx) * dt * time_scale_to_ps(&from)?);
     }
     Ok(f64::from(frame_idx))
 }
@@ -175,12 +187,17 @@ impl ConCorpus {
             for p in &cooked.positions {
                 positions.extend_from_slice(&[p[0] * len_scale, p[1] * len_scale, p[2] * len_scale]);
             }
-            let fscale = force_scale_to_engine(&energy_u, &length_u)?;
-            force_rows.push(cooked.forces.map(|rows| {
-                rows.into_iter()
-                    .map(|r| [r[0] * fscale, r[1] * fscale, r[2] * fscale])
-                    .collect()
-            }));
+            force_rows.push(match cooked.forces {
+                Some(rows) => {
+                    let fscale = force_scale_to_engine(&energy_u, &length_u)?;
+                    Some(
+                        rows.into_iter()
+                            .map(|r| [r[0] * fscale, r[1] * fscale, r[2] * fscale])
+                            .collect(),
+                    )
+                }
+                None => None,
+            });
         }
         let forces = if force_rows.iter().any(|f| f.is_some()) {
             let mut fbuf = vec![0.0f64; n_frames * natoms * 3];
@@ -298,6 +315,48 @@ mod tests {
         db.append_trajectory_frames(1, &frames, "t").unwrap();
         let a = db.collect_h5md(1).unwrap();
         assert!((a.times[0] - 0.0125).abs() < 1e-12, "12.5 fs -> ps, got {}", a.times[0]);
+        assert_eq!(a.time_unit, "ps");
+    }
+
+    #[test]
+    fn collect_h5md_scales_nm_length_to_angstrom() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let mut frames = Vec::new();
+        for item in readcon_core::iterators::ConFrameIterator::new(&text) {
+            frames.push(item.unwrap());
+        }
+        let box0 = frames[0].header.boxl[0];
+        frames[0].header.metadata.insert(
+            "units".into(),
+            serde_json::json!({"length":"nm","energy":"eV","mass":"amu","time":"fs"}),
+        );
+        db.append_trajectory_frames(1, &frames, "t").unwrap();
+        let a = db.collect_h5md(1).unwrap();
+        let scale = uc("nm", "angstrom").unwrap();
+        assert!((scale - 10.0).abs() < 1e-12);
+        assert!((a.edges[0] - box0 * scale).abs() < 1e-9);
+        assert_eq!(a.length_unit, "Angstrom");
+    }
+
+    #[test]
+    fn collect_h5md_ns_time_to_ps() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let mut frames = Vec::new();
+        for item in readcon_core::iterators::ConFrameIterator::new(&text) {
+            frames.push(item.unwrap());
+        }
+        frames[0].header.set_time(2.0);
+        frames[0].header.metadata.insert(
+            "units".into(),
+            serde_json::json!({"length":"angstrom","energy":"eV","mass":"amu","time":"ns"}),
+        );
+        db.append_trajectory_frames(1, &frames, "t").unwrap();
+        let a = db.collect_h5md(1).unwrap();
+        assert!((a.times[0] - 2000.0).abs() < 1e-9, "2 ns -> ps, got {}", a.times[0]);
         assert_eq!(a.time_unit, "ps");
     }
 

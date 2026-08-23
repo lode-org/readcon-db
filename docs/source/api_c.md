@@ -71,6 +71,8 @@ free(buf);
 ```
 
 C++ `readcon_db::Corpus::pack_frames` / `unpack_batch_nframes` / `unpack_batch_item`.
+Fortran INTEGER comms: `rkrdb_bcast_packed_frame_f` and
+`rkrdb_bcast_packed_frames_f`.
 
 Fortran INTEGER handles go through `rkrdb_bcast_packed_frame_f`
 (`MPI_Comm_f2c` of the `MPI_Fint`). Standalone driver:

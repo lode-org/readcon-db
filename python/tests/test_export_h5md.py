@@ -44,6 +44,9 @@ def test_export_h5md_tn3_and_units(tmp_path):
         _assert_fixed_ascii(f["h5md/creator"].attrs, "name")
         _assert_fixed_ascii(f["h5md/creator"].attrs, "version")
         _assert_fixed_ascii(f["particles/all/box"].attrs, "boundary")
+        _assert_fixed_ascii(f["particles/all/position/value"].attrs, "unit")
+        _assert_fixed_ascii(f["particles/all/position/time"].attrs, "unit")
+        _assert_fixed_ascii(f["particles/all/box/edges/value"].attrs, "unit")
 
 
 def _as_str(x):
@@ -144,3 +147,18 @@ def test_export_h5md_mdanalysis_reader(tmp_path):
     reader = H5MDReader(str(out), convert_units=True)
     assert reader.n_frames == n
     assert reader.n_atoms >= 1
+
+
+def test_export_h5md_mdanalysis_reader_with_forces(tmp_path):
+    from MDAnalysis.coordinates.H5MD import H5MDReader
+
+    db = ConCorpus(str(tmp_path / "corpus"))
+    db.append_trajectory(1, str(FIXTURE / "tiny_cuh2.con"))
+    n = db.extend_trajectory(1, str(FIXTURE / "tiny_cuh2_forces.con"))
+    out = tmp_path / "mda_f.h5"
+    db.export_h5md(1, str(out))
+    reader = H5MDReader(str(out), convert_units=True)
+    assert reader.n_frames == n
+    with h5py.File(out, "r") as f:
+        assert "force" in f["particles/all"]
+        _assert_fixed_ascii(f["particles/all/force/value"].attrs, "unit")

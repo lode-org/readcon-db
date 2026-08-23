@@ -30,6 +30,13 @@ let hits = db.select(&sel)?;
 
 See crate docs (`cargo doc --open`) for `Error` variants and `ContentHash::to_hex`.
 
+```rust
+let blob = db.pack_frames(&keys)?;
+let a = db.collect_h5md(1)?;
+ShardedConCorpus::drain_to(src, dest)?;
+join_drained_roots(&[dest_a, dest_b], joined)?;
+```
+
 ## Cooked SoA (RCSO)
 
 See `docs/orgmode/cooked-soa.org`. Tier is opt-in; CON text remains authority. Bindings expose cook / delete / has-valid / positions (and forces on C/Python/Rust).
