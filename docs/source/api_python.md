@@ -66,11 +66,12 @@ The file has `/h5md` version `[1,1]` with `author`/`creator`,
 `particles/all/position/value` of shape `[T][N][3]`,
 `position/step` and `position/time` of shape `[T]`,
 `box/edges/value` of shape `[T][3][3]`, integer-Z `species`,
-and unit attributes (`Angstrom`, time from CON `units.time` via
-`unit_conversion_factor`, force `kJ mol-1 Angstrom-1`). Conversion is
-the metatomic SI factor in `readcon_core::units` (`value_to = factor *
-value_from`). `unit_conversion_factor("eV / angstrom", "kJ / mol / angstrom")`
-is the same function on the Python module.
+and unit attributes for one engine system (like metatomic model vs
+engine): length `Angstrom`, time `ps`, force `kJ mol-1 Angstrom-1`.
+CON `units.length` / `units.time` / `units.energy` convert through
+`unit_conversion_factor` (SI). Time is CON `header.time()`, or
+`i * timestep`, else the frame index, all in `ps`.
+`unit_conversion_factor(from, to)` is on the Python module.
 Mixed-force trajectories write a full `[T][N][3]` force dataset
 (zeros on frames without forces). Box `boundary` follows CON `pbc`
 (periodic when absent). `time` is CON `header.time()` or the frame

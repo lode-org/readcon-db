@@ -21,15 +21,21 @@ pub struct H5mdArrays {
     pub forces: Option<Vec<f64>>,
     /// H5MD `box` boundary strings, from CON `pbc` (periodic when absent).
     pub boundary: [String; 3],
-    /// `[T]` CON `header.time()` when present, else frame index.
+    /// `[T]` times in [`H5MD_TIME_ATTR`] (CON time or `i * timestep`, else frame index).
     pub times: Vec<f64>,
-    /// H5MD time unit after metatomic conversion (`fs`/`ps`/`ns`/`s`).
     pub time_unit: String,
-    /// H5MD length unit of `positions` / `edges` (always Angstrom after convert).
     pub length_unit: String,
-    /// H5MD force unit of `forces` (`kJ mol-1 Angstrom-1` after convert).
     pub force_unit: String,
 }
+
+/// MDA/H5MD engine units (one dest system, same split as metatomic model vs engine).
+pub const H5MD_LENGTH_CORE: &str = "angstrom";
+pub const H5MD_LENGTH_ATTR: &str = "Angstrom";
+pub const H5MD_TIME_CORE: &str = "ps";
+pub const H5MD_TIME_ATTR: &str = "ps";
+pub const H5MD_FORCE_ATTR: &str = "kJ mol-1 Angstrom-1";
+/// 1 kJ mol^{-1} Å^{-1} in N. CODATA 2018 N_A.
+const KJ_MOL_ANGSTROM_SI: f64 = (1000.0 / 6.022_140_76e23) / 1e-10;
 
 fn boundary_from_pbc(pbc: Option<[bool; 3]>) -> [String; 3] {
     let p = pbc.unwrap_or([true, true, true]);
@@ -59,38 +65,27 @@ fn header_unit(h: &readcon_core::types::FrameHeader, dim: &str, default: &str) -
         .unwrap_or_else(|| default.to_string())
 }
 
-/// MDA H5MD time attr for a CON time unit. Convert values with `uc(from, dest)`.
-/// `value_h5 = factor * value_con` for force. Uses the metatomic SI parser
-/// for energy and length. `kJ / mol / angstrom` is used when core `mol` is
-/// N_A; otherwise the same dest is built from J, m, and N_A.
-fn force_scale_to_kj_mol_angstrom(energy_u: &str, length_u: &str) -> Result<f64> {
-    let expr = format!("{energy_u} / {length_u}");
-    if let Ok(f) = readcon_core::units::unit_conversion_factor(&expr, "kJ / mol / angstrom") {
-        if f > 10.0 && f < 200.0 {
-            return Ok(f);
-        }
-    }
+/// `value_h5 = factor * value_con` for force (energy/length → kJ mol^{-1} Å^{-1}).
+fn force_scale_to_engine(energy_u: &str, length_u: &str) -> Result<f64> {
     let e_j = uc(energy_u, "J")?;
     let l_m = uc(length_u, "m")?;
-    const NA: f64 = 6.022_140_76e23;
-    let dest_si = (1000.0 / NA) / 1e-10;
-    Ok((e_j / l_m) / dest_si)
+    Ok((e_j / l_m) / KJ_MOL_ANGSTROM_SI)
 }
 
-fn h5md_time_dest(con_time: Option<&str>) -> &'static str {
-    let Some(u) = con_time else {
-        return "ps";
-    };
-    let l = u.to_ascii_lowercase();
-    if l == "fs" || l.starts_with("femto") {
-        "fs"
-    } else if l == "ns" || l.starts_with("nano") {
-        "ns"
-    } else if l == "s" || l.starts_with("sec") {
-        "s"
-    } else {
-        "ps"
+fn frame_time_ps(h: &readcon_core::types::FrameHeader, frame_idx: u32) -> Result<f64> {
+    let from = header_unit(h, "time", H5MD_TIME_CORE);
+    if let Some(t) = h.time() {
+        return Ok(t * uc(&from, H5MD_TIME_CORE)?);
     }
+    if let Some(dt) = h
+        .metadata
+        .get("timestep")
+        .and_then(|v| v.as_f64())
+        .filter(|x| x.is_finite() && *x > 0.0)
+    {
+        return Ok(f64::from(frame_idx) * dt * uc(&from, H5MD_TIME_CORE)?);
+    }
+    Ok(f64::from(frame_idx))
 }
 
 fn edges33_from_header(h: &readcon_core::types::FrameHeader) -> [f64; 9] {
@@ -156,22 +151,16 @@ impl ConCorpus {
             .collect();
         let n_frames = keys.len();
         let boundary = boundary_from_pbc(first.header.pbc());
-        let time_dest = h5md_time_dest(first.header.unit_for("time"));
         let mut positions = Vec::with_capacity(n_frames * natoms * 3);
         let mut edges = Vec::with_capacity(n_frames * 9);
         let mut times = Vec::with_capacity(n_frames);
         let mut force_rows: Vec<Option<Vec<[f64; 3]>>> = Vec::with_capacity(n_frames);
         for k in &keys {
             let fr = self.get_frame(*k)?;
-            let length_u = header_unit(&fr.header, "length", "angstrom");
+            let length_u = header_unit(&fr.header, "length", H5MD_LENGTH_CORE);
             let energy_u = header_unit(&fr.header, "energy", "eV");
-            let len_scale = uc(&length_u, "angstrom")?;
-            if let Some(t) = fr.header.time() {
-                let from_t = header_unit(&fr.header, "time", time_dest);
-                times.push(t * uc(&from_t, time_dest)?);
-            } else {
-                times.push(f64::from(k.frame_idx));
-            }
+            let len_scale = uc(&length_u, H5MD_LENGTH_CORE)?;
+            times.push(frame_time_ps(&fr.header, k.frame_idx)?);
             let e33 = edges33_from_header(&fr.header);
             for x in e33 {
                 edges.push(x * len_scale);
@@ -186,7 +175,7 @@ impl ConCorpus {
             for p in &cooked.positions {
                 positions.extend_from_slice(&[p[0] * len_scale, p[1] * len_scale, p[2] * len_scale]);
             }
-            let fscale = force_scale_to_kj_mol_angstrom(&energy_u, &length_u)?;
+            let fscale = force_scale_to_engine(&energy_u, &length_u)?;
             force_rows.push(cooked.forces.map(|rows| {
                 rows.into_iter()
                     .map(|r| [r[0] * fscale, r[1] * fscale, r[2] * fscale])
@@ -218,9 +207,9 @@ impl ConCorpus {
             forces,
             boundary,
             times,
-            time_unit: time_dest.to_string(),
-            length_unit: "Angstrom".into(),
-            force_unit: "kJ mol-1 Angstrom-1".into(),
+            time_unit: H5MD_TIME_ATTR.into(),
+            length_unit: H5MD_LENGTH_ATTR.into(),
+            force_unit: H5MD_FORCE_ATTR.into(),
         })
     }
 }
@@ -308,13 +297,13 @@ mod tests {
         );
         db.append_trajectory_frames(1, &frames, "t").unwrap();
         let a = db.collect_h5md(1).unwrap();
-        assert_eq!(a.times[0], 12.5);
-        assert_eq!(a.time_unit, "fs");
+        assert!((a.times[0] - 0.0125).abs() < 1e-12, "12.5 fs -> ps, got {}", a.times[0]);
+        assert_eq!(a.time_unit, "ps");
     }
 
     #[test]
     fn collect_h5md_converts_force_via_core_units() {
-        let factor = force_scale_to_kj_mol_angstrom("eV", "angstrom").unwrap();
+        let factor = force_scale_to_engine("eV", "angstrom").unwrap();
         assert!((factor - 96.485_332).abs() < 1e-3, "got {factor}");
         let dir = tempfile::tempdir().unwrap();
         let db = ConCorpus::open(dir.path()).unwrap();

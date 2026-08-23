@@ -5,8 +5,9 @@
 ### Features
 - Batched RCSO pack (`RCSB`): `pack_frames` / `rkrdb_pack_frames` / `bcast_packed_frames` on the caller comm
 - `readcon-db drain <local_root> <pfs_root>` copies shard dirs after node-local ingest
-- H5MD values convert through `readcon_core::units::unit_conversion_factor`
-  (same SI factor as metatomic). Python `unit_conversion_factor(from, to)`.
+- H5MD export uses one engine unit system (Å, ps, kJ mol^{-1} Å^{-1});
+  CON units convert through `unit_conversion_factor`. Python exposes that
+  function. Time is CON time or `i * timestep`, in ps.
 - H5MD time unit follows CON `units.time` (`fs` default); edges from
   `lattice_vectors` or boxl+angles; author/creator/boundary are fixed ASCII
 - `join_to_single_env` / `compact-join` / `join_corpus_dirs` refuse dest overwrite
