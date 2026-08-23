@@ -1237,6 +1237,9 @@ mod tests {
                 RKRDB_OK
             );
             assert_eq!(pos.len(), (nf as usize) * (na as usize) * 3);
+            // stamped A → dest Å; first Cu x on tiny_cuh2.con
+            assert!((pos[0] - 0.6394).abs() < 1e-4, "dest A x0={}", pos[0]);
+            assert!(pos.iter().any(|&x| x != 0.0));
             assert_eq!(rkrdb_close(id), RKRDB_OK);
         }
     }

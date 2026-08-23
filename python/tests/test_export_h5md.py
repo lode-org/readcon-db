@@ -216,6 +216,39 @@ def test_export_h5md_append_nm_scales_positions(tmp_path):
         assert t.shape[0] == 1
 
 
+def test_ingest_directory_units(tmp_path):
+    src = tmp_path / "cons"
+    src.mkdir()
+    (src / "a.con").write_text((FIXTURE / "tiny_cuh2.con").read_text())
+    db = ConCorpus(str(tmp_path / "corpus"))
+    rows = db.ingest_directory(str(src), units={"length": "A", "energy": "ev"})
+    assert len(rows) == 1
+    raw = db.get_units(1, 0)
+    assert "angstrom" in raw
+    assert "eV" in raw
+
+
+def test_export_h5md_i_times_timestep(tmp_path):
+    src = (FIXTURE / "tiny_multi_cuh2.con").read_text()
+    lines = src.splitlines()
+    meta = (
+        '{"con_spec_version":3,"timestep":10.0,'
+        '"units":{"length":"angstrom","energy":"eV","time":"fs"}}'
+    )
+    lines = [meta if ln.strip().startswith("{") else ln for ln in lines]
+    con = tmp_path / "dt.con"
+    con.write_text("\n".join(lines) + "\n")
+    db = ConCorpus(str(tmp_path / "corpus"))
+    n = db.append_trajectory(1, str(con))
+    assert n >= 2
+    out = tmp_path / "dt.h5"
+    db.export_h5md(1, str(out))
+    with h5py.File(out, "r") as f:
+        t = f["particles/all/position/time"][:]
+        assert abs(float(t[0]) - 0.0) < 1e-12
+        assert abs(float(t[1]) - 0.01) < 1e-12
+
+
 def test_export_h5md_writes_header_time(tmp_path):
     src = (FIXTURE / "tiny_cuh2.con").read_text()
     lines = src.splitlines()

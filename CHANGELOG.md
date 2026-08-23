@@ -27,7 +27,8 @@
   `/h5md` author/creator, `position/value` `[T][N][3]`, `position/step` and
   `position/time` `[T]`, `box/edges/value` `[T][3][3]`, integer-Z species,
   CON `pbc` on `box/boundary`. Mixed-force frames pad zeros.
-  `ConCorpus::collect_h5md` owns the arrays; `extend_trajectory` is on Python.
+  `ConCorpus::collect_h5md` owns the arrays. `extend_trajectory` is on
+  Rust, Python, C (`rkrdb_extend_trajectory_units`), C++, and Fortran.
 - MPI pack/Bcast helper takes the **caller communicator** (`include/readcon-db-mpi.h`,
   Python `bcast_packed_frame(comm, ...)`, Fortran pack + `MPI_Bcast` on the INTEGER
   handle). Never `MPI_Init` if the host already did; never names the process-wide
