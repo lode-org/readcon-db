@@ -43,6 +43,10 @@ C++ RAII:
 readcon_db::Corpus db("/tmp/corpus");
 db.append_trajectory(1, "run.con", "{\"length\":\"A\",\"energy\":\"ev\"}");
 db.set_units(1, "{\"length\":\"nm\",\"energy\":\"eV\"}");
+uint32_t nf = 0, na = 0;
+db.h5md_shape(1, &nf, &na);
+double xyz[4096];
+db.h5md_positions(1, xyz, 4096, &nf, &na);
 db.select_basic(1, "Cu", 1, 100000, 0);
 db.select_meta(-1, "Cu", 1, 100000, -50.0, 0.0, 1, 1u, 0);
 ```

@@ -240,6 +240,13 @@ public:
       throw std::runtime_error("h5md_shape failed");
   }
 
+  uint32_t h5md_positions(uint64_t traj_id, double *out, size_t cap,
+                          uint32_t *nframes, uint32_t *natoms) {
+    if (rkrdb_h5md_positions(id_, traj_id, out, cap, nframes, natoms) != RKRDB_OK)
+      throw std::runtime_error("h5md_positions failed");
+    return *nframes;
+  }
+
   size_t id() const { return id_; }
 };
 
