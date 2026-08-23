@@ -334,12 +334,24 @@ impl ConCorpus {
         frames: &[ConFrame],
         start_idx: u32,
     ) -> Result<Vec<PreparedIndexPuts>> {
+        Self::prepare_trajectory_frames_precise(traj_id, frames, start_idx, None)
+    }
+
+    fn prepare_trajectory_frames_precise(
+        traj_id: TrajId,
+        frames: &[ConFrame],
+        start_idx: u32,
+        precision: Option<usize>,
+    ) -> Result<Vec<PreparedIndexPuts>> {
         let mut out = Vec::with_capacity(frames.len());
         let mut frame_idx = start_idx;
         for fr in frames {
             let mut buf = Cursor::new(Vec::new());
             {
-                let mut w = ConFrameWriter::new(&mut buf);
+                let mut w = match precision {
+                    Some(p) => ConFrameWriter::with_precision(&mut buf, p),
+                    None => ConFrameWriter::new(&mut buf),
+                };
                 w.write_frame(fr)
                     .map_err(|e| Error::Parse(format!("serialize: {e}")))?;
             }
@@ -414,6 +426,23 @@ impl ConCorpus {
     ) -> Result<u32> {
         let source = source.into();
         let prepared = Self::prepare_trajectory_frames(traj_id, frames, 0)?;
+        self.commit_prepared(traj_id, &prepared, source, false)
+    }
+
+    /// [`Self::append_trajectory_frames`] at an explicit float precision.
+    /// The writer default (6 decimals) is fine for structure handoff but
+    /// lossy for ledgers that must round-trip f64 exactly (17 significant
+    /// digits); the observation archive uses this path.
+    pub fn append_trajectory_frames_with_precision(
+        &self,
+        traj_id: TrajId,
+        frames: &[ConFrame],
+        source: impl Into<String>,
+        precision: usize,
+    ) -> Result<u32> {
+        let source = source.into();
+        let prepared =
+            Self::prepare_trajectory_frames_precise(traj_id, frames, 0, Some(precision))?;
         self.commit_prepared(traj_id, &prepared, source, false)
     }
 
