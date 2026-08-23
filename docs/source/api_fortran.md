@@ -47,9 +47,9 @@ C helpers from Fortran INTEGER: `rkrdb_bcast_packed_frame_f` and
 without the helper. Standalone: `examples/mpi_bcast_frame.f90` (single
 `db_pack_frame` then `db_pack_frames`).
 
-H5MD interchange and caller units live on the Rust/Python/C corpus
-(`collect_h5md`, `append_trajectory_path_units`, CLI `--units`). CON
-line-2 `units` is the authority; dest export is Å / ps / kJ mol^{-1} Å^{-1}.
+H5MD interchange and caller units: `db_append_units`, `db_set_units`,
+`db_h5md_times` (dest `ps`). CON line-2 `units` is the authority; dest
+export is Å / ps / kJ mol^{-1} Å^{-1}.
 
 ## Cooked SoA (RCSO)
 

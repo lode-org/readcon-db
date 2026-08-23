@@ -6,7 +6,8 @@ module readcon_db
             db_select_basic, &
             db_result_count, db_result_key, db_frame_hash, db_frame_formula, db_xxh3_128, &
             db_get_frame, db_pack_frame, db_pack_frames, db_unpack_positions, &
-            db_unpack_batch_nframes, db_unpack_batch_item, db_set_units, db_frame_units
+            db_unpack_batch_nframes, db_unpack_batch_item, db_set_units, db_frame_units, &
+            db_h5md_times
 
   integer(c_int), parameter :: rkrdb_ok = 0
   integer(c_int), parameter :: rkrdb_err = -1
@@ -107,6 +108,14 @@ module readcon_db
       integer(c_int64_t), value :: traj_id
       integer(c_int32_t), value :: frame_idx
       character(kind=c_char), intent(out) :: buf(*)
+      integer(c_int) :: st
+    end function
+    function rkrdb_h5md_times(id, traj_id, out, cap, out_n) bind(C, name="rkrdb_h5md_times") result(st)
+      import :: c_int, c_size_t, c_int64_t, c_int32_t, c_double
+      integer(c_size_t), value :: id, cap
+      integer(c_int64_t), value :: traj_id
+      real(c_double), intent(out) :: out(*)
+      integer(c_int32_t), intent(out) :: out_n
       integer(c_int) :: st
     end function
     function rkrdb_select_basic(id, traj_id, symbol, nmin, nmax, limit) bind(C, name="rkrdb_select_basic") result(st)
@@ -324,6 +333,15 @@ contains
     character(kind=c_char), allocatable :: cu(:)
     cu = f_c_string(units_json)
     status = rkrdb_set_units(id, traj_id, cu, n_frames)
+  end subroutine
+
+  subroutine db_h5md_times(id, traj_id, times, cap, n, status)
+    integer(c_size_t), intent(in) :: id, cap
+    integer(c_int64_t), intent(in) :: traj_id
+    real(c_double), intent(out) :: times(*)
+    integer(c_int32_t), intent(out) :: n
+    integer(c_int), intent(out) :: status
+    status = rkrdb_h5md_times(id, traj_id, times, cap, n)
   end subroutine
 
   subroutine db_frame_units(id, traj_id, frame_idx, buf, status)
