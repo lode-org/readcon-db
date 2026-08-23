@@ -87,6 +87,11 @@ def test_export_h5md_mixed_forces_zero_pad(tmp_path):
                 break
         assert native is not None
         scale = unit_conversion_factor("eV / angstrom", "kJ / mol / angstrom")
+        if not 10.0 < scale < 200.0:
+            e_j = unit_conversion_factor("eV", "J")
+            l_m = unit_conversion_factor("angstrom", "m")
+            na = 6.02214076e23
+            scale = (e_j / l_m) / ((1000.0 / na) / 1e-10)
         np.testing.assert_allclose(force[idx], native * scale)
         bnd = f["particles/all/box"].attrs["boundary"]
         assert len(bnd) == 3

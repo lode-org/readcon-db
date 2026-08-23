@@ -60,6 +60,23 @@ fn header_unit(h: &readcon_core::types::FrameHeader, dim: &str, default: &str) -
 }
 
 /// MDA H5MD time attr for a CON time unit. Convert values with `uc(from, dest)`.
+/// `value_h5 = factor * value_con` for force. Uses the metatomic SI parser
+/// for energy and length. `kJ / mol / angstrom` is used when core `mol` is
+/// N_A; otherwise the same dest is built from J, m, and N_A.
+fn force_scale_to_kj_mol_angstrom(energy_u: &str, length_u: &str) -> Result<f64> {
+    let expr = format!("{energy_u} / {length_u}");
+    if let Ok(f) = readcon_core::units::unit_conversion_factor(&expr, "kJ / mol / angstrom") {
+        if f > 10.0 && f < 200.0 {
+            return Ok(f);
+        }
+    }
+    let e_j = uc(energy_u, "J")?;
+    let l_m = uc(length_u, "m")?;
+    const NA: f64 = 6.022_140_76e23;
+    let dest_si = (1000.0 / NA) / 1e-10;
+    Ok((e_j / l_m) / dest_si)
+}
+
 fn h5md_time_dest(con_time: Option<&str>) -> &'static str {
     let Some(u) = con_time else {
         return "ps";
@@ -169,8 +186,7 @@ impl ConCorpus {
             for p in &cooked.positions {
                 positions.extend_from_slice(&[p[0] * len_scale, p[1] * len_scale, p[2] * len_scale]);
             }
-            let force_from = format!("{energy_u} / {length_u}");
-            let fscale = uc(&force_from, "kJ / mol / angstrom")?;
+            let fscale = force_scale_to_kj_mol_angstrom(&energy_u, &length_u)?;
             force_rows.push(cooked.forces.map(|rows| {
                 rows.into_iter()
                     .map(|r| [r[0] * fscale, r[1] * fscale, r[2] * fscale])
@@ -298,12 +314,8 @@ mod tests {
 
     #[test]
     fn collect_h5md_converts_force_via_core_units() {
-        let factor = readcon_core::units::unit_conversion_factor(
-            "eV / angstrom",
-            "kJ / mol / angstrom",
-        )
-        .unwrap();
-        assert!(factor > 90.0 && factor < 100.0, "got {factor}");
+        let factor = force_scale_to_kj_mol_angstrom("eV", "angstrom").unwrap();
+        assert!((factor - 96.485_332).abs() < 1e-3, "got {factor}");
         let dir = tempfile::tempdir().unwrap();
         let db = ConCorpus::open(dir.path()).unwrap();
         db.append_trajectory_path(1, fixture("tiny_cuh2_forces.con"))
