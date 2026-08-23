@@ -4,7 +4,6 @@
 
 use crate::corpus::ConCorpus;
 use crate::error::Result;
-use crate::keys::FrameKey;
 use crate::select::Select;
 
 /// Time-dependent cooked trajectory for one `traj_id`.
