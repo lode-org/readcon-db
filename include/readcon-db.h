@@ -86,6 +86,10 @@ int rkrdb_get_forces(size_t id, uint64_t traj_id, uint32_t frame_idx, double *ou
 int rkrdb_xxh3_128(const uint8_t *data, size_t len, uint8_t *out_hash16);
 /** Dest-ps times from collect_h5md. */
 int rkrdb_h5md_times(size_t id, uint64_t traj_id, double *out, size_t cap, uint32_t *out_n);
+int rkrdb_h5md_shape(size_t id, uint64_t traj_id, uint32_t *out_nframes, uint32_t *out_natoms);
+/** Row-major [T][N][3] dest-Angstrom positions. */
+int rkrdb_h5md_positions(size_t id, uint64_t traj_id, double *out, size_t cap,
+                         uint32_t *out_nframes, uint32_t *out_natoms);
 
 /* --- Observation archive: async fixed-composition ledger of oracle
  * evaluations. Writes land on a dedicated writer thread (append is
@@ -229,6 +233,11 @@ public:
     if (rkrdb_h5md_times(id_, traj_id, out, cap, &n) != RKRDB_OK)
       throw std::runtime_error("h5md_times failed");
     return n;
+  }
+
+  void h5md_shape(uint64_t traj_id, uint32_t *nframes, uint32_t *natoms) {
+    if (rkrdb_h5md_shape(id_, traj_id, nframes, natoms) != RKRDB_OK)
+      throw std::runtime_error("h5md_shape failed");
   }
 
   size_t id() const { return id_; }

@@ -1049,6 +1049,73 @@ pub unsafe extern "C" fn rkrdb_get_frame(
     .unwrap_or(std::ptr::null_mut())
 }
 
+/// `nframes` and `natoms` for one trajectory's H5MD arrays.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_h5md_shape(
+    id: usize,
+    traj_id: u64,
+    out_nframes: *mut u32,
+    out_natoms: *mut u32,
+) -> c_int {
+    if out_nframes.is_null() || out_natoms.is_null() {
+        return RKRDB_NULL;
+    }
+    let corpus = match corpus_arc(id) {
+        Ok(c) => c,
+        Err(c) => return c,
+    };
+    match corpus.collect_h5md(traj_id) {
+        Ok(a) => {
+            unsafe {
+                *out_nframes = a.n_frames as u32;
+                *out_natoms = a.natoms as u32;
+            }
+            RKRDB_OK
+        }
+        Err(e) => {
+            set_err_id(id, e);
+            RKRDB_ERR
+        }
+    }
+}
+
+/// Row-major `[T][N][3]` dest-Å positions from `collect_h5md`.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_h5md_positions(
+    id: usize,
+    traj_id: u64,
+    out: *mut f64,
+    cap: usize,
+    out_nframes: *mut u32,
+    out_natoms: *mut u32,
+) -> c_int {
+    if out.is_null() || out_nframes.is_null() || out_natoms.is_null() {
+        return RKRDB_NULL;
+    }
+    let corpus = match corpus_arc(id) {
+        Ok(c) => c,
+        Err(c) => return c,
+    };
+    match corpus.collect_h5md(traj_id) {
+        Ok(a) => {
+            if a.positions.len() > cap {
+                set_err_id(id, "h5md_positions buffer too small");
+                return RKRDB_ERR;
+            }
+            unsafe {
+                ptr::copy_nonoverlapping(a.positions.as_ptr(), out, a.positions.len());
+                *out_nframes = a.n_frames as u32;
+                *out_natoms = a.natoms as u32;
+            }
+            RKRDB_OK
+        }
+        Err(e) => {
+            set_err_id(id, e);
+            RKRDB_ERR
+        }
+    }
+}
+
 /// Dest-`ps` times from `collect_h5md` (CON time or `i * timestep`, else index).
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_h5md_times(
@@ -1153,6 +1220,23 @@ mod tests {
                 RKRDB_OK
             );
             assert!(nt >= 1);
+            let mut nf = 0u32;
+            let mut na = 0u32;
+            assert_eq!(rkrdb_h5md_shape(id, 1, &mut nf, &mut na), RKRDB_OK);
+            assert!(nf >= 1 && na >= 1);
+            let mut pos = vec![0.0f64; (nf as usize) * (na as usize) * 3];
+            assert_eq!(
+                rkrdb_h5md_positions(
+                    id,
+                    1,
+                    pos.as_mut_ptr(),
+                    pos.len(),
+                    &mut nf,
+                    &mut na
+                ),
+                RKRDB_OK
+            );
+            assert_eq!(pos.len(), (nf as usize) * (na as usize) * 3);
             assert_eq!(rkrdb_close(id), RKRDB_OK);
         }
     }
