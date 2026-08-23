@@ -255,6 +255,19 @@ impl PyConCorpus {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// Random-access parse: stored blob → `readcon.ConFrame`.
+    fn get_frame<'py>(
+        &self,
+        py: Python<'py>,
+        traj_id: u64,
+        frame_idx: u32,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let text = self.get_frame_text(traj_id, frame_idx)?;
+        let readcon = py.import("readcon")?;
+        let frames = readcon.call_method1("read_con_string", (text,))?;
+        frames.get_item(0)
+    }
+
     /// Materialize all frame blobs for `traj_id` in one LMDB read txn (full extract).
     /// Returns `(total_bytes, payload_checksum)` so callers cannot elide the copy.
     fn touch_trajectory(&self, traj_id: u64, n_frames: u32) -> PyResult<(u64, u64)> {

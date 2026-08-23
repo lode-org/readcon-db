@@ -720,6 +720,28 @@ pub unsafe extern "C" fn rkrdb_get_frame_text(
     .unwrap_or(RKRDB_NULL)
 }
 
+/// Parse stored CON text into a readcon-core `RKRConFrame`.
+/// Caller frees with `free_rkr_frame` from libreadcon_core. NULL on error.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_get_frame(
+    id: usize,
+    traj_id: u64,
+    frame_idx: u32,
+) -> *mut std::ffi::c_void {
+    let key = FrameKey {
+        traj_id,
+        frame_idx,
+    };
+    with_handle(id, |h| match h.corpus.get_frame(key) {
+        Ok(frame) => Ok(Box::into_raw(Box::new(frame)) as *mut std::ffi::c_void),
+        Err(e) => {
+            set_err(h, e);
+            Ok(std::ptr::null_mut())
+        }
+    })
+    .unwrap_or(std::ptr::null_mut())
+}
+
 /// xxHash3-128 of arbitrary bytes (LE 16 bytes) — for clients hashing off-line blobs.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_xxh3_128(data: *const u8, len: usize, out_hash16: *mut u8) -> c_int {

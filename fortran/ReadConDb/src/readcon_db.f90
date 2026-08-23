@@ -3,7 +3,8 @@ module readcon_db
   implicit none
   private
   public :: rkrdb_ok, rkrdb_err, db_open, db_close, db_append, db_select_basic, &
-            db_result_count, db_result_key, db_frame_hash, db_frame_formula, db_xxh3_128
+            db_result_count, db_result_key, db_frame_hash, db_frame_formula, db_xxh3_128, &
+            db_get_frame
 
   integer(c_int), parameter :: rkrdb_ok = 0
   integer(c_int), parameter :: rkrdb_err = -1
@@ -62,6 +63,13 @@ module readcon_db
       integer(c_size_t), value :: n
       integer(c_int8_t), intent(out) :: out_hash(*)
       integer(c_int) :: st
+    end function
+    function rkrdb_get_frame(id, traj_id, frame_idx) bind(C, name="rkrdb_get_frame") result(p)
+      import :: c_size_t, c_int64_t, c_int32_t, c_ptr
+      integer(c_size_t), value :: id
+      integer(c_int64_t), value :: traj_id
+      integer(c_int32_t), value :: frame_idx
+      type(c_ptr) :: p
     end function
     function rkrdb_frame_formula(id, traj_id, frame_idx, buf, buflen) bind(C, name="rkrdb_frame_formula") result(st)
       import :: c_int, c_size_t, c_int64_t, c_int32_t, c_char
@@ -236,6 +244,15 @@ contains
       valid = (v == 1)
     end if
   end subroutine
+
+  function db_get_frame(id, traj_id, frame_idx) result(p)
+    ! RKRConFrame*; free with free_rkr_frame from readcon-core.
+    integer(c_size_t), intent(in) :: id
+    integer(c_int64_t), intent(in) :: traj_id
+    integer(c_int32_t), intent(in) :: frame_idx
+    type(c_ptr) :: p
+    p = rkrdb_get_frame(id, traj_id, frame_idx)
+  end function
 
   subroutine db_recook_all(id, status)
     integer(c_size_t), intent(in) :: id

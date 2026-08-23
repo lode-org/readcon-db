@@ -37,6 +37,8 @@ int rkrdb_result_count(size_t id);
 int rkrdb_result_key(size_t id, size_t i, uint64_t *out_traj, uint32_t *out_frame);
 int rkrdb_frame_hash(size_t id, uint64_t traj_id, uint32_t frame_idx, uint8_t *out_hash16);
 int rkrdb_get_frame_text(size_t id, uint64_t traj_id, uint32_t frame_idx, char *buf, size_t buflen);
+/** Parsed CON frame (readcon-core RKRConFrame*). Free with free_rkr_frame. */
+void *rkrdb_get_frame(size_t id, uint64_t traj_id, uint32_t frame_idx);
 /** Canonical multiset formula (Cu:2|H:2) via core index_proj; NUL-terminated into buf. */
 int rkrdb_frame_formula(size_t id, uint64_t traj_id, uint32_t frame_idx, char *buf, size_t buflen);
 /** Opt-in RCSO cook from CON text (frames stays authority). */
