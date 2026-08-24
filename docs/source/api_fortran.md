@@ -56,7 +56,8 @@ C symbols are `rkrdb_append_trajectory_units`,
 `rkrdb_h5md_times`, `rkrdb_h5md_shape`, `rkrdb_h5md_positions`,
 `rkrdb_h5md_edges`, `rkrdb_h5md_forces`, `rkrdb_h5md_velocities`,
 `rkrdb_h5md_species`. Fortran also has `db_extend_units`, `db_frame_units`,
-`db_h5md_species`, `db_get_velocities`, `db_cook_frame`, `db_delete_cooked`,
+`db_h5md_edges`, `db_h5md_forces`, `db_h5md_velocities`, `db_h5md_species`,
+`db_get_velocities`, `db_cook_frame`, `db_delete_cooked`,
 `db_has_valid_cooked`, and `db_recook_all`.
 CON line-2 `units` is the authority.
 

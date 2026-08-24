@@ -14,6 +14,8 @@
   aliases are canonicalized into CON metadata (`A` → `angstrom`).
   `set_units` converts stored numbers; append/extend stamp incoming
   values.
+- `rkrdb_get_velocities` matches `get_forces` (`out_has_velocities`; no
+  throw on absence). Drain refuses dest shards before writing `shards.json`.
 - C/C++/Fortran `rkrdb_h5md_species` copies collect integer Z; Corpus
   wraps `get_positions` / `get_forces` / `get_velocities`.
 - H5MD export uses one engine unit system (Å, ps, kJ mol^{-1} Å^{-1});

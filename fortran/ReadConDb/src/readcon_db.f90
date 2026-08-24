@@ -185,14 +185,15 @@ module readcon_db
       integer(c_int32_t), intent(out) :: out_natoms
       integer(c_int) :: st
     end function
-    function rkrdb_get_velocities(id, traj_id, frame_idx, out_xyz, capacity_atoms, out_natoms) &
-        bind(C, name="rkrdb_get_velocities") result(st)
-      import :: c_int, c_size_t, c_int64_t, c_int32_t, c_double
+    function rkrdb_get_velocities(id, traj_id, frame_idx, out_xyz, capacity_atoms, out_natoms, &
+        out_has) bind(C, name="rkrdb_get_velocities") result(st)
+      import :: c_int, c_size_t, c_int64_t, c_int32_t, c_int8_t, c_double
       integer(c_size_t), value :: id
       integer(c_int64_t), value :: traj_id
       integer(c_int32_t), value :: frame_idx, capacity_atoms
       real(c_double), intent(out) :: out_xyz(*)
       integer(c_int32_t), intent(out) :: out_natoms
+      integer(c_int8_t), intent(out) :: out_has
       integer(c_int) :: st
     end function
     function rkrdb_select_basic(id, traj_id, symbol, nmin, nmax, limit) bind(C, name="rkrdb_select_basic") result(st)
@@ -494,14 +495,18 @@ contains
     status = rkrdb_h5md_species(id, traj_id, z, cap, natoms)
   end subroutine
 
-  subroutine db_get_velocities(id, traj_id, frame_idx, xyz, capacity_atoms, natoms, status)
+  subroutine db_get_velocities(id, traj_id, frame_idx, xyz, capacity_atoms, natoms, has_vel, status)
     integer(c_size_t), intent(in) :: id
     integer(c_int64_t), intent(in) :: traj_id
     integer(c_int32_t), intent(in) :: frame_idx, capacity_atoms
     real(c_double), intent(out) :: xyz(*)
     integer(c_int32_t), intent(out) :: natoms
+    logical, intent(out) :: has_vel
     integer(c_int), intent(out) :: status
-    status = rkrdb_get_velocities(id, traj_id, frame_idx, xyz, capacity_atoms, natoms)
+    integer(c_int8_t) :: hv
+    hv = 0_c_int8_t
+    status = rkrdb_get_velocities(id, traj_id, frame_idx, xyz, capacity_atoms, natoms, hv)
+    has_vel = (hv /= 0_c_int8_t)
   end subroutine
 
   subroutine db_frame_units(id, traj_id, frame_idx, buf, status)

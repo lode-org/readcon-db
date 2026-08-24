@@ -84,7 +84,8 @@ int rkrdb_get_positions(size_t id, uint64_t traj_id, uint32_t frame_idx, double 
 int rkrdb_get_forces(size_t id, uint64_t traj_id, uint32_t frame_idx, double *out_xyz,
                      uint32_t capacity_atoms, uint32_t *out_natoms, uint8_t *out_has_forces);
 int rkrdb_get_velocities(size_t id, uint64_t traj_id, uint32_t frame_idx, double *out_xyz,
-                         uint32_t capacity_atoms, uint32_t *out_natoms);
+                         uint32_t capacity_atoms, uint32_t *out_natoms,
+                         uint8_t *out_has_velocities);
 int rkrdb_xxh3_128(const uint8_t *data, size_t len, uint8_t *out_hash16);
 /** Dest-ps times from collect_h5md. */
 int rkrdb_h5md_times(size_t id, uint64_t traj_id, double *out, size_t cap, uint32_t *out_n);
@@ -228,11 +229,14 @@ public:
   }
 
   uint32_t get_velocities(uint64_t traj_id, uint32_t frame_idx, double *out_xyz,
-                          uint32_t capacity_atoms) {
+                          uint32_t capacity_atoms, bool *has_velocities) {
     uint32_t n = 0;
-    if (rkrdb_get_velocities(id_, traj_id, frame_idx, out_xyz, capacity_atoms, &n) !=
+    uint8_t hv = 0;
+    if (rkrdb_get_velocities(id_, traj_id, frame_idx, out_xyz, capacity_atoms, &n, &hv) !=
         RKRDB_OK)
       throw std::runtime_error("get_velocities failed");
+    if (has_velocities)
+      *has_velocities = hv != 0;
     return n;
   }
 
@@ -295,14 +299,22 @@ public:
       throw std::runtime_error("h5md_edges failed");
   }
 
-  void h5md_forces(uint64_t traj_id, double *out, size_t cap) {
-    if (rkrdb_h5md_forces(id_, traj_id, out, cap) != RKRDB_OK)
+  bool h5md_forces(uint64_t traj_id, double *out, size_t cap) {
+    int st = rkrdb_h5md_forces(id_, traj_id, out, cap);
+    if (st == RKRDB_NOT_FOUND)
+      return false;
+    if (st != RKRDB_OK)
       throw std::runtime_error("h5md_forces failed");
+    return true;
   }
 
-  void h5md_velocities(uint64_t traj_id, double *out, size_t cap) {
-    if (rkrdb_h5md_velocities(id_, traj_id, out, cap) != RKRDB_OK)
+  bool h5md_velocities(uint64_t traj_id, double *out, size_t cap) {
+    int st = rkrdb_h5md_velocities(id_, traj_id, out, cap);
+    if (st == RKRDB_NOT_FOUND)
+      return false;
+    if (st != RKRDB_OK)
       throw std::runtime_error("h5md_velocities failed");
+    return true;
   }
 
   uint32_t h5md_species(uint64_t traj_id, int32_t *out, size_t cap) {

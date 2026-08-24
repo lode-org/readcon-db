@@ -67,6 +67,23 @@ def _assert_fixed_ascii(attrs, key):
     assert dt.kind in ("S", "U") and dt.itemsize >= 1
 
 
+def test_export_h5md_mixed_velocities_zero_pad(tmp_path):
+    db = ConCorpus(str(tmp_path / "corpus"))
+    db.append_trajectory(1, str(FIXTURE / "tiny_cuh2.con"))
+    n = db.extend_trajectory(1, str(FIXTURE / "tiny_cuh2.convel"))
+    out = tmp_path / "mixed_v.h5"
+    db.export_h5md(1, str(out))
+    with h5py.File(out, "r") as f:
+        vel = f["particles/all/velocity/value"]
+        assert vel.shape[0] == n
+        assert vel.shape[2] == 3
+        assert _as_str(vel.attrs["unit"]) == "Angstrom ps-1"
+        first = vel[0]
+        rest = vel[1:]
+        assert np.all(first == 0.0)
+        assert np.any(rest != 0.0)
+
+
 def test_export_h5md_mixed_forces_zero_pad(tmp_path):
     db = ConCorpus(str(tmp_path / "corpus"))
     db.append_trajectory(1, str(FIXTURE / "tiny_cuh2.con"))

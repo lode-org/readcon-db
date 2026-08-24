@@ -228,10 +228,19 @@ impl ShardedConCorpus {
                     "drain: dest shards.json n_shards does not match src".into(),
                 ));
             }
-        } else {
-            std::fs::copy(&man, &dest_man)?;
         }
         let m: ShardManifest = serde_json::from_str(&std::fs::read_to_string(&man)?)?;
+        for i in 0..m.n_shards {
+            let name = format!("shard_{i:04}");
+            if src.join(&name).is_dir() && dst.join(&name).join("data.mdb").is_file() {
+                return Err(Error::Message(format!(
+                    "drain: dest {name} exists; refuse overwrite. Drain each node to a unique dest, then join-drained."
+                )));
+            }
+        }
+        if !dest_man.is_file() {
+            std::fs::copy(&man, &dest_man)?;
+        }
         let mut n = 0u32;
         for i in 0..m.n_shards {
             let name = format!("shard_{i:04}");
@@ -240,11 +249,6 @@ impl ShardedConCorpus {
                 continue;
             }
             let to = dst.join(&name);
-            if to.join("data.mdb").is_file() {
-                return Err(Error::Message(format!(
-                    "drain: dest {name} exists; refuse overwrite. Drain each node to a unique dest, then join-drained."
-                )));
-            }
             let ro = ConCorpus::open_readonly(&from)?;
             ro.snapshot_to(&to)?;
             ro.close();
@@ -309,6 +313,7 @@ mod tests {
             "compact snapshot must not materialize the 2 GiB map, got {dest_sz}"
         );
         assert!(ShardedConCorpus::drain_to(root.as_path(), &drained).is_err());
+        assert!(drained.join("shards.json").is_file());
         assert_eq!(keys.len(), 8);
         let joined = dir.path().join("joined");
         let mut drained_root = ShardedConCorpus::open(&drained, n_shards).unwrap();
@@ -317,6 +322,26 @@ mod tests {
         let single = ConCorpus::open(&joined).unwrap();
         let jk = single.select(&Select::new().require_symbol("Cu")).unwrap();
         assert_eq!(jk.len(), keys.len());
+    }
+
+    #[test]
+    fn drain_refuse_does_not_write_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("hpc");
+        ShardedConCorpus::open(&root, 2).unwrap();
+        let db = ShardedConCorpus::open_shard(&root, 0).unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        db.append_trajectory_str(0, &text, "s0").unwrap();
+        drop(db);
+        let dest = dir.path().join("pfs");
+        std::fs::create_dir_all(dest.join("shard_0000")).unwrap();
+        std::fs::write(dest.join("shard_0000").join("data.mdb"), b"x").unwrap();
+        let err = ShardedConCorpus::drain_to(&root, &dest).unwrap_err();
+        assert!(err.to_string().contains("refuse overwrite"), "{err}");
+        assert!(
+            !dest.join("shards.json").is_file(),
+            "refuse must not leave dest shards.json"
+        );
     }
 
     #[test]

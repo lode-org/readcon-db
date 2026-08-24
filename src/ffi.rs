@@ -1240,8 +1240,9 @@ pub unsafe extern "C" fn rkrdb_get_velocities(
     out_xyz: *mut f64,
     capacity_atoms: u32,
     out_natoms: *mut u32,
+    out_has_velocities: *mut u8,
 ) -> c_int {
-    if out_xyz.is_null() || out_natoms.is_null() {
+    if out_xyz.is_null() || out_natoms.is_null() || out_has_velocities.is_null() {
         return RKRDB_NULL;
     }
     let corpus = match corpus_arc(id) {
@@ -1257,6 +1258,7 @@ pub unsafe extern "C" fn rkrdb_get_velocities(
                 return RKRDB_ERR;
             }
             unsafe {
+                *out_has_velocities = 1;
                 *out_natoms = rows.len() as u32;
                 for (i, r) in rows.iter().enumerate() {
                     *out_xyz.add(i * 3) = r[0];
@@ -1266,7 +1268,13 @@ pub unsafe extern "C" fn rkrdb_get_velocities(
             }
             RKRDB_OK
         }
-        Ok(None) => RKRDB_NOT_FOUND,
+        Ok(None) => {
+            unsafe {
+                *out_has_velocities = 0;
+                *out_natoms = 0;
+            }
+            RKRDB_OK
+        }
         Err(e) => {
             set_err_id(id, e);
             RKRDB_ERR
@@ -1462,16 +1470,27 @@ mod tests {
             assert!((vel[0] - 1.234).abs() < 1e-9, "got {}", vel[0]);
             let mut native = vec![0.0f64; 32];
             let mut nv = 0u32;
+            let mut has_v = 0u8;
             assert_eq!(
-                rkrdb_get_velocities(id2, 2, 0, native.as_mut_ptr(), 8, &mut nv),
+                rkrdb_get_velocities(id2, 2, 0, native.as_mut_ptr(), 8, &mut nv, &mut has_v),
                 RKRDB_OK
             );
+            assert_eq!(has_v, 1);
             assert!(nv >= 1);
             assert!(
                 (native[0] - 0.001234).abs() < 1e-9,
                 "native vx0={}",
                 native[0]
             );
+            let mut none = vec![0.0f64; 8];
+            let mut nn = 99u32;
+            let mut has_none = 1u8;
+            assert_eq!(
+                rkrdb_get_velocities(id2, 1, 0, none.as_mut_ptr(), 2, &mut nn, &mut has_none),
+                RKRDB_OK
+            );
+            assert_eq!(has_none, 0);
+            assert_eq!(nn, 0);
             assert_eq!(rkrdb_close(id2), RKRDB_OK);
         }
     }
