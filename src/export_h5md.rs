@@ -757,6 +757,13 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(u["length"], "nm");
+        assert_eq!(before.times.len(), after.times.len());
+        for (bt, at) in before.times.iter().zip(&after.times) {
+            assert!(
+                (bt - at).abs() < 1e-12,
+                "dest time after set_units {bt} vs {at}"
+            );
+        }
     }
 
     #[test]
