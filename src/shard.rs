@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(test)]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::cell::Cell;
 
 use readcon_core::types::ConFrame;
 
@@ -27,7 +27,9 @@ pub const DEFAULT_N_SHARDS: u32 = 64;
 const MANIFEST: &str = "shards.json";
 
 #[cfg(test)]
-pub(crate) static FAIL_DEST_MAN_COPY: AtomicBool = AtomicBool::new(false);
+thread_local! {
+    pub(crate) static FAIL_DEST_MAN_COPY: Cell<bool> = const { Cell::new(false) };
+}
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ShardManifest {
@@ -295,7 +297,7 @@ impl ShardedConCorpus {
             copied_manifest = !dest_man.is_file();
             if copied_manifest {
                 #[cfg(test)]
-                if FAIL_DEST_MAN_COPY.swap(false, Ordering::SeqCst) {
+                if FAIL_DEST_MAN_COPY.with(|f| f.replace(false)) {
                     return Err(Error::Message("drain: dest_man copy".into()));
                 }
                 std::fs::copy(&man, &dest_man)?;
@@ -1152,7 +1154,7 @@ mod compaction_tests {
         ShardedConCorpus::open(&src, 2).unwrap();
         let dest = dir.path().join("dest");
         assert!(!dest.exists());
-        FAIL_DEST_MAN_COPY.store(true, Ordering::SeqCst);
+        FAIL_DEST_MAN_COPY.with(|f| f.set(true));
         assert!(ShardedConCorpus::drain_to(&src, &dest).is_err());
         assert!(
             !dest.exists(),
