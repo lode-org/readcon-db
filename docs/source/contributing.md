@@ -13,7 +13,13 @@ prek run -a
 cog check
 pixi r -e docs docbld
 lychee --config lychee.toml 'docs/_build/html/**/*.html'
+scripts/check-cpc-freeze.sh
 ```
+
+The CPC appendix table is frozen from
+`examples/benchmarks/ase_fair_campaign_1.json`. `scripts/check-cpc-freeze.sh`
+regenerates nothing against a live bench; it diffs the committed markdown and
+TeX. Do not invent a cheaper ladder. See `paper/cpc/readme.org`.
 
 Refresh the documentation lock after changing `pixi.toml` `[feature.docs]` or `docs/requirements.txt`:
 
@@ -26,7 +32,7 @@ pixi lock
 | Workflow | File | Trigger | Purpose |
 |----------|------|---------|---------|
 | Prek | `ci_prek.yml` | push, PR | `prek run -a` |
-| Documentation | `ci_docs.yml` | push, PR | Locked Sphinx HTML (`pixi.lock`) + lychee |
+| Documentation | `ci_docs.yml` | push, PR | CPC freeze check + locked Sphinx HTML (`pixi.lock`) + lychee |
 | Pages | `pages.yml` | push to main | Deploy site + locked Sphinx docs |
 | Lint | `lint.yml` | PR | Conventional commits + large-file audit |
 | C/C++ dist | `ci_cxx.yml` | push, PR | CMake/Meson/pkg-config without cbindgen |

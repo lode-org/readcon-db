@@ -9,7 +9,9 @@ Long-timescale and NEB campaigns produce **corpora**: many trajectories × many 
 3. **Secondary indexes** — atom counts (`idx_natoms`), symbols (`idx_symbol`), **per-element counts** (`idx_elem_count`), **exact formula** (`idx_formula`, e.g. `Cu:2|H:2`), **finite energy** (`idx_energy`), **fmax** (`idx_fmax` when forces exist), **section flags** (`idx_flags`), and **xxHash3-128** (`frame_by_hash`). **Reindex** rebuilds all secondary DBs from authoritative blobs. ASE.db **screening columns** (mass, volume, PBC, time/frame_index/NEB, charge/magmom) are indexed when CON-derivable—see `docs/design.md` matrix. Not a SQL engine; not ASE bookkeeping (`user`, `ctime`, calculator).
 4. **Decode with readcon-core** — CON semantics never fork; metadata keys such as `energy` and declared `sections` are the same constants as in the CON spec.
 
-**Day-to-day path:** CON (or chemfiles→`ConFrame` in core) → ingest CON blobs → `Select` / CLI / `rkrdb_select_meta`. ASE is **not** on the I/O path; optional `to_ase` is only for calculators. ASE `.db` timings in the CPC paper are **unequal-workload CSE baselines**, not a product recommendation.
+**Day-to-day path:** CON (or chemfiles→`ConFrame` in core) → ingest CON blobs → `Select` / CLI / `rkrdb_select_meta`. ASE is **not** on the I/O path; optional `to_ase` is only for calculators.
+
+The CPC manuscript's **main claim is readcon-core**. This crate is the **companion campaign store**, not a second paper. If the paper appendix uses an ASE `.db` table, use the frozen fair campaign (`examples/benchmarks/ase_fair_campaign_1.json`; TeX `paper/cpc/src/figures/generated/fair_campaign_table.tex`). The legacy Cu2 stand-in timings are unequal-workload CSE artifacts only. ASE `.db` is not the product store.
 
 Selection is an explicit Rust/`Select` builder (or `rkrdb_select_*` / `rkrdb_select_meta` in C), not SQL. See [architecture](architecture.md) for the query-cost model.
 
@@ -19,4 +21,4 @@ trajectory (CON stays authority). **Drain/join:** node-local `shard-ingest`,
 is the single-root join.
 
 
-**Benchmarks:** fair ASE comparison → `examples/benchmarks/fair_campaign.py` (same CON ladder; not Cu2 stand-ins).
+**Benchmarks:** fair ASE comparison → `examples/benchmarks/fair_campaign.py` (same CON ladder; not Cu2 stand-ins). CPC appendix freeze: `paper/cpc/readme.org`.

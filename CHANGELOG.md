@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Documentation
+- CPC companion positioning (readcon-core is the main claim; this crate is the campaign store)
+- Frozen fair ASE.db appendix table from `examples/benchmarks/ase_fair_campaign_1.json` (`paper/cpc/`)
+
 ### Features
 - Batched RCSO pack (`RCSB`): `pack_frames` / `rkrdb_pack_frames` / `bcast_packed_frames` on the caller comm
 - `readcon-db drain <local_root> <pfs_root>` compact-snapshots `data.mdb`

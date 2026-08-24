@@ -2,7 +2,7 @@
 
 **Mmap-backed CON/convel corpus store** — LMDB via Heed, non-SQL selection, xxHash3 exact match, and bindings for **Rust, C, C++, Python, and Fortran**.
 
-Part of the **readcon ecosystem** with [readcon-core](https://github.com/lode-org/readcon-core) ([core Sphinx](https://lode-org.github.io/readcon-core/)): **core** owns format fidelity and multi-language interchange; **db** owns corpus scale (many trajectories, selective access, OS page-cache residency).
+Part of the **readcon ecosystem** with [readcon-core](https://github.com/lode-org/readcon-core) ([core Sphinx](https://lode-org.github.io/readcon-core/)): **core** owns format fidelity and multi-language interchange (CPC **main claim**); **db** is the **companion campaign store** (many trajectories, selective access, OS page-cache residency). Do not treat this crate as a second CPC paper.
 
 ```{toctree}
 :maxdepth: 2

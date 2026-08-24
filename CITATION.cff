@@ -1,6 +1,9 @@
 cff-version: 1.2.0
 title: "readcon-db: mmap CON corpus store with multi-language bindings"
-message: "If you use readcon-db, please cite it using the metadata below."
+message: >-
+  Cite the readcon CPC manuscript (readcon-core is the main claim).
+  readcon-db is the companion campaign store; do not cite a second
+  paper for this crate alone.
 type: software
 authors:
   - given-names: Rohit

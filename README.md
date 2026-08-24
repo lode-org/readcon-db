@@ -11,6 +11,8 @@ Part of the **readcon ecosystem** with [`readcon-core`](https://github.com/lode-
 
 ASE is **not** on the critical path for reading CON or XYZ in this stack. ASE `.db` may appear in CSE **timing** tables; it is not the recommended store.
 
+The CPC manuscript's **main claim is readcon-core**. This crate is the **companion campaign store** (LMDB indexes + derived RCSO). Cite the core paper; do not write a second paper for readcon-db. If that paper uses an ASE `.db` appendix table, use the frozen fair campaign only: [`examples/benchmarks/ase_fair_campaign_1.json`](examples/benchmarks/ase_fair_campaign_1.json) (markdown [`fair_db_vs_ase_table.md`](examples/benchmarks/fair_db_vs_ase_table.md), TeX [`paper/cpc/src/figures/generated/fair_campaign_table.tex`](paper/cpc/src/figures/generated/fair_campaign_table.tex); fixture `tiny_cuh2.con`, ladder `[10, 50, 100, 200, 500]`). The legacy Cu2 stand-in table is not that appendix. See [`paper/cpc/readme.org`](paper/cpc/readme.org).
+
 ## Install
 
 ```bash

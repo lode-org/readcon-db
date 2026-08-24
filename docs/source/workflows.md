@@ -93,11 +93,18 @@ a write failure removes the dest). `Lattice` is the same triclinic
 
 ## ASE `.db` comparison (measurement only)
 
-See repository `examples/benchmarks/` and the CPC manuscript CSE section. Those timings
-are **unequal workloads** (lightweight ASE `Cu2` stand-ins vs full CON parse+index on
-readcon-db)—CSE orientation for multi-reader behaviour, **not** a fair store-vs-store
-parity claim and **not** “store Atoms in ASE.db” as the product path.
+The CPC manuscript's main claim is readcon-core. This crate is the companion
+campaign store. ASE `.db` is **not** the product path.
 
+**Appendix freeze (if the paper uses a timing table):**
+`examples/benchmarks/ase_fair_campaign_1.json` /
+`fair_db_vs_ase_table.md` /
+`paper/cpc/src/figures/generated/fair_campaign_table.tex`.
+Fixture `resources/test/tiny_cuh2.con`, ladder `[10, 50, 100, 200, 500]`.
+Do not invent a cheaper ladder. Check: `scripts/check-cpc-freeze.sh`.
+
+Legacy `bench_ase_db.py` / `db_vs_ase_table.md` are **unequal-workload**
+Cu2 stand-in artifacts (CSE orientation only). They are not the appendix.
 
 ## Fair ASE.db vs readcon-db campaign
 
@@ -110,7 +117,9 @@ for symbol `Cu` and `natoms` range. Results: JSON `ase_fair_campaign_{run}.json`
 # venv with ase + maturin-developed readcon / readcon_db
 python examples/benchmarks/fair_campaign.py --out /tmp/fair_out --run-id 1
 python examples/benchmarks/test_fair_select_parity.py
+python3 paper/cpc/scripts/gen_appendix.py --check
 ```
 
-Legacy `bench_ase_db.py` Cu2 timings are **unequal-workload** artifacts only.
-Interchange axis (parse CON): campaign JSON field `interchange` (readcon vs `ase.io.read`).
+The committed freeze is run-id 1 on the default ladder. Interchange axis (parse CON):
+campaign JSON field `interchange` (readcon vs `ase.io.read`).
+See repository `paper/cpc/readme.org`.
