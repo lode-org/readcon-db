@@ -260,7 +260,8 @@ public:
   }
 
   /// RCSO blob for a unidirectional broadcast on the caller communicator.
-  /// Workers call unpack_positions (no handle). See readcon-db-mpi.h.
+  /// `buf == NULL` returns the required size. Workers call unpack_positions
+  /// (no handle). See readcon-db-mpi.h.
   int pack_frame(uint64_t traj_id, uint32_t frame_idx, uint8_t *buf, size_t buflen) {
     return rkrdb_pack_frame(id_, traj_id, frame_idx, buf, buflen);
   }

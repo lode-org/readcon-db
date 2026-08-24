@@ -24,6 +24,8 @@ def test_export_h5md_readonly_corpus(tmp_path):
         assert pos.ndim == 3
         assert pos.shape[0] == n
         assert pos.shape[2] == 3
+        assert _as_str(pos.attrs["unit"]) == "Angstrom"
+        assert abs(float(pos[0, 0, 0]) - 0.6394) < 1e-3
 
 
 def test_export_h5md_tn3_and_units(tmp_path):

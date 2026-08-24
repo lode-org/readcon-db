@@ -167,8 +167,12 @@ impl ConCorpus {
         let mut times = Vec::with_capacity(n_frames);
         let mut force_rows: Vec<Option<Vec<[f64; 3]>>> = Vec::with_capacity(n_frames);
         let mut vel_rows: Vec<Option<Vec<[f64; 3]>>> = Vec::with_capacity(n_frames);
-        for k in &keys {
-            let fr = self.get_frame(*k)?;
+        for (i, k) in keys.iter().enumerate() {
+            let fr = if i == 0 {
+                first.clone()
+            } else {
+                self.get_frame(*k)?
+            };
             let length_u = header_unit(&fr.header, "length", H5MD_LENGTH_CORE);
             let energy_u = header_unit(&fr.header, "energy", "eV");
             let time_u = header_unit(&fr.header, "time", CON_TIME_DEFAULT);
@@ -179,9 +183,7 @@ impl ConCorpus {
             for x in e33 {
                 edges.push(x * len_scale);
             }
-            let packed = crate::cooked_soa::CookedSoa::encode_frame(&fr)?;
-            let cooked = crate::cooked_soa::CookedSoa::decode(&packed)?;
-            if cooked.natoms as usize != natoms {
+            if fr.atom_data.len() != natoms {
                 return Err(crate::error::Error::Message(
                     "H5MD export needs fixed natoms in the trajectory".into(),
                 ));
@@ -201,14 +203,40 @@ impl ConCorpus {
                     "H5MD export needs fixed species Z in the trajectory".into(),
                 ));
             }
-            for p in &cooked.positions {
+            let (pos_src, vel_src, frc_src) = if let Some(c) = self.get_cooked_soa(*k)? {
+                (c.positions, c.velocities, c.forces)
+            } else {
+                let pos: Vec<[f64; 3]> = fr.atom_data.iter().map(|a| [a.x, a.y, a.z]).collect();
+                let vel = if fr.atom_data.iter().any(|a| a.velocity.is_some()) {
+                    Some(
+                        fr.atom_data
+                            .iter()
+                            .map(|a| a.velocity.unwrap_or([0.0; 3]))
+                            .collect(),
+                    )
+                } else {
+                    None
+                };
+                let frc = if fr.atom_data.iter().any(|a| a.force.is_some()) {
+                    Some(
+                        fr.atom_data
+                            .iter()
+                            .map(|a| a.force.unwrap_or([0.0; 3]))
+                            .collect(),
+                    )
+                } else {
+                    None
+                };
+                (pos, vel, frc)
+            };
+            for p in &pos_src {
                 positions.extend_from_slice(&[
                     p[0] * len_scale,
                     p[1] * len_scale,
                     p[2] * len_scale,
                 ]);
             }
-            vel_rows.push(match cooked.velocities {
+            vel_rows.push(match vel_src {
                 Some(rows) => Some(
                     rows.into_iter()
                         .map(|r| [r[0] * vel_scale, r[1] * vel_scale, r[2] * vel_scale])
@@ -216,7 +244,7 @@ impl ConCorpus {
                 ),
                 None => None,
             });
-            force_rows.push(match cooked.forces {
+            force_rows.push(match frc_src {
                 Some(rows) => {
                     let fscale = force_scale_to_engine(&energy_u, &length_u)?;
                     Some(
@@ -501,6 +529,9 @@ mod tests {
         assert_eq!(from_con.positions, from_rcso.positions);
         assert_eq!(from_con.edges, from_rcso.edges);
         assert_eq!(from_con.species_z, from_rcso.species_z);
+        let blob = db.get_cooked_soa_bytes(key).unwrap().expect("stored RCSO");
+        let decoded = crate::cooked_soa::CookedSoa::decode(&blob).unwrap();
+        assert_eq!(decoded.positions.len(), from_rcso.natoms);
     }
 
     #[test]
@@ -723,6 +754,23 @@ mod tests {
         let before = db.collect_h5md(1).unwrap();
         db.set_trajectory_units(1, serde_json::json!({"length": "nm", "energy": "eV"}))
             .unwrap();
+        assert!(!db
+            .has_valid_cooked_soa(crate::keys::FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap());
+        let native_xyz = db
+            .get_positions(crate::keys::FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap();
+        assert!(
+            (native_xyz[0][0] - 0.06394).abs() < 1e-5,
+            "native nm x0={}",
+            native_xyz[0][0]
+        );
         let after = db.collect_h5md(1).unwrap();
         let bv = before.velocities.expect("vel");
         let av = after.velocities.expect("vel");

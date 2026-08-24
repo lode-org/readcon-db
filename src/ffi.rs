@@ -1425,6 +1425,21 @@ mod tests {
             );
             assert!(nitem >= 1);
             assert!((item[0] - 0.6394).abs() < 1e-3, "dest x0={}", item[0]);
+            let mut item1 = vec![0.0f64; 32];
+            let mut nitem1 = 0u32;
+            assert_eq!(
+                rkrdb_unpack_batch_item(
+                    pbuf.as_ptr(),
+                    npack as usize,
+                    1,
+                    item1.as_mut_ptr(),
+                    8,
+                    &mut nitem1
+                ),
+                RKRDB_OK
+            );
+            assert!(nitem1 >= 1);
+            assert!(item1.iter().any(|&x| x != 0.0));
             let mut nf = 0u32;
             let mut na = 0u32;
             assert_eq!(rkrdb_h5md_shape(id, 1, &mut nf, &mut na), RKRDB_OK);
@@ -1522,6 +1537,21 @@ mod tests {
                 pos2[0]
             );
             rkrdb_close(id);
+            let mut idro = 0usize;
+            assert_eq!(rkrdb_open_readonly(path.as_ptr(), &mut idro), RKRDB_OK);
+            let mut nfr = 0u32;
+            let mut nar = 0u32;
+            let mut posr = vec![0.0f64; 64];
+            assert_eq!(
+                rkrdb_h5md_positions(idro, 1, posr.as_mut_ptr(), posr.len(), &mut nfr, &mut nar),
+                RKRDB_OK
+            );
+            assert!(
+                (posr[0] - 0.6394).abs() < 1e-4,
+                "readonly dest x0={}",
+                posr[0]
+            );
+            assert_eq!(rkrdb_close(idro), RKRDB_OK);
             let velcon = CString::new(fixture("tiny_cuh2.convel").to_str().unwrap()).unwrap();
             let mut id2 = 0usize;
             let mut n3 = 0u32;
