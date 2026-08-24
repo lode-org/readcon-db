@@ -10,6 +10,7 @@ Usage:
   python fair_campaign.py [--fixture PATH] [--ladder 10,50,100,200,500] [--out DIR] [--run-id 1]
 
 Emits JSON + select-parity block. Methodology is measurement-only; ASE is not the product store.
+The CPC appendix freeze lives in ``paper/cpc/freeze/``; this script does not move it.
 """
 from __future__ import annotations
 

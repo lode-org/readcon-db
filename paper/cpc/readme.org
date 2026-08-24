@@ -1,0 +1,58 @@
+#+TITLE: CPC companion materials (readcon-db)
+
+The Computer Physics Communications manuscript lives in
+[[https://github.com/lode-org/readcon-core][readcon-core]]
+(=paper/cpc/=). That article's main claims are the CON
+specification and the =readcon-core= reader/writer. This crate is
+the *companion campaign store*, not a second CPC paper.
+
+Do not invent a paper DOI here. Deposit freeze tags with the core
+tag. Do not type a wall-clock number into prose that is not in
+=freeze/ase_fair_campaign_1.json=.
+
+* What is frozen
+
+=examples/benchmarks/fair_campaign.py= is the measurement script
+(same CON ladder in both stores; not Cu2 stand-ins). The appendix
+table is a *freeze* of one committed run:
+
+| Artifact | Path |
+|----------+------|
+| JSON payload | =freeze/ase_fair_campaign_1.json= |
+| Markdown table | =freeze/fair_db_vs_ase_table.md= |
+| Generated TeX | =src/figures/generated/fair_campaign_table.tex= |
+| Inclusion fragment | =src/appendix-fair-campaign.org= |
+
+Fixture: =resources/test/tiny_cuh2.con=. Ladder: 10, 50, 100, 200,
+500. Measurement refresh: tree =4bef664=. The JSON does not record
+host or clock; do not invent them.
+
+Legacy =examples/benchmarks/bench_ase_db.py= (Cu2 stand-ins) is an
+unequal-workload artifact. It is *not* this freeze.
+
+* Regenerating the TeX (not the timings)
+
+#+begin_src bash
+python paper/cpc/scripts/gen_fair_table.py
+python paper/cpc/scripts/gen_fair_table.py --check
+#+end_src
+
+Re-running =fair_campaign.py= writes a *new* JSON under =--out=.
+That does not move the freeze. Copy a new payload into
+=paper/cpc/freeze/= only when the appendix is meant to change.
+Keep the same fixture, ladder, and selects. Do not invent a
+cheaper campaign to refresh the table.
+
+* Including the appendix from the core manuscript
+
+In the core =rg_main.org=, after Availability (or under
+=\appendix=), include the fragment. The TeX input path is
+relative to the core paper's =figures/generated/= once the
+generated table is copied or pointed at this freeze:
+
+#+begin_src org
+,#+LATEX: \input{figures/generated/fair_campaign_table}
+#+end_src
+
+The fragment states that this crate is companion material, not a
+main claim.

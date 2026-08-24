@@ -1,0 +1,23 @@
+#+TITLE: Campaign store timings (companion appendix)
+#+OPTIONS: toc:nil title:nil todo:nil num:t author:nil
+#+EXCLUDE_TAGS: noexport
+
+* Campaign store timings (companion appendix)
+:PROPERTIES:
+:CUSTOM_ID: app:campaign
+:END:
+
+This appendix is not a second CPC article. The manuscript's main
+claims are the CON specification and the =readcon-core=
+reader/writer. =readcon-db= is the companion campaign store:
+LMDB indexes (energy, formula, section presence) and a derived
+RCSO cache over the same CON text files. Text CON remains the
+on-disk authority.
+
+The table is a fair insert / extract / select comparison on one
+CON ladder. The same frames enter both stores. It is not a
+recommendation to store campaigns in ASE =.db=. Legacy
+=bench_ase_db.py= Cu2 stand-in timings are unequal-workload
+artifacts and are not this table.
+
+#+LATEX: \input{figures/generated/fair_campaign_table}

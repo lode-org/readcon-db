@@ -23,4 +23,4 @@ Interchange (parse multi-frame CON):
 ```
 
 Legacy `bench_ase_db.py` Cu2 stand-in timings remain **unequal-workload** artifacts; this file is the fair campaign.
-Paper appendix freeze (do not overwrite when re-running): `paper/cpc/freeze/`.
+This copy is the CPC appendix freeze. Do not overwrite it when re-running `fair_campaign.py`.

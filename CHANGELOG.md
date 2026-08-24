@@ -6,6 +6,10 @@
 - Cargo tests lock CON-text authority for cooked RCSO and cover
   numeric extract (positions, forces, velocities) on parse and cooked paths
 
+### Documentation
+- Position this crate as the CPC companion campaign store (not a second paper)
+- Freeze the fair ASE.db campaign table for a paper appendix (`paper/cpc/freeze/`)
+
 ### Features
 - Batched RCSO pack (`RCSB`): `pack_frames` / `rkrdb_pack_frames` / `bcast_packed_frames` on the caller comm
 - `readcon-db drain <local_root> <pfs_root>` compact-snapshots `data.mdb`

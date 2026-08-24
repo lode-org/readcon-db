@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 title: "readcon-db: mmap CON corpus store with multi-language bindings"
-message: "If you use readcon-db, please cite it using the metadata below."
+message: "If you use readcon-db, please cite it using the metadata below. The CPC manuscript is the readcon-core article; this record is the companion campaign-store software, not a second paper."
 type: software
 authors:
   - given-names: Rohit
@@ -16,3 +16,11 @@ keywords:
   - LMDB
   - trajectory
   - molecular dynamics
+  - campaign store
+abstract: >-
+  readcon-db is the companion campaign store for the readcon-core CON
+  interchange. It keeps CON text as the authoritative blob in an LMDB
+  corpus with secondary indexes (energy, formula, section presence) and
+  an optional derived RCSO cache. The Computer Physics Communications
+  manuscript is the readcon-core article; this record is software, not a
+  second paper.
