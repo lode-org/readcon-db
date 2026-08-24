@@ -2,7 +2,7 @@ module readcon_db
   use, intrinsic :: iso_c_binding
   implicit none
   private
-  public :: rkrdb_ok, rkrdb_err, db_open, db_open_readonly, db_close, db_append, db_append_units, &
+  public :: rkrdb_ok, rkrdb_err, rkrdb_not_found, db_open, db_open_readonly, db_close, db_append, db_append_units, &
             db_extend, db_extend_units, db_select_basic, &
             db_result_count, db_result_key, db_frame_hash, db_frame_formula, db_xxh3_128, &
             db_get_frame, db_pack_frame, db_pack_frames, db_unpack_positions, &
@@ -14,6 +14,7 @@ module readcon_db
 
   integer(c_int), parameter :: rkrdb_ok = 0
   integer(c_int), parameter :: rkrdb_err = -1
+  integer(c_int), parameter :: rkrdb_not_found = -2
 
   interface
     function rkrdb_open(path, out_id) bind(C, name="rkrdb_open") result(st)
