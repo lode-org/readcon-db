@@ -1680,10 +1680,18 @@ mod tests {
                 rkrdb_h5md_forces(id, 1, frc2.as_mut_ptr(), frc2.len()),
                 RKRDB_OK
             );
+            let i_hfx = (na2 as usize) * 3 + 2 * 3;
             assert!(
-                frc2.iter().any(|&x| (x - dest_f0).abs() < 1e-3),
-                "dest force after set_units ~{dest_f0}, got {:?}",
-                &frc2[..12]
+                (frc2[i_hfx] - dest_f0).abs() < 1e-3,
+                "dest force of force-bearing frame H Fx after set_units: {} vs {dest_f0}",
+                frc2[i_hfx]
+            );
+            assert!(
+                frc2[..na2 as usize * 3]
+                    .iter()
+                    .all(|&x| x.abs() < 1e-12),
+                "frame 0 dest force must stay zero-pad, got {:?}",
+                &frc2[..na2 as usize * 3]
             );
             rkrdb_close(id);
             let mut idro = 0usize;
@@ -1750,6 +1758,79 @@ mod tests {
             assert_eq!(has_none, 0);
             assert_eq!(nn, 0);
             assert_eq!(rkrdb_close(id2), RKRDB_OK);
+        }
+    }
+
+    #[test]
+    fn c_abi_set_units_keeps_dest_vel_time_edges() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = CString::new(dir.path().to_str().unwrap()).unwrap();
+        let velcon = CString::new(fixture("tiny_cuh2.convel").to_str().unwrap()).unwrap();
+        let mut id = 0usize;
+        let mut n = 0u32;
+        unsafe {
+            assert_eq!(rkrdb_open(path.as_ptr(), &mut id), RKRDB_OK);
+            assert_eq!(
+                rkrdb_append_trajectory(id, 1, velcon.as_ptr(), &mut n),
+                RKRDB_OK
+            );
+            let mut vel0 = vec![0.0f64; 64];
+            assert_eq!(
+                rkrdb_h5md_velocities(id, 1, vel0.as_mut_ptr(), vel0.len()),
+                RKRDB_OK
+            );
+            let mut edges0 = vec![0.0f64; 32];
+            assert_eq!(
+                rkrdb_h5md_edges(id, 1, edges0.as_mut_ptr(), edges0.len()),
+                RKRDB_OK
+            );
+            let mut times0 = [0.0f64; 8];
+            let mut nt = 0u32;
+            assert_eq!(
+                rkrdb_h5md_times(id, 1, times0.as_mut_ptr(), times0.len(), &mut nt),
+                RKRDB_OK
+            );
+            let units = CString::new(r#"{"length":"nm","energy":"eV","time":"ps"}"#).unwrap();
+            let mut nset = 0u32;
+            assert_eq!(rkrdb_set_units(id, 1, units.as_ptr(), &mut nset), RKRDB_OK);
+            let mut vel1 = vec![0.0f64; 64];
+            assert_eq!(
+                rkrdb_h5md_velocities(id, 1, vel1.as_mut_ptr(), vel1.len()),
+                RKRDB_OK
+            );
+            assert!((vel0[0] - 1.234).abs() < 1e-9, "got {}", vel0[0]);
+            assert!(
+                (vel0[0] - vel1[0]).abs() < 1e-12,
+                "dest vel after set_units {} vs {}",
+                vel0[0],
+                vel1[0]
+            );
+            let mut edges1 = vec![0.0f64; 32];
+            assert_eq!(
+                rkrdb_h5md_edges(id, 1, edges1.as_mut_ptr(), edges1.len()),
+                RKRDB_OK
+            );
+            assert!((edges0[0] - 15.3456).abs() < 1e-4, "edge a_x={}", edges0[0]);
+            assert!(
+                (edges0[0] - edges1[0]).abs() < 1e-12,
+                "dest edges after set_units {} vs {}",
+                edges0[0],
+                edges1[0]
+            );
+            let mut times1 = [0.0f64; 8];
+            let mut nt1 = 0u32;
+            assert_eq!(
+                rkrdb_h5md_times(id, 1, times1.as_mut_ptr(), times1.len(), &mut nt1),
+                RKRDB_OK
+            );
+            assert_eq!(nt, nt1);
+            assert!(
+                (times0[0] - times1[0]).abs() < 1e-12,
+                "dest time after set_units {} vs {}",
+                times0[0],
+                times1[0]
+            );
+            assert_eq!(rkrdb_close(id), RKRDB_OK);
         }
     }
 }

@@ -838,6 +838,23 @@ mod tests {
                 native[0][0]
             );
         }
+        db.set_trajectory_units(
+            1,
+            serde_json::json!({"length": "nm", "energy": "eV", "time": "ps"}),
+        )
+        .unwrap();
+        let after_t = db.collect_h5md(1).unwrap();
+        let avt = after_t.velocities.expect("vel after time relabel");
+        for (i, (b, a)) in bv.iter().zip(avt.iter()).enumerate() {
+            assert!(
+                (b - a).abs() < 1e-9,
+                "dest vel after set_units time[{i}]: {b} vs {a}"
+            );
+        }
+        assert_eq!(before.times.len(), after_t.times.len());
+        for (bt, at) in before.times.iter().zip(&after_t.times) {
+            assert!((bt - at).abs() < 1e-12, "dest time {bt} vs {at}");
+        }
     }
 
     #[test]
@@ -889,6 +906,17 @@ mod tests {
                 "dest force after cook+set_units[{i}]: {b} vs {a}"
             );
         }
+        db.set_trajectory_units(1, serde_json::json!({"length": "nm", "energy": "hartree"}))
+            .unwrap();
+        let after_e = db.collect_h5md(1).unwrap();
+        let afe = after_e.forces.expect("dest forces after set_units energy");
+        assert_eq!(bf.len(), afe.len());
+        for (i, (b, a)) in bf.iter().zip(afe.iter()).enumerate() {
+            assert!(
+                (b - a).abs() < 1e-8,
+                "dest force after set_units energy[{i}]: {b} vs {a}"
+            );
+        }
         assert_eq!(
             db.frame_units(crate::keys::FrameKey {
                 traj_id: 1,
@@ -897,6 +925,15 @@ mod tests {
             .unwrap()
             .unwrap()["length"],
             "nm"
+        );
+        assert_eq!(
+            db.frame_units(crate::keys::FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap()
+            .unwrap()["energy"],
+            "hartree"
         );
     }
 

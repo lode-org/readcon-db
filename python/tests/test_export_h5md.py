@@ -475,6 +475,40 @@ def test_export_h5md_writes_header_time(tmp_path):
         assert f["particles/all/box/edges/value"].shape[0] == 1
 
 
+def test_export_h5md_set_units_keeps_dest_vel_and_edges(tmp_path):
+    db = ConCorpus(str(tmp_path / "corpus"))
+    db.append_trajectory(1, str(FIXTURE / "tiny_cuh2.convel"))
+    before = tmp_path / "before.h5"
+    db.export_h5md(1, str(before))
+    db.set_units(1, {"length": "nm", "energy": "eV", "time": "ps"})
+    after = tmp_path / "after.h5"
+    db.export_h5md(1, str(after))
+    with h5py.File(before, "r") as a, h5py.File(after, "r") as b:
+        va = a["particles/all/velocity/value"][:]
+        vb = b["particles/all/velocity/value"][:]
+        np.testing.assert_allclose(va, vb)
+        assert abs(float(va[0, 0, 0]) - 1.234) < 1e-9
+        ea = a["particles/all/box/edges/value"][:]
+        eb = b["particles/all/box/edges/value"][:]
+        np.testing.assert_allclose(ea, eb)
+        assert abs(float(ea[0, 0, 0]) - 15.3456) < 1e-4
+        ta = float(a["particles/all/velocity/time"][0])
+        tb = float(b["particles/all/velocity/time"][0])
+        assert abs(ta - tb) < 1e-12
+
+
+def test_export_h5md_set_units_keeps_dest_edges_tiny_cuh2(tmp_path):
+    db = ConCorpus(str(tmp_path / "corpus"))
+    db.append_trajectory(1, str(FIXTURE / "tiny_cuh2.con"))
+    db.set_units(1, {"length": "nm"})
+    out = tmp_path / "edges.h5"
+    db.export_h5md(1, str(out))
+    with h5py.File(out, "r") as f:
+        edges = f["particles/all/box/edges/value"]
+        assert abs(float(edges[0, 0, 0]) - 15.3456) < 1e-4
+        assert _as_str(edges.attrs["unit"]) == "Angstrom"
+
+
 def test_export_h5md_set_units_keeps_dest_time(tmp_path):
     src = (FIXTURE / "tiny_cuh2.con").read_text()
     lines = src.splitlines()
