@@ -37,3 +37,25 @@ jobs:
         run: cargo clippy --locked --all-targets
       - name: Docs
         run: cargo doc --locked --no-deps
+
+  cooked-soa:
+    name: cooked SoA authority
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Numeric extract prefers CON when RCSO disagrees
+        run: cargo test --locked prefers_con_when_rcso_disagrees -- --nocapture
+      - name: Authority docs and parse-vs-cook extract
+        run: cargo test --locked --test cooked_soa_authority -- --nocapture
+      - name: Published pages name CON as sole authority
+        run: |
+          grep -F 'sole authority' docs/source/cooked_soa.md
+          grep -F 'non-authoritative' docs/source/cooked_soa.md
+          grep -F 'disagrees with CON' docs/source/cooked_soa.md
+          grep -F 'cooked_soa' docs/source/index.md
+          grep -F 'sole authority' docs/source/architecture.md
+          grep -F 'non-authoritative' docs/source/overview.md
+
