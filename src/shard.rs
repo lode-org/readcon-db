@@ -259,35 +259,37 @@ impl ShardedConCorpus {
             return Err(Error::Message("drain: missing shards.json".into()));
         }
         let dest_was_new = !dst.exists();
-        std::fs::create_dir_all(dst)?;
         let dest_man = dst.join(MANIFEST);
-        if dest_man.is_file() {
-            let existing: ShardManifest =
-                serde_json::from_str(&std::fs::read_to_string(&dest_man)?)?;
-            let incoming: ShardManifest = serde_json::from_str(&std::fs::read_to_string(&man)?)?;
-            if existing.n_shards != incoming.n_shards {
-                return Err(Error::Message(
-                    "drain: dest shards.json n_shards does not match src".into(),
-                ));
-            }
-        }
-        let m: ShardManifest = serde_json::from_str(&std::fs::read_to_string(&man)?)?;
-        for i in 0..m.n_shards {
-            let name = format!("shard_{i:04}");
-            if src.join(&name).join("data.mdb").is_file()
-                && dst.join(&name).join("data.mdb").is_file()
-            {
-                return Err(Error::Message(format!(
-                    "drain: dest {name} exists; refuse overwrite. Drain each node to a unique dest, then join-drained."
-                )));
-            }
-        }
-        let copied_manifest = !dest_man.is_file();
-        if copied_manifest {
-            std::fs::copy(&man, &dest_man)?;
-        }
+        let mut copied_manifest = false;
         let mut created = Vec::new();
         let written = (|| -> Result<u32> {
+            std::fs::create_dir_all(dst)?;
+            if dest_man.is_file() {
+                let existing: ShardManifest =
+                    serde_json::from_str(&std::fs::read_to_string(&dest_man)?)?;
+                let incoming: ShardManifest =
+                    serde_json::from_str(&std::fs::read_to_string(&man)?)?;
+                if existing.n_shards != incoming.n_shards {
+                    return Err(Error::Message(
+                        "drain: dest shards.json n_shards does not match src".into(),
+                    ));
+                }
+            }
+            let m: ShardManifest = serde_json::from_str(&std::fs::read_to_string(&man)?)?;
+            for i in 0..m.n_shards {
+                let name = format!("shard_{i:04}");
+                if src.join(&name).join("data.mdb").is_file()
+                    && dst.join(&name).join("data.mdb").is_file()
+                {
+                    return Err(Error::Message(format!(
+                        "drain: dest {name} exists; refuse overwrite. Drain each node to a unique dest, then join-drained."
+                    )));
+                }
+            }
+            copied_manifest = !dest_man.is_file();
+            if copied_manifest {
+                std::fs::copy(&man, &dest_man)?;
+            }
             let mut n = 0u32;
             for i in 0..m.n_shards {
                 let name = format!("shard_{i:04}");
@@ -1100,6 +1102,35 @@ mod compaction_tests {
         assert!(!dest.exists());
         assert!(ShardedConCorpus::drain_to(&src, &dest).is_err());
         assert!(!dest.exists(), "dest_was_new rollback must remove dest");
+    }
+
+    fn drain_to_new_dest_rollback_on_empty_src_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("shards.json"), b"").unwrap();
+        let dest = dir.path().join("dest");
+        assert!(!dest.exists());
+        assert!(ShardedConCorpus::drain_to(&src, &dest).is_err());
+        assert!(
+            !dest.exists(),
+            "dest leftover empty dest_man parse must remove dest"
+        );
+    }
+
+    fn drain_to_new_dest_rollback_on_dest_man_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        ShardedConCorpus::open(&src, 2).unwrap();
+        let dest = dir.path().join("dest");
+        std::fs::create_dir_all(dest.join("shards.json")).unwrap();
+        assert!(ShardedConCorpus::drain_to(&src, &dest).is_err());
+        assert!(
+            dest.exists(),
+            "existing dest stays; dest_man copy failed because dest_man is a dir"
+        );
+        assert!(dest.join("shards.json").is_dir());
+        assert!(!dest.join("shards.json").is_file());
     }
 
     #[test]
