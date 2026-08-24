@@ -1,13 +1,18 @@
 //! Optional **cooked SoA** payload: derived binary numerics beside authoritative CON text.
 //!
+//! RCSO is **non-authoritative**. CON text in `frames` is the sole authority.
+//! Numeric extract (`get_positions` / `get_forces` / `get_velocities` /
+//! `collect_h5md`) uses CON when the text blob is present. A valid RCSO cache
+//! is used only if CON is missing, or as the pack/bcast payload.
+//!
 //! # Why CON text is still required (RCSO is **not** fully equivalent)
 //!
 //! RCSO stores only POD numerics (positions and optional forces/velocities). It does
 //! **not** carry element symbols, masses, cell/angles, constraint masks, JSON metadata,
 //! section labels, or exact on-disk CON bytes. Therefore it cannot replace
 //! `frames` for xxHash3 dedup, join/split fidelity, `reindex`, formula/symbol indexes,
-//! or CON export. The improvement is skipping **CON parse on numeric hot paths** when a
-//! valid cooked blob exists—not omitting the text tier from storage.
+//! or CON export. Pack/bcast may skip CON parse when a valid cooked blob
+//! exists. Numeric extract still reads CON text when `frames` has a blob.
 //!
 //! Layout (little-endian, version 1):
 //! - magic `RCSO` (4 bytes)

@@ -989,56 +989,61 @@ impl ConCorpus {
             .and_then(|b| crate::cooked_soa::CookedSoa::try_decode(&b)))
     }
 
-    /// Prefer valid cooked SoA (**no CON parse** on hit); otherwise parse CON text in `frames`.
-    /// RCSO is not fully equivalent to CON (no symbols/metadata/exact bytes)—do not omit `frames`.
+    /// Positions from CON text when `frames` has a blob. A valid RCSO cache is
+    /// used only if CON is missing (unsupported storage). RCSO is not fully
+    /// equivalent to CON (no symbols/metadata/exact bytes)—do not omit `frames`.
     pub fn get_positions(&self, key: FrameKey) -> Result<Vec<[f64; 3]>> {
-        // Fast path: frames_soa only.
-        if let Some(c) = self.get_cooked_soa(key)? {
-            return Ok(c.positions);
+        match self.get_frame(key) {
+            Ok(fr) => Ok(fr.atom_data.iter().map(|a| [a.x, a.y, a.z]).collect()),
+            Err(e) => match self.get_cooked_soa(key)? {
+                Some(c) => Ok(c.positions),
+                None => Err(e),
+            },
         }
-        // Fallback: authoritative CON text → parse (never invent from indexes alone).
-        let fr = self.get_frame(key)?;
-        Ok(fr.atom_data.iter().map(|a| [a.x, a.y, a.z]).collect())
     }
 
-    /// Prefer cooked forces when the RCSO flag block is present (**no CON parse** on hit);
-    /// else parse CON (`None` if no forces on frame).
+    /// Forces from CON text when `frames` has a blob (`None` if the frame has
+    /// no forces). Valid RCSO is used only if CON is missing.
     pub fn get_forces(&self, key: FrameKey) -> Result<Option<Vec<[f64; 3]>>> {
-        if let Some(c) = self.get_cooked_soa(key)? {
-            if c.forces.is_some() {
-                return Ok(c.forces);
+        match self.get_frame(key) {
+            Ok(fr) => {
+                if !fr.atom_data.iter().any(|a| a.force.is_some()) {
+                    return Ok(None);
+                }
+                Ok(Some(
+                    fr.atom_data
+                        .iter()
+                        .map(|a| a.force.unwrap_or([0.0; 3]))
+                        .collect(),
+                ))
             }
-            // Cooked present but no forces block — fall through to CON for fidelity.
+            Err(e) => match self.get_cooked_soa(key)? {
+                Some(c) if c.forces.is_some() => Ok(c.forces),
+                _ => Err(e),
+            },
         }
-        let fr = self.get_frame(key)?;
-        if !fr.atom_data.iter().any(|a| a.force.is_some()) {
-            return Ok(None);
-        }
-        Ok(Some(
-            fr.atom_data
-                .iter()
-                .map(|a| a.force.unwrap_or([0.0; 3]))
-                .collect(),
-        ))
     }
 
-    /// Prefer cooked velocities when present; else parse CON.
+    /// Velocities from CON text when `frames` has a blob. Valid RCSO is used
+    /// only if CON is missing.
     pub fn get_velocities(&self, key: FrameKey) -> Result<Option<Vec<[f64; 3]>>> {
-        if let Some(c) = self.get_cooked_soa(key)? {
-            if c.velocities.is_some() {
-                return Ok(c.velocities);
+        match self.get_frame(key) {
+            Ok(fr) => {
+                if !fr.atom_data.iter().any(|a| a.velocity.is_some()) {
+                    return Ok(None);
+                }
+                Ok(Some(
+                    fr.atom_data
+                        .iter()
+                        .map(|a| a.velocity.unwrap_or([0.0; 3]))
+                        .collect(),
+                ))
             }
+            Err(e) => match self.get_cooked_soa(key)? {
+                Some(c) if c.velocities.is_some() => Ok(c.velocities),
+                _ => Err(e),
+            },
         }
-        let fr = self.get_frame(key)?;
-        if !fr.atom_data.iter().any(|a| a.velocity.is_some()) {
-            return Ok(None);
-        }
-        Ok(Some(
-            fr.atom_data
-                .iter()
-                .map(|a| a.velocity.unwrap_or([0.0; 3]))
-                .collect(),
-        ))
     }
 
     /// Cook one frame from authoritative CON text (overwrite existing cooked entry).
@@ -2397,7 +2402,7 @@ mod tests {
         assert_eq!(db.get_forces(key).unwrap().unwrap(), expect_f);
         db.cook_frame(key).unwrap();
         assert!(db.has_valid_cooked_soa(key).unwrap());
-        // With cook: fast path must match CON-derived atoms (shipped API, not re-impl)
+        // With cook: extract must still match CON-derived atoms (shipped API)
         assert_eq!(db.get_positions(key).unwrap(), expect_pos);
         assert_eq!(db.get_forces(key).unwrap().unwrap(), expect_f);
         let text = db.get_frame_text(key).unwrap();
@@ -2406,5 +2411,100 @@ mod tests {
         assert_eq!(db.get_frame_text(key).unwrap(), text);
         assert_eq!(db.frame_hash(key).unwrap().to_bytes(), h.to_bytes());
         assert_eq!(db.get_positions(key).unwrap(), expect_pos);
+    }
+
+    /// Poison a valid RCSO blob. Extract must still return CON numbers.
+    fn put_poisoned_rcso(db: &ConCorpus, key: FrameKey, dx: f64) -> (Vec<[f64; 3]>, Vec<u8>) {
+        let mut fr = db.get_frame(key).unwrap();
+        let con_pos: Vec<_> = fr.atom_data.iter().map(|a| [a.x, a.y, a.z]).collect();
+        for a in &mut fr.atom_data {
+            a.x += dx;
+            if let Some(f) = a.force.as_mut() {
+                f[0] += dx;
+            }
+            if let Some(v) = a.velocity.as_mut() {
+                v[0] += dx;
+            }
+        }
+        let poison = crate::cooked_soa::CookedSoa::encode_frame(&fr).unwrap();
+        let mut wtxn = db.env.write_txn().unwrap();
+        let fk_b = key.to_bytes();
+        db.frames_soa
+            .put(&mut wtxn, &fk_b[..], &poison[..])
+            .unwrap();
+        wtxn.commit().unwrap();
+        (con_pos, poison)
+    }
+
+    /// Fails if get_positions / get_forces / get_velocities prefer RCSO when
+    /// a valid cooked blob disagrees with CON text.
+    #[test]
+    fn numeric_extract_prefers_con_when_rcso_disagrees() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let key = FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        db.append_trajectory_path(1, fixture("tiny_cuh2_vel_forces.con"))
+            .unwrap();
+        db.cook_frame(key).unwrap();
+        let fr = db.get_frame(key).unwrap();
+        let expect_pos: Vec<_> = fr.atom_data.iter().map(|a| [a.x, a.y, a.z]).collect();
+        let expect_f: Vec<_> = fr
+            .atom_data
+            .iter()
+            .map(|a| a.force.unwrap_or([0.0; 3]))
+            .collect();
+        let expect_v: Vec<_> = fr
+            .atom_data
+            .iter()
+            .map(|a| a.velocity.unwrap_or([0.0; 3]))
+            .collect();
+        let text = db.get_frame_text(key).unwrap();
+        let h = db.frame_hash(key).unwrap();
+
+        let (con_pos, poison) = put_poisoned_rcso(&db, key, 100.0);
+        assert_eq!(con_pos, expect_pos);
+        let cooked = db.get_cooked_soa(key).unwrap().expect("valid poison RCSO");
+        assert!((cooked.positions[0][0] - expect_pos[0][0] - 100.0).abs() < 1e-12);
+        assert_ne!(cooked.positions, expect_pos);
+        assert_eq!(
+            crate::cooked_soa::CookedSoa::decode(&poison)
+                .unwrap()
+                .positions,
+            cooked.positions
+        );
+
+        assert_eq!(db.get_positions(key).unwrap(), expect_pos);
+        assert_eq!(db.get_forces(key).unwrap().unwrap(), expect_f);
+        assert_eq!(db.get_velocities(key).unwrap().unwrap(), expect_v);
+        assert_eq!(db.get_frame_text(key).unwrap(), text);
+        assert_eq!(db.frame_hash(key).unwrap().to_bytes(), h.to_bytes());
+        assert_eq!(db.find_by_hash(h).unwrap(), Some(key));
+    }
+
+    /// Fails if collect_h5md dest arrays prefer a disagreeing RCSO blob.
+    #[test]
+    fn collect_h5md_prefers_con_when_rcso_disagrees() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let key = FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        db.append_trajectory_path(1, fixture("tiny_cuh2_vel_forces.con"))
+            .unwrap();
+        let from_con = db.collect_h5md(1).unwrap();
+        db.cook_frame(key).unwrap();
+        let _ = put_poisoned_rcso(&db, key, 100.0);
+        let after = db.collect_h5md(1).unwrap();
+        assert_eq!(after.positions, from_con.positions);
+        assert_eq!(after.forces, from_con.forces);
+        assert_eq!(after.velocities, from_con.velocities);
+        assert!((after.positions[0] - 0.6394).abs() < 1e-4);
+        let cooked = db.get_cooked_soa(key).unwrap().expect("poison present");
+        assert!((cooked.positions[0][0] - 100.6394).abs() < 1e-4);
+        assert!((after.positions[0] - cooked.positions[0][0]).abs() > 1.0);
     }
 }

@@ -479,7 +479,7 @@ impl PyConCorpus {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Prefer frames_soa; fallback parse CON. List of (x,y,z).
+    /// Positions from CON text when present; valid RCSO only if CON is missing.
     fn get_positions(&self, traj_id: u64, frame_idx: u32) -> PyResult<Vec<(f64, f64, f64)>> {
         let v = self
             .inner

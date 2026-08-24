@@ -763,7 +763,7 @@ pub unsafe extern "C" fn rkrdb_has_valid_cooked(id: usize, traj_id: u64, frame_i
     .unwrap_or(RKRDB_NULL)
 }
 
-/// Prefer cooked positions (no CON parse on hit); else parse CON.
+/// Positions from CON text when present; valid RCSO only if CON is missing.
 /// Writes `*out_natoms * 3` doubles into `out_xyz` (row-major N×3). `capacity_atoms` is max N.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_get_positions(
@@ -810,7 +810,7 @@ pub unsafe extern "C" fn rkrdb_get_positions(
     .unwrap_or(RKRDB_NULL)
 }
 
-/// Prefer cooked forces when present; writes N×3 doubles. Sets *out_has_forces 0/1.
+/// Forces from CON text when present; valid RCSO only if CON is missing.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_get_forces(
     id: usize,
@@ -1291,6 +1291,7 @@ pub unsafe extern "C" fn rkrdb_h5md_species(
     }
 }
 
+/// Velocities from CON text when present; valid RCSO only if CON is missing.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_get_velocities(
     id: usize,

@@ -203,11 +203,10 @@ impl ConCorpus {
                     "H5MD export needs fixed species Z in the trajectory".into(),
                 ));
             }
-            let (pos_src, vel_src, frc_src) = if let Some(c) = self.get_cooked_soa(*k)? {
-                (c.positions, c.velocities, c.forces)
-            } else {
-                let pos: Vec<[f64; 3]> = fr.atom_data.iter().map(|a| [a.x, a.y, a.z]).collect();
-                let vel = if fr.atom_data.iter().any(|a| a.velocity.is_some()) {
+            // CON text is already parsed; do not prefer a stale RCSO cache.
+            let pos_src: Vec<[f64; 3]> = fr.atom_data.iter().map(|a| [a.x, a.y, a.z]).collect();
+            let vel_src: Option<Vec<[f64; 3]>> =
+                if fr.atom_data.iter().any(|a| a.velocity.is_some()) {
                     Some(
                         fr.atom_data
                             .iter()
@@ -217,17 +216,15 @@ impl ConCorpus {
                 } else {
                     None
                 };
-                let frc = if fr.atom_data.iter().any(|a| a.force.is_some()) {
-                    Some(
-                        fr.atom_data
-                            .iter()
-                            .map(|a| a.force.unwrap_or([0.0; 3]))
-                            .collect(),
-                    )
-                } else {
-                    None
-                };
-                (pos, vel, frc)
+            let frc_src: Option<Vec<[f64; 3]>> = if fr.atom_data.iter().any(|a| a.force.is_some()) {
+                Some(
+                    fr.atom_data
+                        .iter()
+                        .map(|a| a.force.unwrap_or([0.0; 3]))
+                        .collect(),
+                )
+            } else {
+                None
             };
             for p in &pos_src {
                 positions.extend_from_slice(&[
