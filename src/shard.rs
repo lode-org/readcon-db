@@ -1104,6 +1104,7 @@ mod compaction_tests {
         assert!(!dest.exists(), "dest_was_new rollback must remove dest");
     }
 
+    #[test]
     fn drain_to_new_dest_rollback_on_empty_src_manifest() {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("src");
@@ -1118,6 +1119,7 @@ mod compaction_tests {
         );
     }
 
+    #[test]
     fn drain_to_new_dest_rollback_on_dest_man_copy() {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("src");
