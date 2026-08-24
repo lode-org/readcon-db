@@ -25,10 +25,6 @@
 extern "C" {
 #endif
 
-#ifndef RKRDB_BCAST_PACK_CAP
-#define RKRDB_BCAST_PACK_CAP (1 << 20)
-#endif
-
 /**
  * Pack one frame on `root` of `comm` and MPI_Bcast the RCSO blob on `comm`.
  *

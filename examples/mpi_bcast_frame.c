@@ -109,13 +109,25 @@ int main(int argc, char **argv) {
         fprintf(stderr, "open_readonly failed\n");
         return 2;
     }
-    buf = (uint8_t *)malloc(1 << 20);
-    nbytes = rkrdb_pack_frame(id, traj, frame, buf, 1 << 20);
-    rkrdb_close(id);
-    if (nbytes < 0) {
-        fprintf(stderr, "pack_frame failed\n");
-        free(buf);
-        return 3;
+    {
+        int need = rkrdb_pack_frame(id, traj, frame, NULL, 0);
+        if (need < 0) {
+            fprintf(stderr, "pack_frame size failed\n");
+            rkrdb_close(id);
+            return 3;
+        }
+        buf = (uint8_t *)malloc((size_t)need);
+        if (buf == NULL) {
+            rkrdb_close(id);
+            return 3;
+        }
+        nbytes = rkrdb_pack_frame(id, traj, frame, buf, (size_t)need);
+        rkrdb_close(id);
+        if (nbytes < 0) {
+            fprintf(stderr, "pack_frame failed\n");
+            free(buf);
+            return 3;
+        }
     }
 #endif
     uint32_t natoms = 0;

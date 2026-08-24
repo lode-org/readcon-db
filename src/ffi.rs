@@ -118,8 +118,8 @@ pub unsafe extern "C" fn rkrdb_open_readonly(path: *const c_char, out_id: *mut u
 }
 
 /// Pack one frame as RCSO bytes for `MPI_Bcast` on the *caller* communicator.
-/// Returns byte count, or error. Rank 0 of that comm calls this; other
-/// ranks never open the env.
+/// `buf == NULL` returns the required size. Rank 0 of that comm calls this;
+/// other ranks never open the env.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_pack_frame(
     id: usize,
@@ -1368,6 +1368,21 @@ mod tests {
             assert_eq!(rkrdb_recook_all(id), RKRDB_OK);
             let need1 = rkrdb_pack_frame(id, 1, 0, std::ptr::null_mut(), 0);
             assert!(need1 > 0, "pack_frame size={need1}");
+            let mut one = vec![0u8; need1 as usize];
+            let n1 = rkrdb_pack_frame(id, 1, 0, one.as_mut_ptr(), one.len());
+            assert_eq!(n1, need1);
+            let mut xyz1 = vec![0.0f64; 32];
+            let mut nxyz1 = 0u32;
+            assert_eq!(
+                rkrdb_unpack_positions(one.as_ptr(), n1 as usize, xyz1.as_mut_ptr(), 8, &mut nxyz1),
+                RKRDB_OK
+            );
+            assert!(nxyz1 >= 1);
+            assert!(
+                (xyz1[0] - 0.6394).abs() < 1e-3,
+                "pack_frame dest x0={}",
+                xyz1[0]
+            );
             let multi = CString::new(fixture("tiny_multi_cuh2.con").to_str().unwrap()).unwrap();
             let mut n2 = 0u32;
             assert_eq!(
@@ -1493,6 +1508,19 @@ mod tests {
             let units2 = CString::new(r#"{"length":"nm","energy":"eV"}"#).unwrap();
             let mut nset = 0u32;
             assert_eq!(rkrdb_set_units(id, 1, units2.as_ptr(), &mut nset), RKRDB_OK);
+            let mut nf2 = 0u32;
+            let mut na2 = 0u32;
+            assert_eq!(rkrdb_h5md_shape(id, 1, &mut nf2, &mut na2), RKRDB_OK);
+            let mut pos2 = vec![0.0f64; (nf2 as usize) * (na2 as usize) * 3];
+            assert_eq!(
+                rkrdb_h5md_positions(id, 1, pos2.as_mut_ptr(), pos2.len(), &mut nf2, &mut na2),
+                RKRDB_OK
+            );
+            assert!(
+                (pos2[0] - 0.6394).abs() < 1e-4,
+                "dest A after set_units x0={}",
+                pos2[0]
+            );
             rkrdb_close(id);
             let velcon = CString::new(fixture("tiny_cuh2.convel").to_str().unwrap()).unwrap();
             let mut id2 = 0usize;

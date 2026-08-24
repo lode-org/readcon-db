@@ -179,7 +179,7 @@ impl ConCorpus {
             for x in e33 {
                 edges.push(x * len_scale);
             }
-            let packed = self.pack_frame(*k)?;
+            let packed = crate::cooked_soa::CookedSoa::encode_frame(&fr)?;
             let cooked = crate::cooked_soa::CookedSoa::decode(&packed)?;
             if cooked.natoms as usize != natoms {
                 return Err(crate::error::Error::Message(
@@ -397,6 +397,8 @@ mod tests {
         let ro = ConCorpus::open_readonly(dir.path()).unwrap();
         let a = ro.collect_h5md(1).unwrap();
         assert!(a.n_frames >= 1);
+        assert_eq!(a.positions.len(), a.n_frames * a.natoms * 3);
+        assert!((a.positions[0] - 0.6394).abs() < 1e-4);
     }
 
     #[test]

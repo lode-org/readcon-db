@@ -17,6 +17,7 @@ program mpi_bcast_frame
   integer(c_int) :: status
   integer :: nbytes, argc
   integer(c_int8_t), allocatable :: buf(:)
+  integer(c_int8_t) :: dummy(1)
   real(c_double) :: xyz(3 * 4096)
   character(len=512) :: corpus, arg
 
@@ -51,8 +52,6 @@ program mpi_bcast_frame
     read (arg, *) frame
   end if
 
-  buflen = int(2**20, c_size_t)
-  allocate (buf(buflen))
   nbytes = 0
   if (rank == 0) then
     call db_open_readonly(trim(corpus), id, status)
@@ -60,6 +59,13 @@ program mpi_bcast_frame
       write (error_unit, '(a)') 'open_readonly failed'
       call MPI_Abort(comm, 2, ierr)
     end if
+    call db_pack_frame(id, traj, frame, dummy, 0_c_size_t, nbytes, status)
+    if (status /= rkrdb_ok .or. nbytes <= 0) then
+      write (error_unit, '(a)') 'pack_frame size failed'
+      call MPI_Abort(comm, 3, ierr)
+    end if
+    allocate (buf(nbytes))
+    buflen = int(nbytes, c_size_t)
     call db_pack_frame(id, traj, frame, buf, buflen, nbytes, status)
     call db_close(id, status)
     if (status /= rkrdb_ok .or. nbytes <= 0) then
@@ -68,6 +74,7 @@ program mpi_bcast_frame
     end if
   end if
   call MPI_Bcast(nbytes, 1, MPI_INTEGER, 0, comm, ierr)
+  if (rank /= 0) allocate (buf(max(nbytes, 1)))
   call MPI_Bcast(buf, nbytes, MPI_BYTE, 0, comm, ierr)
   call db_unpack_positions(buf, int(nbytes, c_size_t), xyz, &
                            4096_c_int32_t, natoms, status)
@@ -85,6 +92,15 @@ program mpi_bcast_frame
       call MPI_Abort(comm, 2, ierr)
     end if
     call db_pack_frames(id, [traj], [frame], 1_c_int32_t, &
+                        dummy, 0_c_size_t, nbytes, status)
+    if (status /= rkrdb_ok .or. nbytes <= 0) then
+      write (error_unit, '(a)') 'pack_frames size failed'
+      call MPI_Abort(comm, 3, ierr)
+    end if
+    if (allocated(buf)) deallocate (buf)
+    allocate (buf(nbytes))
+    buflen = int(nbytes, c_size_t)
+    call db_pack_frames(id, [traj], [frame], 1_c_int32_t, &
                         buf, buflen, nbytes, status)
     call db_close(id, status)
     if (status /= rkrdb_ok .or. nbytes <= 0) then
@@ -93,6 +109,10 @@ program mpi_bcast_frame
     end if
   end if
   call MPI_Bcast(nbytes, 1, MPI_INTEGER, 0, comm, ierr)
+  if (rank /= 0) then
+    if (allocated(buf)) deallocate (buf)
+    allocate (buf(max(nbytes, 1)))
+  end if
   call MPI_Bcast(buf, nbytes, MPI_BYTE, 0, comm, ierr)
   call db_unpack_batch_item(buf, int(nbytes, c_size_t), 0_c_int32_t, xyz, &
                             4096_c_int32_t, natoms, status)

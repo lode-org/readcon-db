@@ -119,7 +119,8 @@ rkrdb_unpack_batch_item(buf, (size_t)nbytes, 0, xyz, 4096, &natoms);
 free(buf);
 ```
 
-C++ `readcon_db::Corpus::pack_frames` / `unpack_batch_nframes` / `unpack_batch_item`.
+C++ `readcon_db::Corpus::pack_frames` / `unpack_batch_nframes` /
+`unpack_batch_item` / `unpack_positions`.
 Fortran INTEGER comms: `rkrdb_bcast_packed_frame_f` and
 `rkrdb_bcast_packed_frames_f` (`MPI_Comm_f2c` of the `MPI_Fint`).
 Standalone driver: `examples/mpi_bcast_frame.c` (`MPI_Initialized` +

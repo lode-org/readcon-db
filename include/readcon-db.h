@@ -21,7 +21,7 @@ int rkrdb_open_readonly(const char *path, size_t *out_id);
  * Pack one frame as RCSO for a unidirectional broadcast on the *caller*
  * communicator (see readcon-db-mpi.h). Rank 0: open_readonly + pack.
  * Others: never open the env; unpack after Bcast. Returns byte count
- * (>=0) or an error code.
+ * (>=0) or an error code. buf == NULL returns the required size.
  */
 int rkrdb_pack_frame(size_t id, uint64_t traj_id, uint32_t frame_idx, uint8_t *buf,
                      size_t buflen);
