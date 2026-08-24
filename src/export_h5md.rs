@@ -909,9 +909,11 @@ mod tests {
         db.set_trajectory_units(1, serde_json::json!({"length": "nm", "energy": "hartree"}))
             .unwrap();
         let after_e = db.collect_h5md(1).unwrap();
-        let afe = after_e.forces.expect("dest forces after set_units energy");
-        assert_eq!(bf.len(), afe.len());
-        for (i, (b, a)) in bf.iter().zip(afe.iter()).enumerate() {
+        let after_energy = after_e
+            .forces
+            .expect("dest forces after set_units energy");
+        assert_eq!(bf.len(), after_energy.len());
+        for (i, (b, a)) in bf.iter().zip(after_energy.iter()).enumerate() {
             assert!(
                 (b - a).abs() < 1e-8,
                 "dest force after set_units energy[{i}]: {b} vs {a}"
