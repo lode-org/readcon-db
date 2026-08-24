@@ -103,6 +103,13 @@ mod tests {
 
     #[test]
     fn bad_magic_rejected() {
+        assert_eq!(COOKED_MAGIC, b"RCSO");
+        assert_eq!(COOKED_VERSION, 1);
+        assert_eq!(DTYPE_F64, 0);
+        assert_eq!(FLAG_FORCES, 1);
+        assert_eq!(FLAG_VELOCITIES, 2);
+        assert_eq!(BATCH_MAGIC, b"RCSB");
+        assert_eq!(BATCH_VERSION, 1);
         assert!(CookedSoa::decode(b"XXXX").is_err());
         assert!(CookedSoa::try_decode(b"XXXX").is_none());
     }
