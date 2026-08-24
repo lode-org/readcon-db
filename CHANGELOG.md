@@ -14,6 +14,7 @@
   aliases are canonicalized into CON metadata (`A` → `angstrom`).
   `set_units` converts stored numbers; append/extend stamp incoming
   values.
+- Fortran `db_get_positions` / `db_get_forces` / `db_get_velocities`.
 - `join_drained_roots` requires `shards.json`; `open_shard_for_traj`
   writes the manifest so drain can run.
 - `rkrdb_get_velocities` matches `get_forces` (`out_has_velocities`; no

@@ -338,6 +338,16 @@ mod tests {
     }
 
     #[test]
+    fn open_shard_for_traj_writes_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("fresh");
+        let (sid, db) = ShardedConCorpus::open_shard_for_traj(&root, 0).unwrap();
+        assert_eq!(sid, 0);
+        drop(db);
+        assert!(root.join("shards.json").is_file());
+    }
+
+    #[test]
     fn join_drained_roots_missing_source_errors() {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("nope");
