@@ -192,6 +192,14 @@ Assign trajectory IDs so `traj_id % n_shards == shard_id` (CLI `shard-ingest`
 advances start-id accordingly). This is **partitioned embedded writers**, not
 Raft multi-master — the right pattern for campaign uploads on Lustre/GPFS.
 
+## H5MD interchange
+
+`collect_h5md` / `export_h5md` emit one cooked `[T][N][3]` trajectory
+(position, optional force and velocity). CON text stays the corpus
+authority. Dest units are Å / ps / kJ mol^{-1} Å^{-1} / Å ps^{-1}
+(`Angstrom ps-1` for MDA 2.10). Node-local ingest then `drain_to` +
+`join-drained` is the campaign write path (see above).
+
 ## LMDB model decision (HPC)
 
 **KEEP sharded LMDB (Heed).** Single-env multi-writer contradicts LMDB SWMR; HPC-scale

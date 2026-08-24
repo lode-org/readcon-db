@@ -7,7 +7,8 @@ module readcon_db
             db_result_count, db_result_key, db_frame_hash, db_frame_formula, db_xxh3_128, &
             db_get_frame, db_pack_frame, db_pack_frames, db_unpack_positions, &
             db_unpack_batch_nframes, db_unpack_batch_item, db_set_units, db_frame_units, &
-            db_h5md_times, db_h5md_shape, db_h5md_positions
+            db_h5md_times, db_h5md_shape, db_h5md_positions, db_h5md_edges, &
+            db_h5md_forces, db_h5md_velocities
 
   integer(c_int), parameter :: rkrdb_ok = 0
   integer(c_int), parameter :: rkrdb_err = -1
@@ -152,6 +153,27 @@ module readcon_db
       integer(c_int64_t), value :: traj_id
       real(c_double), intent(out) :: out(*)
       integer(c_int32_t), intent(out) :: out_nframes, out_natoms
+      integer(c_int) :: st
+    end function
+    function rkrdb_h5md_edges(id, traj_id, out, cap) bind(C, name="rkrdb_h5md_edges") result(st)
+      import :: c_int, c_size_t, c_int64_t, c_double
+      integer(c_size_t), value :: id, cap
+      integer(c_int64_t), value :: traj_id
+      real(c_double), intent(out) :: out(*)
+      integer(c_int) :: st
+    end function
+    function rkrdb_h5md_forces(id, traj_id, out, cap) bind(C, name="rkrdb_h5md_forces") result(st)
+      import :: c_int, c_size_t, c_int64_t, c_double
+      integer(c_size_t), value :: id, cap
+      integer(c_int64_t), value :: traj_id
+      real(c_double), intent(out) :: out(*)
+      integer(c_int) :: st
+    end function
+    function rkrdb_h5md_velocities(id, traj_id, out, cap) bind(C, name="rkrdb_h5md_velocities") result(st)
+      import :: c_int, c_size_t, c_int64_t, c_double
+      integer(c_size_t), value :: id, cap
+      integer(c_int64_t), value :: traj_id
+      real(c_double), intent(out) :: out(*)
       integer(c_int) :: st
     end function
     function rkrdb_select_basic(id, traj_id, symbol, nmin, nmax, limit) bind(C, name="rkrdb_select_basic") result(st)
@@ -418,6 +440,30 @@ contains
     integer(c_int32_t), intent(out) :: nframes, natoms
     integer(c_int), intent(out) :: status
     status = rkrdb_h5md_positions(id, traj_id, xyz, cap, nframes, natoms)
+  end subroutine
+
+  subroutine db_h5md_edges(id, traj_id, edges, cap, status)
+    integer(c_size_t), intent(in) :: id, cap
+    integer(c_int64_t), intent(in) :: traj_id
+    real(c_double), intent(out) :: edges(*)
+    integer(c_int), intent(out) :: status
+    status = rkrdb_h5md_edges(id, traj_id, edges, cap)
+  end subroutine
+
+  subroutine db_h5md_forces(id, traj_id, forces, cap, status)
+    integer(c_size_t), intent(in) :: id, cap
+    integer(c_int64_t), intent(in) :: traj_id
+    real(c_double), intent(out) :: forces(*)
+    integer(c_int), intent(out) :: status
+    status = rkrdb_h5md_forces(id, traj_id, forces, cap)
+  end subroutine
+
+  subroutine db_h5md_velocities(id, traj_id, vel, cap, status)
+    integer(c_size_t), intent(in) :: id, cap
+    integer(c_int64_t), intent(in) :: traj_id
+    real(c_double), intent(out) :: vel(*)
+    integer(c_int), intent(out) :: status
+    status = rkrdb_h5md_velocities(id, traj_id, vel, cap)
   end subroutine
 
   subroutine db_frame_units(id, traj_id, frame_idx, buf, status)

@@ -39,7 +39,7 @@ pub const H5MD_TIME_ATTR: &str = "ps";
 /// CON v3 default when `units.time` is absent (`default_v3_units_json`).
 pub const CON_TIME_DEFAULT: &str = "fs";
 pub const H5MD_FORCE_ATTR: &str = "kJ mol-1 Angstrom-1";
-pub const H5MD_VELOCITY_ATTR: &str = "Angstrom/ps";
+pub const H5MD_VELOCITY_ATTR: &str = "Angstrom ps-1";
 /// 1 kJ mol^{-1} Å^{-1} in N. CODATA 2018 N_A.
 const KJ_MOL_ANGSTROM_SI: f64 = (1000.0 / 6.022_140_76e23) / 1e-10;
 
@@ -555,7 +555,27 @@ mod tests {
         let v = a.velocities.expect("velocities");
         assert_eq!(v.len(), a.n_frames * a.natoms * 3);
         assert!(v.iter().any(|&x| x != 0.0));
-        assert_eq!(a.velocity_unit, "Angstrom/ps");
+        assert_eq!(a.velocity_unit, "Angstrom ps-1");
+        assert!(
+            (v[0] - 1.234).abs() < 1e-9,
+            "0.001234 A/fs -> 1.234 A/ps, got {}",
+            v[0]
+        );
+    }
+
+    #[test]
+    fn collect_h5md_pads_mixed_velocities() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            .unwrap();
+        db.extend_trajectory_path(1, fixture("tiny_cuh2.convel"))
+            .unwrap();
+        let a = db.collect_h5md(1).unwrap();
+        let v = a.velocities.expect("velocities");
+        assert!(a.n_frames >= 2);
+        assert!(v[..a.natoms * 3].iter().all(|&x| x == 0.0));
+        assert!(v[a.natoms * 3..].iter().any(|&x| x != 0.0));
     }
 
     #[test]

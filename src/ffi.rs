@@ -1116,6 +1116,129 @@ pub unsafe extern "C" fn rkrdb_h5md_positions(
     }
 }
 
+unsafe fn h5md_copy_slice(
+    id: usize,
+    traj_id: u64,
+    out: *mut f64,
+    cap: usize,
+    pick: fn(&crate::export_h5md::H5mdArrays) -> Option<&[f64]>,
+    missing: &str,
+) -> c_int {
+    if out.is_null() {
+        return RKRDB_NULL;
+    }
+    let corpus = match corpus_arc(id) {
+        Ok(c) => c,
+        Err(c) => return c,
+    };
+    match corpus.collect_h5md(traj_id) {
+        Ok(a) => {
+            let Some(sl) = pick(&a) else {
+                set_err_id(id, missing);
+                return RKRDB_NOT_FOUND;
+            };
+            if sl.len() > cap {
+                set_err_id(id, "h5md buffer too small");
+                return RKRDB_ERR;
+            }
+            unsafe {
+                ptr::copy_nonoverlapping(sl.as_ptr(), out, sl.len());
+            }
+            RKRDB_OK
+        }
+        Err(e) => {
+            set_err_id(id, e);
+            RKRDB_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_h5md_edges(
+    id: usize,
+    traj_id: u64,
+    out: *mut f64,
+    cap: usize,
+) -> c_int {
+    h5md_copy_slice(id, traj_id, out, cap, |a| Some(a.edges.as_slice()), "")
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_h5md_forces(
+    id: usize,
+    traj_id: u64,
+    out: *mut f64,
+    cap: usize,
+) -> c_int {
+    h5md_copy_slice(
+        id,
+        traj_id,
+        out,
+        cap,
+        |a| a.forces.as_deref(),
+        "no forces",
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_h5md_velocities(
+    id: usize,
+    traj_id: u64,
+    out: *mut f64,
+    cap: usize,
+) -> c_int {
+    h5md_copy_slice(
+        id,
+        traj_id,
+        out,
+        cap,
+        |a| a.velocities.as_deref(),
+        "no velocities",
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_get_velocities(
+    id: usize,
+    traj_id: u64,
+    frame_idx: u32,
+    out_xyz: *mut f64,
+    capacity_atoms: u32,
+    out_natoms: *mut u32,
+) -> c_int {
+    if out_xyz.is_null() || out_natoms.is_null() {
+        return RKRDB_NULL;
+    }
+    let corpus = match corpus_arc(id) {
+        Ok(c) => c,
+        Err(c) => return c,
+    };
+    match corpus.get_velocities(FrameKey {
+        traj_id,
+        frame_idx,
+    }) {
+        Ok(Some(rows)) => {
+            if rows.len() > capacity_atoms as usize {
+                return RKRDB_ERR;
+            }
+            unsafe {
+                *out_natoms = rows.len() as u32;
+                for (i, r) in rows.iter().enumerate() {
+                    *out_xyz.add(i * 3) = r[0];
+                    *out_xyz.add(i * 3 + 1) = r[1];
+                    *out_xyz.add(i * 3 + 2) = r[2];
+                }
+            }
+            RKRDB_OK
+        }
+        Ok(None) => RKRDB_NOT_FOUND,
+        Err(e) => {
+            set_err_id(id, e);
+            RKRDB_ERR
+        }
+    }
+}
+
 /// Dest-`ps` times from `collect_h5md` (CON time or `i * timestep`, else index).
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_h5md_times(
@@ -1261,7 +1384,22 @@ mod tests {
             );
             let s2 = CStr::from_ptr(buf2.as_ptr()).to_str().unwrap();
             assert!(s2.contains("angstrom"), "{s2}");
-            assert_eq!(rkrdb_close(id), RKRDB_OK);
+            rkrdb_close(id);
+            let velcon = CString::new(fixture("tiny_cuh2.convel").to_str().unwrap()).unwrap();
+            let mut id2 = 0usize;
+            let mut n3 = 0u32;
+            assert_eq!(rkrdb_open(path.as_ptr(), &mut id2), RKRDB_OK);
+            assert_eq!(
+                rkrdb_append_trajectory(id2, 2, velcon.as_ptr(), &mut n3),
+                RKRDB_OK
+            );
+            let mut vel = vec![0.0f64; 64];
+            assert_eq!(
+                rkrdb_h5md_velocities(id2, 2, vel.as_mut_ptr(), vel.len()),
+                RKRDB_OK
+            );
+            assert!((vel[0] - 1.234).abs() < 1e-9, "got {}", vel[0]);
+            assert_eq!(rkrdb_close(id2), RKRDB_OK);
         }
     }
 }

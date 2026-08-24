@@ -51,8 +51,11 @@ without the helper. Standalone: `examples/mpi_bcast_frame.f90` (single
 
 H5MD interchange and caller units: `db_append_units`, `db_set_units`,
 `db_h5md_times`, `db_h5md_shape`, `db_h5md_positions` (dest `ps` / Å).
-C symbols are `rkrdb_append_trajectory_units`, `rkrdb_set_units`,
-`rkrdb_h5md_times`, `rkrdb_h5md_shape`, `rkrdb_h5md_positions`.
+C symbols are `rkrdb_append_trajectory_units`,
+`rkrdb_extend_trajectory_units`, `rkrdb_set_units`, `rkrdb_frame_units`,
+`rkrdb_h5md_times`, `rkrdb_h5md_shape`, `rkrdb_h5md_positions`,
+`rkrdb_h5md_edges`, `rkrdb_h5md_forces`, `rkrdb_h5md_velocities`.
+Fortran also has `db_extend_units` and `db_frame_units`.
 CON line-2 `units` is the authority.
 
 ## Cooked SoA (RCSO)

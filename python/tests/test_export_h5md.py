@@ -37,6 +37,8 @@ def test_export_h5md_tn3_and_units(tmp_path):
         assert z.shape == (pos.shape[1],)
         assert np.issubdtype(z.dtype, np.integer)
         assert np.all(z[:] > 0)
+        assert 29 in z[:]
+        assert 1 in z[:]
         assert "force" not in f["particles/all"]
         assert f["particles/all/box/edges/step"].shape == (n,)
         assert f["particles/all/box"].attrs["dimension"] == 3
@@ -166,6 +168,20 @@ def test_pack_frames_unpack_batch(tmp_path):
     np.testing.assert_allclose(np.asarray(frames[0]), np.asarray(pos0))
 
 
+def test_export_h5md_mdanalysis_reader_with_velocity(tmp_path):
+    from MDAnalysis.coordinates.H5MD import H5MDReader
+
+    db = ConCorpus(str(tmp_path / "corpus"))
+    n = db.append_trajectory(1, str(FIXTURE / "tiny_cuh2.convel"))
+    out = tmp_path / "mda_v.h5"
+    db.export_h5md(1, str(out))
+    reader = H5MDReader(str(out), convert_units=True)
+    assert reader.n_frames == n
+    ts = reader.ts
+    assert ts.has_velocities
+    assert abs(float(ts.velocities[0, 0]) - 1.234) < 1e-3
+
+
 def test_export_h5md_mdanalysis_reader(tmp_path):
     from MDAnalysis.coordinates.H5MD import H5MDReader
 
@@ -226,7 +242,8 @@ def test_export_h5md_writes_velocity(tmp_path):
         assert v.ndim == 3
         assert v.shape[2] == 3
         assert np.any(v[:] != 0.0)
-        assert _as_str(v.attrs["unit"]) == "Angstrom/ps"
+        assert _as_str(v.attrs["unit"]) == "Angstrom ps-1"
+        assert abs(float(v[0, 0, 0]) - 1.234) < 1e-9
 
 
 def test_ingest_directory_units(tmp_path):

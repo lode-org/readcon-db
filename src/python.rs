@@ -82,6 +82,7 @@ impl PyConCorpus {
         let n_frames = a.n_frames;
         let natoms = a.natoms;
         let file = h5py.call_method1("File", (path, "w"))?;
+        let written = (|| -> PyResult<u32> {
         let np = py.import("numpy")?;
         let put = |obj: &Bound<'_, PyAny>, name: &str, data: Bound<'_, PyAny>| -> PyResult<()> {
             let d = PyDict::new(obj.py());
@@ -204,8 +205,10 @@ impl PyConCorpus {
         }
         let spec_arr = np.call_method("asarray", (a.species_z,), Some(&i32_kw))?;
         put(&all, "species", spec_arr)?;
-        file.call_method0("close")?;
         Ok(n_frames as u32)
+        })();
+        let _ = file.call_method0("close");
+        written
     }
 
     #[staticmethod]
@@ -455,6 +458,17 @@ impl PyConCorpus {
         let v = self
             .inner
             .get_forces(FrameKey {
+                traj_id,
+                frame_idx,
+            })
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(v.map(|rows| rows.into_iter().map(|r| (r[0], r[1], r[2])).collect()))
+    }
+
+    fn get_velocities(&self, traj_id: u64, frame_idx: u32) -> PyResult<Option<Vec<(f64, f64, f64)>>> {
+        let v = self
+            .inner
+            .get_velocities(FrameKey {
                 traj_id,
                 frame_idx,
             })

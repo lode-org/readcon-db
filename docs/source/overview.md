@@ -13,5 +13,9 @@ Long-timescale and NEB campaigns produce **corpora**: many trajectories × many 
 
 Selection is an explicit Rust/`Select` builder (or `rkrdb_select_*` / `rkrdb_select_meta` in C), not SQL. See [architecture](architecture.md) for the query-cost model.
 
+**H5MD interchange:** `export_h5md` / `collect_h5md` write one `[T][N][3]`
+trajectory (CON stays authority). **Drain/join:** node-local `shard-ingest`,
+`drain` compact-snapshots `data.mdb`, then `join-drained`.
+
 
 **Benchmarks:** fair ASE comparison → `examples/benchmarks/fair_campaign.py` (same CON ladder; not Cu2 stand-ins).

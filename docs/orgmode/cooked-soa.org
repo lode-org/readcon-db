@@ -18,7 +18,12 @@ RCSO is *not* fully equivalent to CON: it omits element symbols, masses, cell/an
 
 * Numeric hot path
 
-=get_positions= / =get_forces= / =get_velocities= (Rust, Python, C =rkrdb_get_positions= / =rkrdb_get_forces=, CLI =positions=) prefer a *valid* RCSO blob and *skip CON parse* on a hit. Missing or corrupt cooked falls back to parsing CON text. Authority APIs (=frame_hash=, =find_by_hash=, =get_frame_text=, =reindex=, shard join) never read =frames_soa=.
+=get_positions= / =get_forces= / =get_velocities= (Rust, Python, C
+=rkrdb_get_positions= / =rkrdb_get_forces= / =rkrdb_get_velocities=, CLI
+=positions=) prefer a *valid* RCSO blob and *skip CON parse* on a hit.
+Missing or corrupt cooked falls back to parsing CON text. Authority APIs
+(=frame_hash=, =find_by_hash=, =get_frame_text=, =reindex=, shard join)
+never read =frames_soa=.
 
 * Language surfaces
 

@@ -66,8 +66,10 @@ The file has `/h5md` version `[1,1]` with `author`/`creator`,
 `particles/all/position/value` of shape `[T][N][3]`,
 `position/step` and `position/time` of shape `[T]`,
 `box/edges/value` of shape `[T][3][3]`, integer-Z `species`,
+optional `particles/all/velocity` `[T][N][3]` (dest `Angstrom ps-1`),
 and unit attributes for one engine system (like metatomic model vs
-engine): length `Angstrom`, time `ps`, force `kJ mol-1 Angstrom-1`.
+engine): length `Angstrom`, time `ps`, force `kJ mol-1 Angstrom-1`,
+velocity `Angstrom ps-1`.
 CON `units.length` / `units.time` / `units.energy` convert through
 `unit_conversion_factor` (SI). Time is CON `header.time()`, or
 `i * timestep`, else the frame index, all in `ps`.
@@ -77,7 +79,7 @@ on the Python module. Callers write aliases (`A`, `ev`, `femtosecond`);
 `ingest_directory(..., units={...})`, and `set_units(traj_id, {...})`
 store canonical names (`angstrom`, `eV`, `fs`) in CON metadata. `append` / `extend` stamp the incoming numbers;
 `set_units` converts stored numbers so the new label is honest.
-`get_units(traj_id, frame_idx)` returns the stored JSON object.
+`get_units(traj_id, frame_idx)` returns the stored units JSON as a string.
 Mixed-force trajectories write a full `[T][N][3]` force dataset
 (zeros on frames without forces). Box `boundary` follows CON `pbc`
 (periodic when absent). Time is CON `header.time()`, or `i * timestep`,
