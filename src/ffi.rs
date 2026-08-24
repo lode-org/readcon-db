@@ -1450,6 +1450,22 @@ mod tests {
             assert!(nt3 >= 2);
             assert!((times3[0] - 0.0).abs() < 1e-12);
             assert!((times3[1] - 1.0).abs() < 1e-12);
+            let mut nf3 = 0u32;
+            let mut na3 = 0u32;
+            assert_eq!(rkrdb_h5md_shape(id, 3, &mut nf3, &mut na3), RKRDB_OK);
+            assert!(nf3 >= 2 && na3 >= 3);
+            let mut pos3 = vec![0.0f64; (nf3 as usize) * (na3 as usize) * 3];
+            assert_eq!(
+                rkrdb_h5md_positions(id, 3, pos3.as_mut_ptr(), pos3.len(), &mut nf3, &mut na3),
+                RKRDB_OK
+            );
+            assert!((pos3[0] - 0.6394).abs() < 1e-4);
+            let i_h1 = (na3 as usize) * 3 + 2 * 3;
+            assert!(
+                (pos3[i_h1] - 8.8549).abs() < 1e-4,
+                "c_abi T>1 dest H x={}",
+                pos3[i_h1]
+            );
             let mut nf = 0u32;
             let mut na = 0u32;
             assert_eq!(rkrdb_h5md_shape(id, 1, &mut nf, &mut na), RKRDB_OK);
@@ -1545,6 +1561,16 @@ mod tests {
                 (pos2[0] - 0.6394).abs() < 1e-4,
                 "dest A after set_units x0={}",
                 pos2[0]
+            );
+            let mut frc2 = vec![0.0f64; 256];
+            assert_eq!(
+                rkrdb_h5md_forces(id, 1, frc2.as_mut_ptr(), frc2.len()),
+                RKRDB_OK
+            );
+            assert!(
+                frc2.iter().any(|&x| (x - dest_f0).abs() < 1e-3),
+                "dest force after set_units ~{dest_f0}, got {:?}",
+                &frc2[..12]
             );
             rkrdb_close(id);
             let mut idro = 0usize;

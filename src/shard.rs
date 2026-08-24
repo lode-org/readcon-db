@@ -1089,6 +1089,20 @@ mod compaction_tests {
     }
 
     #[test]
+    fn drain_to_new_dest_rollback_on_bad_src() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        ShardedConCorpus::open(&src, 2).unwrap();
+        let shard0 = src.join("shard_0000");
+        std::fs::create_dir_all(&shard0).unwrap();
+        std::fs::write(shard0.join("data.mdb"), b"not-lmdb").unwrap();
+        let dest = dir.path().join("dest");
+        assert!(!dest.exists());
+        assert!(ShardedConCorpus::drain_to(&src, &dest).is_err());
+        assert!(!dest.exists(), "dest_was_new rollback must remove dest");
+    }
+
+    #[test]
     fn drain_to_failure_removes_shards_created_this_call() {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("src");

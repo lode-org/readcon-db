@@ -348,6 +348,13 @@ mod tests {
                 "frame-index dest ps: times[{i}]={t}"
             );
         }
+        assert!((a.positions[0] - 0.6394).abs() < 1e-4);
+        let i_h1 = a.natoms * 3 + 2 * 3;
+        assert!(
+            (a.positions[i_h1] - 8.8549).abs() < 1e-4,
+            "tn3 frame1 H dest Å x={}",
+            a.positions[i_h1]
+        );
     }
 
     #[test]
@@ -418,15 +425,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         {
             let db = ConCorpus::open(dir.path()).unwrap();
-            db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            db.append_trajectory_path(1, fixture("tiny_multi_cuh2.con"))
                 .unwrap();
             db.close();
         }
         let ro = ConCorpus::open_readonly(dir.path()).unwrap();
         let a = ro.collect_h5md(1).unwrap();
-        assert!(a.n_frames >= 1);
+        assert!(a.n_frames >= 2);
         assert_eq!(a.positions.len(), a.n_frames * a.natoms * 3);
         assert!((a.positions[0] - 0.6394).abs() < 1e-4);
+        let i_h1 = a.natoms * 3 + 2 * 3;
+        assert!(
+            (a.positions[i_h1] - 8.8549).abs() < 1e-4,
+            "readonly frame1 H dest Å x={}",
+            a.positions[i_h1]
+        );
     }
 
     #[test]

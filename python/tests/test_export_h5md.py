@@ -12,12 +12,12 @@ FIXTURE = Path(__file__).resolve().parents[2] / "resources" / "test"
 def test_export_h5md_readonly_corpus(tmp_path):
     path = tmp_path / "corpus"
     w = ConCorpus(str(path))
-    w.append_trajectory(1, str(FIXTURE / "tiny_cuh2.con"))
+    w.append_trajectory(1, str(FIXTURE / "tiny_multi_cuh2.con"))
     del w
     ro = ConCorpus(str(path), readonly=True)
     out = tmp_path / "ro.h5"
     n = ro.export_h5md(1, str(out))
-    assert n >= 1
+    assert n >= 2
     assert out.is_file()
     with h5py.File(out, "r") as f:
         pos = f["particles/all/position/value"]
@@ -26,6 +26,7 @@ def test_export_h5md_readonly_corpus(tmp_path):
         assert pos.shape[2] == 3
         assert _as_str(pos.attrs["unit"]) == "Angstrom"
         assert abs(float(pos[0, 0, 0]) - 0.6394) < 1e-3
+        assert abs(float(pos[1, 2, 0]) - 8.8549) < 1e-4
 
 
 def test_export_h5md_tn3_and_units(tmp_path):
@@ -248,6 +249,26 @@ def test_export_h5md_con_fallback_matches_rcso(tmp_path):
         )
         assert a["particles/all/position/value"].shape[0] == n
         assert a["particles/all/position/value"].ndim == 3
+        assert abs(float(a["particles/all/position/value"][1][2][0]) - 8.8549) < 1e-4
+        assert abs(float(b["particles/all/position/value"][1][2][0]) - 8.8549) < 1e-4
+
+
+def test_export_h5md_cook_set_units_keeps_dest_force(tmp_path):
+    db = ConCorpus(str(tmp_path / "corpus"))
+    db.append_trajectory(1, str(FIXTURE / "tiny_cuh2_forces.con"))
+    db.cook_frame(1, 0)
+    assert db.has_valid_cooked_soa(1, 0)
+    before = tmp_path / "before.h5"
+    db.export_h5md(1, str(before))
+    db.set_units(1, {"length": "nm", "energy": "eV"})
+    after = tmp_path / "after.h5"
+    db.export_h5md(1, str(after))
+    with h5py.File(before, "r") as a, h5py.File(after, "r") as b:
+        fa = a["particles/all/force/value"][:]
+        fb = b["particles/all/force/value"][:]
+        np.testing.assert_allclose(fa, fb)
+        factor = 96.485332
+        assert abs(float(fa[0, 0, 0]) - 0.123456 * factor) < 1e-3
 
 
 def test_append_and_set_units_canonical(tmp_path):
