@@ -54,10 +54,12 @@ H5MD interchange and caller units: `db_append_units`, `db_set_units`,
 C symbols are `rkrdb_append_trajectory_units`,
 `rkrdb_extend_trajectory_units`, `rkrdb_set_units`, `rkrdb_frame_units`,
 `rkrdb_h5md_times`, `rkrdb_h5md_shape`, `rkrdb_h5md_positions`,
-`rkrdb_h5md_edges`, `rkrdb_h5md_forces`, `rkrdb_h5md_velocities`.
-Fortran also has `db_extend_units` and `db_frame_units`.
+`rkrdb_h5md_edges`, `rkrdb_h5md_forces`, `rkrdb_h5md_velocities`,
+`rkrdb_h5md_species`. Fortran also has `db_extend_units`, `db_frame_units`,
+`db_h5md_species`, `db_get_velocities`, `db_cook_frame`, `db_delete_cooked`,
+`db_has_valid_cooked`, and `db_recook_all`.
 CON line-2 `units` is the authority.
 
 ## Cooked SoA (RCSO)
 
-See `docs/orgmode/cooked-soa.org`. Tier is opt-in; CON text remains authority. Bindings expose cook / delete / has-valid / positions (and forces on C/Python/Rust).
+See `docs/orgmode/cooked-soa.org`. Tier is opt-in; CON text remains authority. Bindings expose cook / delete / has-valid / positions / forces / velocities.

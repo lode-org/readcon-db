@@ -1578,6 +1578,40 @@ mod tests {
     }
 
     #[test]
+    fn get_velocities_returns_native_convel() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.convel"))
+            .unwrap();
+        let v = db
+            .get_velocities(FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap()
+            .expect("velocities");
+        assert!((v[0][0] - 0.001234).abs() < 1e-12, "got {}", v[0][0]);
+        assert!(
+            db.get_velocities(FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap()
+            .is_some()
+        );
+        db.append_trajectory_path(2, fixture("tiny_cuh2.con"))
+            .unwrap();
+        assert!(
+            db.get_velocities(FrameKey {
+                traj_id: 2,
+                frame_idx: 0,
+            })
+            .unwrap()
+            .is_none()
+        );
+    }
+
+    #[test]
     fn caller_units_canonical_in_con_metadata() {
         let dir = tempfile::tempdir().unwrap();
         let db = ConCorpus::open(dir.path()).unwrap();

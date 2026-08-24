@@ -14,6 +14,8 @@
   aliases are canonicalized into CON metadata (`A` → `angstrom`).
   `set_units` converts stored numbers; append/extend stamp incoming
   values.
+- C/C++/Fortran `rkrdb_h5md_species` copies collect integer Z; Corpus
+  wraps `get_positions` / `get_forces` / `get_velocities`.
 - H5MD export uses one engine unit system (Å, ps, kJ mol^{-1} Å^{-1});
   CON units convert through `unit_conversion_factor`. Python exposes that
   function. Time is CON time or `i * timestep`, else the frame index, in

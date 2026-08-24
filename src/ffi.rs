@@ -1197,6 +1197,41 @@ pub unsafe extern "C" fn rkrdb_h5md_velocities(
     )
 }
 
+/// Integer Z, length `N` (`collect_h5md` species_z).
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_h5md_species(
+    id: usize,
+    traj_id: u64,
+    out: *mut i32,
+    cap: usize,
+    out_natoms: *mut u32,
+) -> c_int {
+    if out.is_null() || out_natoms.is_null() {
+        return RKRDB_NULL;
+    }
+    let corpus = match corpus_arc(id) {
+        Ok(c) => c,
+        Err(c) => return c,
+    };
+    match corpus.collect_h5md(traj_id) {
+        Ok(a) => {
+            if a.species_z.len() > cap {
+                set_err_id(id, "h5md_species buffer too small");
+                return RKRDB_ERR;
+            }
+            unsafe {
+                ptr::copy_nonoverlapping(a.species_z.as_ptr(), out, a.species_z.len());
+                *out_natoms = a.species_z.len() as u32;
+            }
+            RKRDB_OK
+        }
+        Err(e) => {
+            set_err_id(id, e);
+            RKRDB_ERR
+        }
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_get_velocities(
     id: usize,
@@ -1363,6 +1398,21 @@ mod tests {
             // stamped A → dest Å; first Cu x on tiny_cuh2.con
             assert!((pos[0] - 0.6394).abs() < 1e-4, "dest A x0={}", pos[0]);
             assert!(pos.iter().any(|&x| x != 0.0));
+            let mut edges = vec![0.0f64; (nf as usize) * 9];
+            assert_eq!(
+                rkrdb_h5md_edges(id, 1, edges.as_mut_ptr(), edges.len()),
+                RKRDB_OK
+            );
+            assert!((edges[0] - 15.3456).abs() < 1e-4, "edge a_x={}", edges[0]);
+            let mut z = vec![0i32; na as usize];
+            let mut nz = 0u32;
+            assert_eq!(
+                rkrdb_h5md_species(id, 1, z.as_mut_ptr(), z.len(), &mut nz),
+                RKRDB_OK
+            );
+            assert_eq!(nz, na);
+            assert!(z.contains(&29), "{z:?}");
+            assert!(z.contains(&1), "{z:?}");
             let forces = CString::new(fixture("tiny_cuh2_forces.con").to_str().unwrap()).unwrap();
             let ext_u = CString::new(r#"{"length":"A","energy":"ev"}"#).unwrap();
             let mut n2 = 0u32;
@@ -1384,6 +1434,17 @@ mod tests {
             );
             let s2 = CStr::from_ptr(buf2.as_ptr()).to_str().unwrap();
             assert!(s2.contains("angstrom"), "{s2}");
+            let mut frc = vec![0.0f64; 256];
+            assert_eq!(
+                rkrdb_h5md_forces(id, 1, frc.as_mut_ptr(), frc.len()),
+                RKRDB_OK
+            );
+            let dest_f0 = -1.234567 * 96.485_332;
+            assert!(
+                frc.iter().any(|&x| (x - dest_f0).abs() < 1e-3),
+                "missing dest force ~{dest_f0}, got {:?}",
+                &frc[..12]
+            );
             rkrdb_close(id);
             let velcon = CString::new(fixture("tiny_cuh2.convel").to_str().unwrap()).unwrap();
             let mut id2 = 0usize;
@@ -1399,6 +1460,18 @@ mod tests {
                 RKRDB_OK
             );
             assert!((vel[0] - 1.234).abs() < 1e-9, "got {}", vel[0]);
+            let mut native = vec![0.0f64; 32];
+            let mut nv = 0u32;
+            assert_eq!(
+                rkrdb_get_velocities(id2, 2, 0, native.as_mut_ptr(), 8, &mut nv),
+                RKRDB_OK
+            );
+            assert!(nv >= 1);
+            assert!(
+                (native[0] - 0.001234).abs() < 1e-9,
+                "native vx0={}",
+                native[0]
+            );
             assert_eq!(rkrdb_close(id2), RKRDB_OK);
         }
     }

@@ -22,6 +22,14 @@ uint32_t nf = 0, na = 0;
 rkrdb_h5md_shape(id, 1, &nf, &na);
 double xyz[4096];
 rkrdb_h5md_positions(id, 1, xyz, 4096, &nf, &na);
+double edges[64], frc[4096], vel[4096];
+rkrdb_h5md_edges(id, 1, edges, 64);
+rkrdb_h5md_forces(id, 1, frc, 4096);
+rkrdb_h5md_velocities(id, 1, vel, 4096);
+int32_t z[256]; uint32_t nz = 0;
+rkrdb_h5md_species(id, 1, z, 256, &nz);
+uint32_t nvel = 0;
+rkrdb_get_velocities(id, 1, 0, vel, 256, &nvel);
 rkrdb_select_basic(id, 1, "Cu", 1, 100000, 0);
 /* Metadata filters: flags bit0=forces, bit1=velocities, bit2=energy present */
 rkrdb_select_meta(id, /*traj*/ -1, "Cu", 1, 100000,
@@ -52,8 +60,14 @@ char ubuf[256];
 db.frame_units(1, 0, ubuf, sizeof ubuf);
 uint32_t nf = 0, na = 0;
 db.h5md_shape(1, &nf, &na);
-double xyz[4096];
+double xyz[4096], edges[64], frc[4096], vel[4096];
 db.h5md_positions(1, xyz, 4096, &nf, &na);
+db.h5md_edges(1, edges, 64);
+db.h5md_forces(1, frc, 4096);
+db.h5md_velocities(1, vel, 4096);
+int32_t z[256];
+db.h5md_species(1, z, 256);
+db.get_velocities(1, 0, vel, 256);
 db.select_basic(1, "Cu", 1, 100000, 0);
 db.select_meta(-1, "Cu", 1, 100000, -50.0, 0.0, 1, 1u, 0);
 ```

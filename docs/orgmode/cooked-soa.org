@@ -27,12 +27,12 @@ never read =frames_soa=.
 
 * Language surfaces
 
-| Surface | Cook / delete / has-valid | Positions / forces |
-|---------+---------------------------+--------------------|
+| Surface | Cook / delete / has-valid | Positions / forces / velocities |
+|---------+---------------------------+--------------------------------|
 | Rust =ConCorpus= | full | full |
-| Python =Corpus= | =cook_frame=, =delete_cooked_soa=, =has_valid_cooked_soa=, =recook_all= | =get_positions=, =get_forces= |
-| C / C++ | =rkrdb_cook_frame=, =rkrdb_delete_cooked=, =rkrdb_has_valid_cooked=, =rkrdb_recook_all= | =rkrdb_get_positions=, =rkrdb_get_forces= |
-| Fortran | =db_cook_frame=, =db_delete_cooked=, =db_has_valid_cooked=, =db_recook_all= | via C =rkrdb_get_positions= (buffer API; not wrapped as high-level array yet) |
+| Python =Corpus= | =cook_frame=, =delete_cooked_soa=, =has_valid_cooked_soa=, =recook_all= | =get_positions=, =get_forces=, =get_velocities= |
+| C / C++ | =rkrdb_cook_frame=, =rkrdb_delete_cooked=, =rkrdb_has_valid_cooked=, =rkrdb_recook_all= | =rkrdb_get_positions=, =rkrdb_get_forces=, =rkrdb_get_velocities= |
+| Fortran | =db_cook_frame=, =db_delete_cooked=, =db_has_valid_cooked=, =db_recook_all= | =db_get_velocities=; positions/forces via C buffer API |
 | CLI | =cook-frame=, =delete-cooked=, =recook-all= | =positions= |
 
 * See also

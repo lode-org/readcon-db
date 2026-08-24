@@ -180,6 +180,9 @@ def test_export_h5md_mdanalysis_reader_with_velocity(tmp_path):
     ts = reader.ts
     assert ts.has_velocities
     assert abs(float(ts.velocities[0, 0]) - 1.234) < 1e-3
+    native = db.get_velocities(1, 0)
+    assert native is not None
+    assert abs(float(native[0][0]) - 0.001234) < 1e-9
 
 
 def test_export_h5md_mdanalysis_reader(tmp_path):
@@ -210,6 +213,16 @@ def test_export_h5md_mdanalysis_reader_with_forces(tmp_path):
     db.export_h5md(1, str(out))
     reader = H5MDReader(str(out), convert_units=True)
     assert reader.n_frames == n
+    ts = reader.ts
+    assert ts.has_forces
+    reader[n - 1]
+    # collect_h5md dest: (eV→J / Å→m) / (kJ mol-1 Å-1 in N). Not eV/Å → kJ/mol/Å
+    # through the SI mol table (that path is N_A in a different role).
+    factor = 96.485332
+    native = db.get_forces(1, n - 1)
+    assert native is not None
+    dest = float(reader.ts.forces[0, 0])
+    assert abs(dest - float(native[0][0]) * factor) < 1e-3
     with h5py.File(out, "r") as f:
         assert "force" in f["particles/all"]
         assert _as_str(f["particles/all/force/value"].attrs["unit"]) == "kJ mol-1 Angstrom-1"

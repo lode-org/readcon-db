@@ -8,7 +8,8 @@ module readcon_db
             db_get_frame, db_pack_frame, db_pack_frames, db_unpack_positions, &
             db_unpack_batch_nframes, db_unpack_batch_item, db_set_units, db_frame_units, &
             db_h5md_times, db_h5md_shape, db_h5md_positions, db_h5md_edges, &
-            db_h5md_forces, db_h5md_velocities
+            db_h5md_forces, db_h5md_velocities, db_h5md_species, db_get_velocities, &
+            db_cook_frame, db_delete_cooked, db_has_valid_cooked, db_recook_all
 
   integer(c_int), parameter :: rkrdb_ok = 0
   integer(c_int), parameter :: rkrdb_err = -1
@@ -174,6 +175,24 @@ module readcon_db
       integer(c_size_t), value :: id, cap
       integer(c_int64_t), value :: traj_id
       real(c_double), intent(out) :: out(*)
+      integer(c_int) :: st
+    end function
+    function rkrdb_h5md_species(id, traj_id, out, cap, out_natoms) bind(C, name="rkrdb_h5md_species") result(st)
+      import :: c_int, c_size_t, c_int64_t, c_int32_t
+      integer(c_size_t), value :: id, cap
+      integer(c_int64_t), value :: traj_id
+      integer(c_int32_t), intent(out) :: out(*)
+      integer(c_int32_t), intent(out) :: out_natoms
+      integer(c_int) :: st
+    end function
+    function rkrdb_get_velocities(id, traj_id, frame_idx, out_xyz, capacity_atoms, out_natoms) &
+        bind(C, name="rkrdb_get_velocities") result(st)
+      import :: c_int, c_size_t, c_int64_t, c_int32_t, c_double
+      integer(c_size_t), value :: id
+      integer(c_int64_t), value :: traj_id
+      integer(c_int32_t), value :: frame_idx, capacity_atoms
+      real(c_double), intent(out) :: out_xyz(*)
+      integer(c_int32_t), intent(out) :: out_natoms
       integer(c_int) :: st
     end function
     function rkrdb_select_basic(id, traj_id, symbol, nmin, nmax, limit) bind(C, name="rkrdb_select_basic") result(st)
@@ -464,6 +483,25 @@ contains
     real(c_double), intent(out) :: vel(*)
     integer(c_int), intent(out) :: status
     status = rkrdb_h5md_velocities(id, traj_id, vel, cap)
+  end subroutine
+
+  subroutine db_h5md_species(id, traj_id, z, cap, natoms, status)
+    integer(c_size_t), intent(in) :: id, cap
+    integer(c_int64_t), intent(in) :: traj_id
+    integer(c_int32_t), intent(out) :: z(*)
+    integer(c_int32_t), intent(out) :: natoms
+    integer(c_int), intent(out) :: status
+    status = rkrdb_h5md_species(id, traj_id, z, cap, natoms)
+  end subroutine
+
+  subroutine db_get_velocities(id, traj_id, frame_idx, xyz, capacity_atoms, natoms, status)
+    integer(c_size_t), intent(in) :: id
+    integer(c_int64_t), intent(in) :: traj_id
+    integer(c_int32_t), intent(in) :: frame_idx, capacity_atoms
+    real(c_double), intent(out) :: xyz(*)
+    integer(c_int32_t), intent(out) :: natoms
+    integer(c_int), intent(out) :: status
+    status = rkrdb_get_velocities(id, traj_id, frame_idx, xyz, capacity_atoms, natoms)
   end subroutine
 
   subroutine db_frame_units(id, traj_id, frame_idx, buf, status)

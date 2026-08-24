@@ -95,6 +95,9 @@ int rkrdb_h5md_positions(size_t id, uint64_t traj_id, double *out, size_t cap,
 int rkrdb_h5md_edges(size_t id, uint64_t traj_id, double *out, size_t cap);
 int rkrdb_h5md_forces(size_t id, uint64_t traj_id, double *out, size_t cap);
 int rkrdb_h5md_velocities(size_t id, uint64_t traj_id, double *out, size_t cap);
+/** Integer Z, length N. Writes *out_natoms. */
+int rkrdb_h5md_species(size_t id, uint64_t traj_id, int32_t *out, size_t cap,
+                       uint32_t *out_natoms);
 
 /* --- Observation archive: async fixed-composition ledger of oracle
  * evaluations. Writes land on a dedicated writer thread (append is
@@ -203,6 +206,36 @@ public:
     return std::string(buf);
   }
 
+  uint32_t get_positions(uint64_t traj_id, uint32_t frame_idx, double *out_xyz,
+                         uint32_t capacity_atoms) {
+    uint32_t n = 0;
+    if (rkrdb_get_positions(id_, traj_id, frame_idx, out_xyz, capacity_atoms, &n) !=
+        RKRDB_OK)
+      throw std::runtime_error("get_positions failed");
+    return n;
+  }
+
+  uint32_t get_forces(uint64_t traj_id, uint32_t frame_idx, double *out_xyz,
+                      uint32_t capacity_atoms, bool *has_forces) {
+    uint32_t n = 0;
+    uint8_t hf = 0;
+    if (rkrdb_get_forces(id_, traj_id, frame_idx, out_xyz, capacity_atoms, &n, &hf) !=
+        RKRDB_OK)
+      throw std::runtime_error("get_forces failed");
+    if (has_forces)
+      *has_forces = hf != 0;
+    return n;
+  }
+
+  uint32_t get_velocities(uint64_t traj_id, uint32_t frame_idx, double *out_xyz,
+                          uint32_t capacity_atoms) {
+    uint32_t n = 0;
+    if (rkrdb_get_velocities(id_, traj_id, frame_idx, out_xyz, capacity_atoms, &n) !=
+        RKRDB_OK)
+      throw std::runtime_error("get_velocities failed");
+    return n;
+  }
+
   void cook_frame(uint64_t traj_id, uint32_t frame_idx) {
     if (rkrdb_cook_frame(id_, traj_id, frame_idx) != RKRDB_OK)
       throw std::runtime_error("cook_frame");
@@ -270,6 +303,13 @@ public:
   void h5md_velocities(uint64_t traj_id, double *out, size_t cap) {
     if (rkrdb_h5md_velocities(id_, traj_id, out, cap) != RKRDB_OK)
       throw std::runtime_error("h5md_velocities failed");
+  }
+
+  uint32_t h5md_species(uint64_t traj_id, int32_t *out, size_t cap) {
+    uint32_t n = 0;
+    if (rkrdb_h5md_species(id_, traj_id, out, cap, &n) != RKRDB_OK)
+      throw std::runtime_error("h5md_species failed");
+    return n;
   }
 
   size_t id() const { return id_; }
