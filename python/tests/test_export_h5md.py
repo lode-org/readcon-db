@@ -19,6 +19,11 @@ def test_export_h5md_readonly_corpus(tmp_path):
     n = ro.export_h5md(1, str(out))
     assert n >= 1
     assert out.is_file()
+    with h5py.File(out, "r") as f:
+        pos = f["particles/all/position/value"]
+        assert pos.ndim == 3
+        assert pos.shape[0] == n
+        assert pos.shape[2] == 3
 
 
 def test_export_h5md_tn3_and_units(tmp_path):

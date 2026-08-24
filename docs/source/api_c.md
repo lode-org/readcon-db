@@ -46,6 +46,8 @@ uint8_t hash[16];
 rkrdb_frame_hash(id, traj, frame, hash);
 rkrdb_select_hash(id, hash);
 rkrdb_close(id);
+rkrdb_open_readonly("/tmp/corpus", &id);
+rkrdb_close(id);
 ```
 
 Status: `RKRDB_OK` (0), `RKRDB_ERR` (-1), `RKRDB_NOT_FOUND` (-2), `RKRDB_NULL` (-3).
@@ -57,6 +59,7 @@ C++ RAII:
 ```cpp
 #include "readcon-db.h"
 readcon_db::Corpus db("/tmp/corpus");
+readcon_db::Corpus ro("/tmp/corpus", /*readonly=*/true);
 db.append_trajectory(1, "run.con", "{\"length\":\"A\",\"energy\":\"ev\"}");
 db.extend_trajectory(1, "more.con", "{\"length\":\"A\",\"energy\":\"ev\"}");
 db.set_units(1, "{\"length\":\"nm\",\"energy\":\"eV\"}");

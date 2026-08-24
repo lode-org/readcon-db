@@ -39,12 +39,12 @@ module readcon_db
     end function
     function rkrdb_pack_frames(id, traj_ids, frame_idxs, nkeys, buf, buflen) &
         bind(C, name="rkrdb_pack_frames") result(n)
-      import :: c_int, c_size_t, c_int64_t, c_int32_t, c_int8_t
+      import :: c_int, c_size_t, c_int64_t, c_int32_t, c_ptr
       integer(c_size_t), value :: id, buflen
       integer(c_int64_t), intent(in) :: traj_ids(*)
       integer(c_int32_t), intent(in) :: frame_idxs(*)
       integer(c_int32_t), value :: nkeys
-      integer(c_int8_t), intent(out) :: buf(*)
+      type(c_ptr), value :: buf
       integer(c_int) :: n
     end function
     function rkrdb_unpack_batch_nframes(buf, buflen, out_n) &
@@ -354,11 +354,15 @@ contains
     integer(c_int64_t), intent(in) :: traj_ids(*)
     integer(c_int32_t), intent(in) :: frame_idxs(*)
     integer(c_int32_t), intent(in) :: nkeys
-    integer(c_int8_t), intent(out) :: buf(*)
+    integer(c_int8_t), intent(out), target :: buf(*)
     integer, intent(out) :: n
     integer(c_int), intent(out) :: status
     integer(c_int) :: rc
-    rc = rkrdb_pack_frames(id, traj_ids, frame_idxs, nkeys, buf, buflen)
+    if (buflen == 0_c_size_t) then
+      rc = rkrdb_pack_frames(id, traj_ids, frame_idxs, nkeys, c_null_ptr, 0_c_size_t)
+    else
+      rc = rkrdb_pack_frames(id, traj_ids, frame_idxs, nkeys, c_loc(buf(1)), buflen)
+    end if
     if (rc < 0) then
       status = rc
       n = 0

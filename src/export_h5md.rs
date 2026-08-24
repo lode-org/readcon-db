@@ -191,8 +191,7 @@ impl ConCorpus {
                     "H5MD export needs fixed box/boundary in the trajectory".into(),
                 ));
             }
-            let z_here: Vec<i32> = self
-                .get_frame(*k)?
+            let z_here: Vec<i32> = fr
                 .atom_data
                 .iter()
                 .map(|a| readcon_core::helpers::symbol_to_atomic_number(a.symbol.as_ref()) as i32)

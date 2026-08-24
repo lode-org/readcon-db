@@ -688,7 +688,7 @@ fn main() -> ExitCode {
                         _ => i += 1,
                     }
                 }
-                let db = ConCorpus::open_existing(&corpus)?;
+                let db = ConCorpus::open_readonly(&corpus)?;
                 let key = FrameKey {
                     traj_id: traj,
                     frame_idx: frame,

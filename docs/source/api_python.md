@@ -49,15 +49,9 @@ from readcon_db import ConCorpus, bcast_packed_frame, bcast_packed_frames
 comm = MPI.COMM_WORLD.Dup()
 blob = bcast_packed_frame(comm, "/scratch/corpus", traj_id=1, frame_idx=0)
 xyz = ConCorpus.unpack_positions(blob)
+batch = bcast_packed_frames(comm, "/scratch/corpus", [(1, 0), (1, 1), (1, 2)])
+frames = ConCorpus.unpack_batch(batch)
 comm.Free()
-```
-
-Many frames, one collective:
-
-```python
-from readcon_db import ConCorpus, bcast_packed_frames
-blob = bcast_packed_frames(comm, "/scratch/corpus", [(1, 0), (1, 1), (1, 2)])
-frames = ConCorpus.unpack_batch(blob)
 ```
 
 Cooked H5MD 1.1 interchange (h5py; fixed `natoms`; CON stays authority):

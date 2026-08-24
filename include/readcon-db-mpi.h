@@ -65,20 +65,25 @@ static inline int rkrdb_bcast_packed_frame(MPI_Comm comm, int root,
     else if (rkrdb_open_readonly(corpus_dir, &id) != RKRDB_OK)
       nbytes = RKRDB_ERR;
     else {
-      buf = (uint8_t *)malloc((size_t)RKRDB_BCAST_PACK_CAP);
-      if (buf == NULL) {
+      int need = rkrdb_pack_frame(id, traj_id, frame_idx, NULL, 0);
+      if (need < 0) {
         rkrdb_close(id);
-        nbytes = RKRDB_ERR;
+        nbytes = need;
       } else {
-        int n = rkrdb_pack_frame(id, traj_id, frame_idx, buf,
-                                 (size_t)RKRDB_BCAST_PACK_CAP);
-        rkrdb_close(id);
-        if (n < 0) {
-          free(buf);
-          buf = NULL;
-          nbytes = n;
+        buf = (uint8_t *)malloc((size_t)need);
+        if (buf == NULL) {
+          rkrdb_close(id);
+          nbytes = RKRDB_ERR;
         } else {
-          nbytes = n;
+          int n = rkrdb_pack_frame(id, traj_id, frame_idx, buf, (size_t)need);
+          rkrdb_close(id);
+          if (n < 0) {
+            free(buf);
+            buf = NULL;
+            nbytes = n;
+          } else {
+            nbytes = n;
+          }
         }
       }
     }

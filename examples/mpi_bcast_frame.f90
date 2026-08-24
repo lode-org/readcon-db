@@ -77,7 +77,7 @@ program mpi_bcast_frame
     if (we_inited == 1) call MPI_Finalize(ierr)
     stop 4
   end if
-  ! Batched pack (RCSB) on the same caller comm. Two keys.
+  ! Batched pack (RCSB) on the same caller comm. One key.
   if (rank == 0) then
     call db_open_readonly(trim(corpus), id, status)
     if (status /= rkrdb_ok) then

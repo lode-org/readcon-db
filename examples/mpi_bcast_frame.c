@@ -85,6 +85,22 @@ int main(int argc, char **argv) {
                 MPI_Finalize();
             return 2;
         }
+        {
+            uint32_t nfr = 0, na2 = 0;
+            double xyz2[3 * 4096];
+            if (rkrdb_unpack_batch_nframes(batch, (size_t)bn, &nfr) != RKRDB_OK ||
+                rkrdb_unpack_batch_item(batch, (size_t)bn, 0, xyz2, 4096, &na2) !=
+                    RKRDB_OK) {
+                if (rank == 0)
+                    fprintf(stderr, "unpack_batch failed\n");
+                free(buf);
+                free(batch);
+                MPI_Comm_free(&comm);
+                if (we_inited)
+                    MPI_Finalize();
+                return 2;
+            }
+        }
         free(batch);
     }
 #else

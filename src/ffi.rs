@@ -128,12 +128,12 @@ pub unsafe extern "C" fn rkrdb_pack_frame(
     buf: *mut u8,
     buflen: usize,
 ) -> c_int {
-    if buf.is_null() || buflen == 0 {
-        return RKRDB_NULL;
-    }
     let key = FrameKey { traj_id, frame_idx };
     with_handle(id, |h| match h.corpus.pack_frame(key) {
         Ok(bytes) => {
+            if buf.is_null() {
+                return Ok(bytes.len() as c_int);
+            }
             if bytes.len() > buflen {
                 set_err(h, "buffer too small");
                 return Ok(RKRDB_ERR);
@@ -1366,6 +1366,8 @@ mod tests {
                 times[0]
             );
             assert_eq!(rkrdb_recook_all(id), RKRDB_OK);
+            let need1 = rkrdb_pack_frame(id, 1, 0, std::ptr::null_mut(), 0);
+            assert!(need1 > 0, "pack_frame size={need1}");
             let multi = CString::new(fixture("tiny_multi_cuh2.con").to_str().unwrap()).unwrap();
             let mut n2 = 0u32;
             assert_eq!(
@@ -1393,6 +1395,21 @@ mod tests {
                 RKRDB_OK
             );
             assert_eq!(nfr, 2);
+            let mut item = vec![0.0f64; 32];
+            let mut nitem = 0u32;
+            assert_eq!(
+                rkrdb_unpack_batch_item(
+                    pbuf.as_ptr(),
+                    npack as usize,
+                    0,
+                    item.as_mut_ptr(),
+                    8,
+                    &mut nitem
+                ),
+                RKRDB_OK
+            );
+            assert!(nitem >= 1);
+            assert!((item[0] - 0.6394).abs() < 1e-3, "dest x0={}", item[0]);
             let mut nf = 0u32;
             let mut na = 0u32;
             assert_eq!(rkrdb_h5md_shape(id, 1, &mut nf, &mut na), RKRDB_OK);
@@ -1473,6 +1490,9 @@ mod tests {
                 "missing dest force ~{dest_f0}, got {:?}",
                 &frc[..12]
             );
+            let units2 = CString::new(r#"{"length":"nm","energy":"eV"}"#).unwrap();
+            let mut nset = 0u32;
+            assert_eq!(rkrdb_set_units(id, 1, units2.as_ptr(), &mut nset), RKRDB_OK);
             rkrdb_close(id);
             let velcon = CString::new(fixture("tiny_cuh2.convel").to_str().unwrap()).unwrap();
             let mut id2 = 0usize;

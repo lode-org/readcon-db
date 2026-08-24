@@ -279,6 +279,11 @@ public:
     return rkrdb_unpack_batch_item(buf, buflen, index, out_xyz, capacity_atoms, out_natoms);
   }
 
+  static int unpack_positions(const uint8_t *buf, size_t buflen, double *out_xyz,
+                              uint32_t capacity_atoms, uint32_t *out_natoms) {
+    return rkrdb_unpack_positions(buf, buflen, out_xyz, capacity_atoms, out_natoms);
+  }
+
   uint32_t h5md_times(uint64_t traj_id, double *out, size_t cap) {
     uint32_t n = 0;
     if (rkrdb_h5md_times(id_, traj_id, out, cap, &n) != RKRDB_OK)
