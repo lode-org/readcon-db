@@ -5,15 +5,20 @@
 - [cocogitto](https://github.com/cocogitto/cocogitto) (`cog`) — conventional commits and `CHANGELOG.md`
 - [prek](https://prek.j178.dev) — git hooks (`prek.toml`)
 - [lychee](https://github.com/lycheeverse/lychee) — link check on built Sphinx HTML
-- Sphinx (`docs/requirements.txt`) — `sphinx-build -b html docs/source docs/_build/html`
+- Sphinx (`pixi.toml` `[feature.docs]`, locked by `pixi.lock`) — `pixi r -e docs docbld`
 
 ```bash
 prek install
 prek run -a
 cog check
-pip install -r docs/requirements.txt
-sphinx-build -b html docs/source docs/_build/html
+pixi r -e docs docbld
 lychee --config lychee.toml 'docs/_build/html/**/*.html'
+```
+
+Refresh the documentation lock after changing `pixi.toml` `[feature.docs]` or `docs/requirements.txt`:
+
+```bash
+pixi lock
 ```
 
 ## Continuous integration
@@ -21,8 +26,8 @@ lychee --config lychee.toml 'docs/_build/html/**/*.html'
 | Workflow | File | Trigger | Purpose |
 |----------|------|---------|---------|
 | Prek | `ci_prek.yml` | push, PR | `prek run -a` |
-| Documentation | `ci_docs.yml` | push, PR | Sphinx HTML + lychee |
-| Pages | `pages.yml` | push to main | Deploy site + Sphinx docs |
+| Documentation | `ci_docs.yml` | push, PR | Locked Sphinx HTML (`pixi.lock`) + lychee |
+| Pages | `pages.yml` | push to main | Deploy site + locked Sphinx docs |
 | Lint | `lint.yml` | PR | Conventional commits + large-file audit |
 | C/C++ dist | `ci_cxx.yml` | push, PR | CMake/Meson/pkg-config without cbindgen |
 | crates.io | `crates_publish.yml` | `v*` tag | `cargo publish --locked` |
@@ -46,7 +51,7 @@ lychee --config lychee.toml 'docs/_build/html/**/*.html'
 
 ```bash
 prek run -a
-sphinx-build -b html docs/source docs/_build/html
+pixi r -e docs docbld
 lychee --config lychee.toml 'docs/_build/html/**/*.html'
 scripts/release-prep.sh X.Y.Z
 git commit -m "maint: bump to vX.Y.Z"

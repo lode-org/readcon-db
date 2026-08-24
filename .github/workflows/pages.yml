@@ -15,13 +15,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: prefix-dev/setup-pixi@v0.9.4
         with:
-          python-version: "3.12"
+          cache: true
+          locked: true
+          environments: docs
       - name: Sphinx HTML
-        run: |
-          pip install -r docs/requirements.txt
-          sphinx-build -b html docs/source docs/_build/html
+        run: pixi r -e docs docbld
       - name: Install lychee
         uses: taiki-e/install-action@v2
         with:
