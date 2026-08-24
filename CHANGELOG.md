@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Tests
+- Numeric extract (`get_positions` / `get_forces` / `get_velocities` /
+  `collect_h5md`) uses CON text when a valid RCSO blob disagrees
+
+### Documentation
+- Published Sphinx page `cooked_soa.md`: RCSO is non-authoritative; CON
+  text is the sole authority
+
+### Continuous integration
+- `cooked-soa` job runs disagreement extract tests and published-page grep
+
 ### Features
 - Batched RCSO pack (`RCSB`): `pack_frames` / `rkrdb_pack_frames` / `bcast_packed_frames` on the caller comm
 - `readcon-db drain <local_root> <pfs_root>` compact-snapshots `data.mdb`

@@ -10,6 +10,7 @@ Part of the **readcon ecosystem** with [readcon-core](https://github.com/lode-or
 
 overview
 architecture
+cooked_soa
 api_rust
 api_c
 api_python

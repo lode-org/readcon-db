@@ -100,4 +100,9 @@ MIT
 
 ## Cooked SoA tier
 
-Optional RCSO numerics in `frames_soa` (opt-in cook). CON text in `frames` stays authoritative. User doc: [`docs/orgmode/cooked-soa.org`](docs/orgmode/cooked-soa.org).
+Optional RCSO numerics in `frames_soa` (opt-in cook). RCSO is
+**non-authoritative**: CON text in `frames` is the **sole authority** for
+hash, dedup, join/split, reindex, and numeric extract. If a valid RCSO blob
+disagrees with CON, extract returns CON. Published page:
+[Cooked SoA](https://lode-org.github.io/readcon-db/docs/cooked_soa.html).
+Source: [`docs/orgmode/cooked-soa.org`](docs/orgmode/cooked-soa.org).

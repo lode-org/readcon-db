@@ -1,6 +1,13 @@
 #+title: Cooked SoA tier (RCSO / frames_soa)
 #+options: toc:2
 
+* Contract
+
+RCSO is *non-authoritative*. CON text in =frames= is the *sole authority*
+for hash, dedup, join/split, =reindex=, CON export, and numeric extract.
+Cooked numerics in =frames_soa= are derived POD only. If a valid RCSO blob
+disagrees with CON text, extract returns CON.
+
 * Summary
 
 =readcon-db= stores two tiers per frame key:
@@ -16,14 +23,15 @@
 
 RCSO is *not* fully equivalent to CON: it omits element symbols, masses, cell/angles, constraints, JSON metadata, and exact on-disk bytes. Those are required for xxHash3 dedup, symbol/formula indexes, =reindex=, join/split, and CON export. Do *not* omit =frames= when cooked exists.
 
-* Numeric hot path
+* Numeric extract
 
 =get_positions= / =get_forces= / =get_velocities= (Rust, Python, C
 =rkrdb_get_positions= / =rkrdb_get_forces= / =rkrdb_get_velocities=, CLI
-=positions=) prefer a *valid* RCSO blob and *skip CON parse* on a hit.
-Missing or corrupt cooked falls back to parsing CON text. Authority APIs
-(=frame_hash=, =find_by_hash=, =get_frame_text=, =reindex=, shard join)
-never read =frames_soa=.
+=positions=) and =collect_h5md= read CON text when =frames= has a blob.
+A valid RCSO cache is used only if CON is missing (unsupported storage).
+Missing or corrupt cooked never blocks CON parse. Pack/bcast may skip
+parse on a valid cooked hit. Authority APIs (=frame_hash=, =find_by_hash=,
+=get_frame_text=, =reindex=, shard join) never read =frames_soa=.
 
 * Language surfaces
 
@@ -38,4 +46,5 @@ never read =frames_soa=.
 * See also
 
 - Internal design notes: =docs/design.md= (engineer-facing; mirrors this contract)
+- Published Sphinx page: =docs/source/cooked_soa.md=
 - Architecture Sphinx page (synced summary from this org)

@@ -65,4 +65,6 @@ CON line-2 `units` is the authority.
 
 ## Cooked SoA (RCSO)
 
-See `docs/orgmode/cooked-soa.org`. Tier is opt-in; CON text remains authority. Fortran exposes cook / delete / has-valid / `db_get_positions` / `db_get_forces` / `db_get_velocities`.
+See [Cooked SoA](cooked_soa.md). Tier is opt-in; RCSO is non-authoritative.
+CON text is the sole authority. Fortran exposes cook / delete / has-valid /
+`db_get_positions` / `db_get_forces` / `db_get_velocities`.

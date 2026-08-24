@@ -95,4 +95,6 @@ Standalone: `examples/mpi_bcast_frame.py`.
 
 ## Cooked SoA (RCSO)
 
-See `docs/orgmode/cooked-soa.org`. Tier is opt-in; CON text remains authority. Bindings expose cook / delete / has-valid / positions / forces / velocities.
+See [Cooked SoA](cooked_soa.md). Tier is opt-in; RCSO is non-authoritative.
+CON text is the sole authority. Bindings expose cook / delete / has-valid /
+positions / forces / velocities.

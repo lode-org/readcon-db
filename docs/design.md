@@ -124,16 +124,17 @@ RCSO is **not** a complete stand-in for a CON frame: it omits element symbols,
 masses, cell/angles, constraint bits, JSON metadata, section structure, and
 **exact UTF-8 bytes**. Those are required for xxHash3 content addressing,
 composition/symbol indexes, CON export, and join/split fidelity. The tier’s
-purpose is to **avoid CON parse on numeric extract** (`get_positions` /
-`get_forces` / `get_velocities`) when a valid cooked blob exists—not to drop
-`frames` storage. Deleting CON text while keeping RCSO is unsupported and fails
-`get_frame_text` / hash; keeping CON and deleting RCSO always works.
+purpose is a derived numeric cache for pack/bcast—not to drop `frames`
+storage. Numeric extract (`get_positions` / `get_forces` / `get_velocities`
+/ `collect_h5md`) uses CON text when the blob is present. Deleting CON text
+while keeping RCSO is unsupported and fails `get_frame_text` / hash; keeping
+CON and deleting RCSO always works.
 
 | Rule | Behavior |
 |------|----------|
 | Authority | UTF-8 CON text in `frames` only; xxHash3 / dedup / join-split / `reindex` ignore SoA |
 | Opt-in | Default ingest does **not** cook; `cook_frame` / `recook_all` / `append_trajectory_path_cook(..., true)` |
-| Hot path | Numeric getters prefer valid cooked (**no CON parse** on hit); corrupt/missing → parse CON |
+| Hot path | Numeric extract uses CON when `frames` has a blob; valid RCSO only if CON is missing. Pack/bcast may skip parse on a valid cooked hit |
 | Discard | `delete_cooked_soa`; reindex and select unaffected; CON text and hash unchanged |
 | Non-equivalence | Symbols/metadata/exact bytes live only in CON; RCSO cannot substitute for missing `frames` |
 | DLPack | Still **ephemeral** in-process views on `ConFrame`—not an LMDB value format |

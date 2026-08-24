@@ -13,6 +13,10 @@ Long-timescale and NEB campaigns produce **corpora**: many trajectories × many 
 
 Selection is an explicit Rust/`Select` builder (or `rkrdb_select_*` / `rkrdb_select_meta` in C), not SQL. See [architecture](architecture.md) for the query-cost model.
 
+**Cooked SoA:** optional RCSO in `frames_soa` is non-authoritative. CON
+text is the sole authority; numeric extract uses CON when the text blob
+is present. See [Cooked SoA](cooked_soa.md).
+
 **H5MD interchange:** `export_h5md` / `collect_h5md` write one `[T][N][3]`
 trajectory (CON stays authority). **Drain/join:** node-local `shard-ingest`,
 `drain` compact-snapshots `data.mdb`, then `join-drained`. `compact-join`
