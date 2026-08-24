@@ -1360,6 +1360,23 @@ mod tests {
                 RKRDB_OK
             );
             assert!(nt >= 1);
+            assert!(
+                (times[0] - 0.0).abs() < 1e-12,
+                "undeclared header.time dest ps times[0]={}",
+                times[0]
+            );
+            let tids = [1u64];
+            let fids = [0u32];
+            let mut pbuf = vec![0u8; 1 << 20];
+            let npack = rkrdb_pack_frames(
+                id,
+                tids.as_ptr(),
+                fids.as_ptr(),
+                1,
+                pbuf.as_mut_ptr(),
+                pbuf.len(),
+            );
+            assert!(npack > 0, "pack_frames={npack}");
             let mut nf = 0u32;
             let mut na = 0u32;
             assert_eq!(rkrdb_h5md_shape(id, 1, &mut nf, &mut na), RKRDB_OK);

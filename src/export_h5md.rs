@@ -387,6 +387,25 @@ mod tests {
     }
 
     #[test]
+    fn collect_h5md_two_frame_distinct_boxl() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let mut frames = Vec::new();
+        for item in readcon_core::iterators::ConFrameIterator::new(&text) {
+            frames.push(item.unwrap());
+        }
+        let mut f1 = frames[0].clone();
+        f1.header.boxl = [20.0, 21.702, 100.0];
+        frames.push(f1);
+        db.append_trajectory_frames(1, &frames, "t").unwrap();
+        let a = db.collect_h5md(1).unwrap();
+        assert!(a.n_frames >= 2);
+        assert!((a.edges[0] - 15.3456).abs() < 1e-4, "e0={}", a.edges[0]);
+        assert!((a.edges[9] - 20.0).abs() < 1e-9, "e9={}", a.edges[9]);
+    }
+
+    #[test]
     fn collect_h5md_mixed_pbc_f_t_f() {
         let dir = tempfile::tempdir().unwrap();
         let db = ConCorpus::open(dir.path()).unwrap();

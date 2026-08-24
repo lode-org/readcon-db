@@ -483,17 +483,26 @@ fn main() -> ExitCode {
                 let sid = shard.ok_or(
                     "--shard required (one writer per shard id across the job; overlapping shard ids drain to unique dests then join-drained)",
                 )?;
-                let db = ShardedConCorpus::open_shard(&root, sid)?;
+                let man = std::path::Path::new(&root).join("shards.json");
+                if !man.is_file() {
+                    return Err("shard-ingest: missing shards.json; run shard-init".into());
+                }
+                let m: readcon_db::ShardManifest =
+                    serde_json::from_str(&std::fs::read_to_string(&man)?)?;
+                if files.is_empty() {
+                    return Err("shard-ingest needs at least one file".into());
+                }
                 let mut tid = start;
+                if ShardedConCorpus::shard_for_traj(tid, m.n_shards) != sid {
+                    return Err(format!(
+                        "traj {tid} routes to shard {}, not {sid}; choose start-id ≡ {sid} (mod n_shards)",
+                        ShardedConCorpus::shard_for_traj(tid, m.n_shards)
+                    )
+                    .into());
+                }
+                let db = ShardedConCorpus::open_shard(&root, sid)?;
                 for f in files {
-                    // Ensure traj routes to this shard
-                    let routed = ShardedConCorpus::shard_for_traj(tid, {
-                        let m: readcon_db::ShardManifest =
-                            serde_json::from_str(&std::fs::read_to_string(
-                                std::path::Path::new(&root).join("shards.json"),
-                            )?)?;
-                        m.n_shards
-                    });
+                    let routed = ShardedConCorpus::shard_for_traj(tid, m.n_shards);
                     if routed != sid {
                         return Err(format!(
                             "traj {tid} routes to shard {routed}, not {sid}; choose start-id ≡ {sid} (mod n_shards)"

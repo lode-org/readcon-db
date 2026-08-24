@@ -244,6 +244,10 @@ public:
     if (rkrdb_cook_frame(id_, traj_id, frame_idx) != RKRDB_OK)
       throw std::runtime_error("cook_frame");
   }
+  void recook_all() {
+    if (rkrdb_recook_all(id_) != RKRDB_OK)
+      throw std::runtime_error("recook_all");
+  }
   void delete_cooked(uint64_t traj_id, uint32_t frame_idx) {
     if (rkrdb_delete_cooked(id_, traj_id, frame_idx) != RKRDB_OK)
       throw std::runtime_error("delete_cooked");

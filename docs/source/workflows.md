@@ -48,7 +48,7 @@ Cooked `[T][N][3]` export (CON stays authority in the corpus):
 
 ```python
 from readcon_db import ConCorpus
-db = ConCorpus("/lustre/orion/proj/campaign_single")
+db = ConCorpus("/lustre/orion/proj/campaign_single", readonly=True)
 db.export_h5md(traj_id=1, path="traj.h5")
 ```
 

@@ -100,6 +100,14 @@ impl ShardedConCorpus {
         self.shard_path(shard_id).join("data.mdb").is_file()
     }
 
+    fn release_shards(&mut self) {
+        for slot in &mut self.shards {
+            if let Some(c) = slot.take() {
+                c.close();
+            }
+        }
+    }
+
     /// Open one shard env (creates dir). Safe for many processes to open **different** shards.
     pub fn shard_mut(&mut self, shard_id: u32) -> Result<&ConCorpus> {
         if shard_id >= self.n_shards {
@@ -140,14 +148,14 @@ impl ShardedConCorpus {
     pub fn open_shard(root: impl AsRef<Path>, shard_id: u32) -> Result<ConCorpus> {
         let root = root.as_ref();
         let manifest_path = root.join(MANIFEST);
-        let n_shards = if manifest_path.is_file() {
-            let m: ShardManifest = serde_json::from_str(&std::fs::read_to_string(&manifest_path)?)?;
-            m.n_shards
-        } else {
-            // Ensure manifest exists for readers.
-            let _ = Self::open(root, DEFAULT_N_SHARDS)?;
-            DEFAULT_N_SHARDS
-        };
+        if !manifest_path.is_file() {
+            return Err(Error::Message(format!(
+                "missing shards.json: {}",
+                root.display()
+            )));
+        }
+        let m: ShardManifest = serde_json::from_str(&std::fs::read_to_string(&manifest_path)?)?;
+        let n_shards = m.n_shards;
         if shard_id >= n_shards {
             return Err(Error::Message(format!(
                 "shard_id {shard_id} >= n_shards {n_shards}"
@@ -197,15 +205,17 @@ impl ShardedConCorpus {
         c.append_trajectory_frames(traj_id, frames, source)
     }
 
-    /// Fan-out select across shards that already exist (does not mint empty envs).
+    /// Fan-out select across shards that already exist (read-only; does not mint).
     pub fn select(&mut self, sel: &Select) -> Result<Vec<FrameKey>> {
+        self.release_shards();
         let mut out = Vec::new();
         for sid in 0..self.n_shards {
             if !self.shard_has_data(sid) {
                 continue;
             }
-            let c = self.shard_mut(sid)?;
+            let c = ConCorpus::open_readonly(self.shard_path(sid))?;
             out.extend(c.select(sel)?);
+            c.close();
         }
         out.sort();
         if let Some(lim) = sel.limit {
@@ -215,13 +225,17 @@ impl ShardedConCorpus {
     }
 
     pub fn get_frame_text(&mut self, key: FrameKey) -> Result<String> {
+        self.release_shards();
         let sid = Self::shard_for_traj(key.traj_id, self.n_shards);
         if !self.shard_has_data(sid) {
             return Err(Error::Message(format!(
                 "shard_{sid:04} is not a corpus directory"
             )));
         }
-        self.shard_mut(sid)?.get_frame_text(key)
+        let c = ConCorpus::open_readonly(self.shard_path(sid))?;
+        let text = c.get_frame_text(key)?;
+        c.close();
+        Ok(text)
     }
 
     pub fn reindex_all(&mut self) -> Result<u32> {
@@ -539,14 +553,17 @@ impl ShardedConCorpus {
                 dst.display()
             )));
         }
+        self.release_shards();
         let mut preview = std::collections::BTreeMap::new();
         for sid in 0..self.n_shards {
             if !self.shard_has_data(sid) {
                 continue;
             }
-            for fk in self.shard_mut(sid)?.list_frame_keys()? {
+            let c = ConCorpus::open_readonly(self.shard_path(sid))?;
+            for fk in c.list_frame_keys()? {
                 preview_traj(&mut preview, fk.traj_id, u64::from(sid))?;
             }
+            c.close();
         }
         let n = (|| -> Result<u32> {
             let out = ConCorpus::open(dst)?;
@@ -644,7 +661,7 @@ fn append_sharded_into(
         if !sh.shard_has_data(sid) {
             continue;
         }
-        let shard = sh.shard_mut(sid)?;
+        let shard = ConCorpus::open_readonly(sh.shard_path(sid))?;
         let keys = shard.list_frame_keys()?;
         let mut by_traj: std::collections::BTreeMap<u64, Vec<FrameKey>> =
             std::collections::BTreeMap::new();
@@ -664,6 +681,7 @@ fn append_sharded_into(
             }
             n += out.append_trajectory_str(tid, &concat, format!("join-from-shard-{sid}"))?;
         }
+        shard.close();
     }
     Ok(n)
 }
@@ -692,16 +710,17 @@ pub fn join_drained_roots(sources: &[PathBuf], dst: impl AsRef<Path>) -> Result<
     {
         let mut preview = std::collections::BTreeMap::new();
         for (si, src) in sources.iter().enumerate() {
-            let mut sh = ShardedConCorpus::open_existing(src)?;
+            let sh = ShardedConCorpus::open_existing(src)?;
             for sid in 0..sh.n_shards {
                 if !sh.shard_has_data(sid) {
                     continue;
                 }
-                let shard = sh.shard_mut(sid)?;
+                let shard = ConCorpus::open_readonly(sh.shard_path(sid))?;
                 let owner = ((si as u64) << 32) | u64::from(sid);
                 for fk in shard.list_frame_keys()? {
                     preview_traj(&mut preview, fk.traj_id, owner)?;
                 }
+                shard.close();
             }
         }
     }

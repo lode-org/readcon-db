@@ -57,6 +57,39 @@ def test_export_h5md_tn3_and_units(tmp_path):
         assert _as_str(f["particles/all/box/edges/value"].attrs["unit"]) == "Angstrom"
 
 
+def test_export_h5md_two_frame_distinct_boxl(tmp_path):
+    text = (FIXTURE / "tiny_cuh2.con").read_text()
+    lines = text.splitlines()
+    lines[2] = "20.000000\t21.702000\t100.000000"
+    p2 = tmp_path / "box2.con"
+    p2.write_text("\n".join(lines) + "\n")
+    db = ConCorpus(str(tmp_path / "corpus"))
+    db.append_trajectory(1, str(FIXTURE / "tiny_cuh2.con"))
+    db.extend_trajectory(1, str(p2))
+    out = tmp_path / "two.h5"
+    db.export_h5md(1, str(out))
+    with h5py.File(out, "r") as f:
+        edges = f["particles/all/box/edges/value"][:]
+        assert edges.shape[0] >= 2
+        assert abs(float(edges[0, 0, 0]) - 15.3456) < 1e-3
+        assert abs(float(edges[1, 0, 0]) - 20.0) < 1e-6
+
+
+def test_export_h5md_mixed_pbc_f_t_f(tmp_path):
+    text = (FIXTURE / "tiny_cuh2.con").read_text()
+    lines = text.splitlines()
+    lines[1] = '{"con_spec_version":2,"pbc":[false,true,false]}'
+    p = tmp_path / "pbc.con"
+    p.write_text("\n".join(lines) + "\n")
+    db = ConCorpus(str(tmp_path / "corpus"))
+    db.append_trajectory(1, str(p))
+    out = tmp_path / "pbc.h5"
+    db.export_h5md(1, str(out))
+    with h5py.File(out, "r") as f:
+        bnd = [_as_str(x) for x in f["particles/all/box"].attrs["boundary"]]
+        assert bnd == ["none", "periodic", "none"]
+
+
 def test_export_h5md_triclinic_edges_from_angles(tmp_path):
     text = (FIXTURE / "tiny_cuh2.con").read_text()
     lines = text.splitlines()

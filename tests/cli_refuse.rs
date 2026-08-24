@@ -90,6 +90,33 @@ fn cook_missing_path_does_not_mint() {
 }
 
 #[test]
+fn shard_ingest_wrong_start_does_not_mint_shard() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("hpc");
+    ShardedConCorpus::open(&root, 2).unwrap();
+    let con = dir.path().join("t.con");
+    std::fs::copy(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/resources/test/tiny_cuh2.con"),
+        &con,
+    )
+    .unwrap();
+    let st = bin()
+        .args([
+            "shard-ingest",
+            root.to_str().unwrap(),
+            "--shard",
+            "1",
+            "--start-id",
+            "0",
+            con.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(!st.success());
+    assert!(!root.join("shard_0001").join("data.mdb").exists());
+}
+
+#[test]
 fn compact_join_missing_src_does_not_mint() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("nope");
