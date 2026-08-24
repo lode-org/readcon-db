@@ -255,7 +255,9 @@ fn commit_row(
     builder
         .set_forces_from_flat(&row.forces)
         .map_err(|e| Error::Message(format!("archive forces: {e}")))?;
-    let frame = builder.build();
+    let frame = builder
+        .build()
+        .map_err(|e| Error::Message(format!("archive build: {e}")))?;
     // 17 significant digits: the ledger must round-trip f64 exactly.
     corpus.append_trajectory_frames_with_precision(traj, &[frame], "observation-archive", 17)?;
     Ok(())
