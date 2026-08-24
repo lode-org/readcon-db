@@ -10,6 +10,9 @@
 
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use readcon_core::types::ConFrame;
 
 use crate::corpus::ConCorpus;
@@ -22,6 +25,9 @@ pub const DEFAULT_N_SHARDS: u32 = 64;
 
 /// Manifest file in the corpus root describing shard layout.
 const MANIFEST: &str = "shards.json";
+
+#[cfg(test)]
+pub(crate) static FAIL_DEST_MAN_COPY: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ShardManifest {
@@ -288,6 +294,10 @@ impl ShardedConCorpus {
             }
             copied_manifest = !dest_man.is_file();
             if copied_manifest {
+                #[cfg(test)]
+                if FAIL_DEST_MAN_COPY.swap(false, Ordering::SeqCst) {
+                    return Err(Error::Message("drain: dest_man copy".into()));
+                }
                 std::fs::copy(&man, &dest_man)?;
             }
             let mut n = 0u32;
@@ -1133,6 +1143,21 @@ mod compaction_tests {
         );
         assert!(dest.join("shards.json").is_dir());
         assert!(!dest.join("shards.json").is_file());
+    }
+
+    #[test]
+    fn drain_to_new_dest_rollback_on_dest_man_copy_fail() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        ShardedConCorpus::open(&src, 2).unwrap();
+        let dest = dir.path().join("dest");
+        assert!(!dest.exists());
+        FAIL_DEST_MAN_COPY.store(true, Ordering::SeqCst);
+        assert!(ShardedConCorpus::drain_to(&src, &dest).is_err());
+        assert!(
+            !dest.exists(),
+            "dest leftover dest_man copy dest_was_new must remove dest"
+        );
     }
 
     #[test]
