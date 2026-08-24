@@ -29,6 +29,9 @@ jobs:
       - name: Sphinx HTML
         run: pixi r -e docs docbld
 
+      - name: CPC fair-campaign freeze
+        run: scripts/check-cpc-freeze.sh
+
       - name: Install lychee
         uses: taiki-e/install-action@v2
         with:
