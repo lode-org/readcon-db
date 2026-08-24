@@ -1,6 +1,12 @@
 #+title: Cooked SoA tier (RCSO / frames_soa)
 #+options: toc:2
 
+* Contract
+
+RCSO is *non-authoritative*. CON text in =frames= is the sole authority
+for hash, dedup, join/split, =reindex=, and CON export. Cooked numerics
+in =frames_soa= are derived POD only; they never replace the text tier.
+
 * Summary
 
 =readcon-db= stores two tiers per frame key:

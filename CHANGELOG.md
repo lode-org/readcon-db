@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Tests
+- Cargo tests lock CON-text authority for cooked RCSO and cover
+  numeric extract (positions, forces, velocities) on parse and cooked paths
+
 ### Features
 - Batched RCSO pack (`RCSB`): `pack_frames` / `rkrdb_pack_frames` / `bcast_packed_frames` on the caller comm
 - `readcon-db drain <local_root> <pfs_root>` compact-snapshots `data.mdb`

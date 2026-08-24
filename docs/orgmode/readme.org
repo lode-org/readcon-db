@@ -13,7 +13,7 @@
 * Tier rules (do not contradict in Sphinx)
 
 1. =frames= CON text is authoritative for hash, dedup, join/split, =reindex=.
-2. =frames_soa= RCSO is opt-in POD numerics only — not a full CON stand-in.
+2. =frames_soa= RCSO is opt-in POD numerics only — non-authoritative, not a full CON stand-in.
 3. Numeric getters prefer valid cooked (no CON parse on hit); corrupt/missing → parse CON.
 4. CPU DLPack / in-process SoA are not LMDB payloads.
 

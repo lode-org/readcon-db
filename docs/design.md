@@ -113,7 +113,7 @@ Single trusted user on local disk for v1. No network protocol in v1.
 Shipped: frames, traj_meta, composition/energy/fmax/flags/natoms/symbol/hash indexes, `Select`, reindex, append frames, CLI/Python/C campaign select.
 ## Optional cooked SoA tier (`frames_soa`)
 
-**Shipped (derived, non-authoritative):** each `FrameKey` may have a binary
+**Shipped (derived, non-authoritative):** RCSO is not authority. Each `FrameKey` may have a binary
 payload in LMDB DB `frames_soa` (magic `RCSO`, v1 LE POD header + f64 N×3
 positions and optional forces/velocities). Encode/decode: `cooked_soa::CookedSoa`
 from a parsed `ConFrame`.

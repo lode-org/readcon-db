@@ -1,5 +1,7 @@
 //! Optional **cooked SoA** payload: derived binary numerics beside authoritative CON text.
 //!
+//! RCSO is **non-authoritative**. CON text in `frames` is the sole authority.
+//!
 //! # Why CON text is still required (RCSO is **not** fully equivalent)
 //!
 //! RCSO stores only POD numerics (positions and optional forces/velocities). It does
@@ -62,7 +64,8 @@ impl CookedSoa {
             flags |= FLAG_VELOCITIES;
         }
 
-        let mut out = Vec::with_capacity(HEADER_LEN + n * 3 * 8 * (1 + has_f as usize + has_v as usize));
+        let mut out =
+            Vec::with_capacity(HEADER_LEN + n * 3 * 8 * (1 + has_f as usize + has_v as usize));
         out.extend_from_slice(COOKED_MAGIC);
         out.extend_from_slice(&COOKED_VERSION.to_le_bytes());
         out.extend_from_slice(&natoms.to_le_bytes());
@@ -117,7 +120,9 @@ impl CookedSoa {
             )));
         }
         let n = natoms as usize;
-        let block = n.checked_mul(3).ok_or_else(|| Error::Message("overflow".into()))?;
+        let block = n
+            .checked_mul(3)
+            .ok_or_else(|| Error::Message("overflow".into()))?;
         let block_bytes = block
             .checked_mul(8)
             .ok_or_else(|| Error::Message("overflow".into()))?;
@@ -283,6 +288,29 @@ mod tests {
                 assert_eq!(forces[i], f);
             }
         }
+    }
+
+    #[test]
+    fn encode_decode_velocities_fixture() {
+        let text = fixture("tiny_cuh2_vel_forces.con");
+        let fr = ConFrameIterator::new(&text).next().unwrap().unwrap();
+        let bytes = CookedSoa::encode_frame(&fr).unwrap();
+        let cooked = CookedSoa::decode(&bytes).unwrap();
+        assert!(cooked.forces.is_some());
+        assert!(cooked.velocities.is_some());
+        let forces = cooked.forces.as_ref().unwrap();
+        let vels = cooked.velocities.as_ref().unwrap();
+        for (i, a) in fr.atom_data.iter().enumerate() {
+            assert_eq!(cooked.positions[i], [a.x, a.y, a.z]);
+            if let Some(f) = a.force {
+                assert_eq!(forces[i], f);
+            }
+            if let Some(v) = a.velocity {
+                assert_eq!(vels[i], v);
+            }
+        }
+        assert!((vels[0][0] - 0.001234).abs() < 1e-12);
+        assert!((forces[0][0] - 0.123456).abs() < 1e-12);
     }
 
     #[test]

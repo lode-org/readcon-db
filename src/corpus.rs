@@ -2407,4 +2407,85 @@ mod tests {
         assert_eq!(db.frame_hash(key).unwrap().to_bytes(), h.to_bytes());
         assert_eq!(db.get_positions(key).unwrap(), expect_pos);
     }
+
+    /// Positions, forces, and velocities: CON parse and cooked extract must match.
+    #[test]
+    fn numeric_extract_velocities_match_con() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let key = FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        db.append_trajectory_path(1, fixture("tiny_cuh2_vel_forces.con"))
+            .unwrap();
+        assert!(!db.has_valid_cooked_soa(key).unwrap());
+        let fr = db.get_frame(key).unwrap();
+        let expect_pos: Vec<_> = fr.atom_data.iter().map(|a| [a.x, a.y, a.z]).collect();
+        let expect_f: Vec<_> = fr
+            .atom_data
+            .iter()
+            .map(|a| a.force.unwrap_or([0.0; 3]))
+            .collect();
+        let expect_v: Vec<_> = fr
+            .atom_data
+            .iter()
+            .map(|a| a.velocity.unwrap_or([0.0; 3]))
+            .collect();
+        assert_eq!(db.get_positions(key).unwrap(), expect_pos);
+        assert_eq!(db.get_forces(key).unwrap().unwrap(), expect_f);
+        assert_eq!(db.get_velocities(key).unwrap().unwrap(), expect_v);
+        assert!((expect_v[0][0] - 0.001234).abs() < 1e-12);
+        let text = db.get_frame_text(key).unwrap();
+        let h = db.frame_hash(key).unwrap();
+        db.cook_frame(key).unwrap();
+        assert!(db.has_valid_cooked_soa(key).unwrap());
+        assert_eq!(db.get_positions(key).unwrap(), expect_pos);
+        assert_eq!(db.get_forces(key).unwrap().unwrap(), expect_f);
+        assert_eq!(db.get_velocities(key).unwrap().unwrap(), expect_v);
+        assert_eq!(db.get_frame_text(key).unwrap(), text);
+        assert_eq!(db.frame_hash(key).unwrap().to_bytes(), h.to_bytes());
+        assert_eq!(db.find_by_hash(h).unwrap(), Some(key));
+        db.delete_cooked_soa(key).unwrap();
+        assert!(!db.has_valid_cooked_soa(key).unwrap());
+        assert_eq!(db.get_positions(key).unwrap(), expect_pos);
+        assert_eq!(db.get_forces(key).unwrap().unwrap(), expect_f);
+        assert_eq!(db.get_velocities(key).unwrap().unwrap(), expect_v);
+        assert_eq!(db.get_frame_text(key).unwrap(), text);
+    }
+
+    /// Valid disagreeing RCSO must win on getters; CON text and hash stay.
+    #[test]
+    fn numeric_extract_valid_rcso_skips_con_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let key = FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            .unwrap();
+        let text = db.get_frame_text(key).unwrap();
+        let h = db.frame_hash(key).unwrap();
+        let mut fr = db.get_frame(key).unwrap();
+        let con_x = fr.atom_data[0].x;
+        fr.atom_data[0].x = 99.0;
+        let poison = crate::cooked_soa::CookedSoa::encode_frame(&fr).unwrap();
+        let mut wtxn = db.env.write_txn().unwrap();
+        let fk_b = key.to_bytes();
+        db.frames_soa
+            .put(&mut wtxn, &fk_b[..], &poison[..])
+            .unwrap();
+        wtxn.commit().unwrap();
+        assert!(db.has_valid_cooked_soa(key).unwrap());
+        let pos = db.get_positions(key).unwrap();
+        assert!(
+            (pos[0][0] - 99.0).abs() < 1e-12,
+            "valid RCSO must skip CON parse, got {}",
+            pos[0][0]
+        );
+        assert!((con_x - 0.6394).abs() < 1e-4);
+        assert_eq!(db.get_frame_text(key).unwrap(), text);
+        assert_eq!(db.frame_hash(key).unwrap().to_bytes(), h.to_bytes());
+    }
 }
