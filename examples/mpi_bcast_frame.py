@@ -7,6 +7,7 @@ Pass the communicator you own: LAMMPS ``lmp.world`` via mpi4py, or a
 
     mpirun -n 4 python examples/mpi_bcast_frame.py <corpus_dir> [traj] [frame]
 """
+
 from __future__ import annotations
 
 import sys

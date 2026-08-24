@@ -54,8 +54,8 @@ description = "Mmap-backed CON frame corpus (LMDB) with C/C++ FFI"
 
 [package.metadata.capi.install.include]
 asset = [
-    { from = "include/readcon-db.h" },
-    { from = "include/readcon-db-mpi.h" },
+  { from = "include/readcon-db.h" },
+  { from = "include/readcon-db-mpi.h" },
 ]
 
 [[example]]

@@ -383,7 +383,10 @@ def test_export_h5md_mdanalysis_reader_with_forces(tmp_path):
     assert abs(dest - float(native[0][0]) * factor) < 1e-3
     with h5py.File(out, "r") as f:
         assert "force" in f["particles/all"]
-        assert _as_str(f["particles/all/force/value"].attrs["unit"]) == "kJ mol-1 Angstrom-1"
+        assert (
+            _as_str(f["particles/all/force/value"].attrs["unit"])
+            == "kJ mol-1 Angstrom-1"
+        )
 
 
 def test_export_h5md_append_nm_scales_positions(tmp_path):
