@@ -27,20 +27,10 @@ Many frames on one collective: `rkrdb_bcast_packed_frames` / Python
 `bcast_packed_frames` (RCSB envelope). Grain is a NEB band or dump
 window, not one EndStep per image.
 
-Node-local ingest, then drain to the PFS (Frontier `/mnt/bb`, Aurora
-`/tmp`):
-
-```bash
-readcon-db shard-init /mnt/bb/$USER/campaign --shards 64
-readcon-db shard-ingest /mnt/bb/$USER/campaign --shard $S --start-id $T \
-    --units '{"length":"angstrom","energy":"eV","time":"fs"}' run.con
-# ranks close
-# One writer per shard id can drain to a shared dest.
-# Overlapping shard ids (more writers than shards): unique dest per node, then join-drained.
-readcon-db drain /mnt/bb/$USER/campaign /lustre/orion/proj/campaign/node_$SLURM_NODEID
-readcon-db join-drained /lustre/orion/proj/campaign_single \
-    /lustre/orion/proj/campaign/node_*
-```
+Node-local ingest, then drain to the PFS: see the
+[campaign ops runbook](campaign.md). One writer per shard id can
+drain to a shared dest. Overlapping shard ids (more writers than
+shards): unique dest per node, then `join-drained`.
 
 ## H5MD interchange
 

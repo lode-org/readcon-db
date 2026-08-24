@@ -52,7 +52,10 @@ rkrdb_close(id);
 
 Status: `RKRDB_OK` (0), `RKRDB_ERR` (-1), `RKRDB_NOT_FOUND` (-2), `RKRDB_NULL` (-3).
 
-Link `libreadcon_db` from `cargo build --release` (`cdylib` / `staticlib`).
+Link `libreadcon_db` from `cargo build --release` (`cdylib` /
+`staticlib`), a CMake/Meson prefix, or the prebuilt
+`readcon-db-clib-$VERSION-$target` tarball (`pkg-config --libs
+readcon-db`). See [install](install.md).
 
 C++ RAII:
 

@@ -19,6 +19,7 @@ cargo install readcon-db --locked   # CLI
 pip install readcon-db             # module readcon_db (PyPI)
 # C/C++: FetchContent / meson dependency('readcon-db') / pkg-config
 # headers in include/ are shipped; cbindgen is not required
+# Prebuilt: readcon-db-clib-$VER-$target.tar.gz on the GitHub Release
 ```
 
 Docs: <https://lode-org.github.io/readcon-db/> · API: <https://docs.rs/readcon-db> · crate: <https://crates.io/crates/readcon-db>
@@ -90,7 +91,8 @@ Foreign trajectories: **`readcon.read_chemfiles("traj.xyz")` → frames → inge
   units on ingest; missing `units.time` is CON `fs`.
 - **Node-local drain/join** — `shard-ingest` then `drain` to a unique
   dest (`data.mdb` only, refuse overwrite), then `join-drained`.
-  `compact-join` joins one sharded root (`open_existing`).
+  `compact-join` joins one sharded root (`open_existing`). Operator
+  runbook: `docs/source/campaign.md`.
 
 Full ABI table, logo, Sphinx docs, and site: see `docs/`, `website/`, `assets/logo/`, `CHANGELOG.md`. Fortran module notes: `fortran/ReadConDb/`.
 

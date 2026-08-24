@@ -2,7 +2,9 @@
 
 Module: `fortran/ReadConDb/src/readcon_db.f90` (`bind(C)` to `rkrdb_*`).
 
-1. `cargo build --release` in the crate root.
+1. Install `libreadcon_db`: unpack the prebuilt
+   `readcon-db-clib-$VERSION-$target` tarball from the GitHub Release
+   (no local cargo), or `cargo build --release` in the crate root.
 2. Link `libreadcon_db` and use the module:
 
 ```fortran
@@ -19,7 +21,7 @@ call db_extend_units(id, 1_c_int64_t, "more.con", &
 call db_select_basic(id, 1_c_int64_t, "Cu", 1, 100000, 0, status)
 ```
 
-See helpers `db_open`, `db_append`, `db_select_basic`, `db_result_count`, `db_result_key`, `db_frame_hash`, `db_xxh3_128` in the module source. Point your build system at `include/` for the C header if needed and `target/release/`.
+See helpers `db_open`, `db_append`, `db_select_basic`, `db_result_count`, `db_result_key`, `db_frame_hash`, `db_xxh3_128` in the module source. Point your build system at `include/` for the C header and at the clib prefix (or `target/release/`) for `libreadcon_db`. [Install](install.md) has the `pkg-config` / fpm flags.
 
 ## MPI: pack on root, Bcast on the caller INTEGER communicator
 

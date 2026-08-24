@@ -32,7 +32,8 @@ pixi lock
 | C/C++ dist | `ci_cxx.yml` | push, PR | CMake/Meson/pkg-config without cbindgen |
 | crates.io | `crates_publish.yml` | `v*` tag | `cargo publish --locked` |
 | Python wheels | `python-wheels.yml` | `v*` tag, PR | maturin matrix → PyPI |
-| cxx tarball | `cxx_tarball.yml` | GitHub Release | slim + vendor C/C++ source tarballs |
+| cxx tarball | `cxx_tarball.yml` | GitHub Release + `workflow_dispatch` tag | slim + vendor C/C++ source tarballs |
+| clib tarball | `c_lib_tarball.yml` | GitHub Release + `workflow_dispatch` tag | Attach prebuilt C ABI (`readcon-db-clib-$VER-$target`) |
 
 ## Release
 
@@ -46,7 +47,8 @@ pixi lock
         │
         ├─► workflow "Publish to crates.io": cargo publish --locked
         ├─► workflow "Python wheels": maturin matrix → PyPI
-        └─► workflow "cxx source tarball": after a GitHub Release exists
+        ├─► workflow "cxx source tarball": after a GitHub Release exists
+        └─► workflow "C ABI library tarball": prebuilt clib (or dispatch tag later)
 ```
 
 ```bash
@@ -64,6 +66,12 @@ git push origin vX.Y.Z
 Do not hand-edit the generated `CHANGELOG.md` section. Extend `cog.toml`
 `[commit_types]` if a historical type blocks `cog changelog`. Push only the
 version tag (`git push origin vX.Y.Z`), not every local tag.
+
+Attach prebuilt C ABI to an existing tag: Actions → **C ABI library
+tarball** → run from a branch that has `scripts/package-clib.sh` → set
+`tag` to `vX.Y.Z`. The packager comes from the workflow ref; sources
+and the Release come from `inputs.tag`. The cxx source tarball
+workflow accepts the same `tag` input.
 
 The CPC manuscript is the readcon-core paper; this crate is the companion
 campaign store. Appendix timings, if used, are the freeze under

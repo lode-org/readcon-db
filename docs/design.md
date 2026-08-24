@@ -191,6 +191,7 @@ ingest (many SLURM tasks uploading CON), use **`ShardedConCorpus`**:
 Assign trajectory IDs so `traj_id % n_shards == shard_id` (CLI `shard-ingest`
 advances start-id accordingly). This is **partitioned embedded writers**, not
 Raft multi-master — the right pattern for campaign uploads on Lustre/GPFS.
+Operator steps live in `docs/source/campaign.md`.
 
 ## H5MD interchange
 

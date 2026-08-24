@@ -80,7 +80,33 @@ A process that uses both C APIs must link the **shared** objects
 already contains the Rust core and rust-std, and the duplicate
 symbols fail at link.
 
-Fortran: `fortran/ReadConDb` (`bind(C)` against the C ABI).
+## Prebuilt C ABI (no local cargo)
+
+Unpack `readcon-db-clib-$VERSION-$target.tar.gz` from the GitHub
+Release (headers + `libreadcon_db` + `readcon-db.pc`). cbindgen is
+not required. CMake FetchContent / Meson wrap still use the *source*
+tarball `readcon-db-cxx-$VERSION.tar.gz`.
+
+```bash
+tar -xzf readcon-db-clib-0.1.4-x86_64-unknown-linux-gnu.tar.gz
+cd readcon-db-clib-0.1.4-x86_64-unknown-linux-gnu
+export PKG_CONFIG_PATH="$PWD/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+export LD_LIBRARY_PATH="$PWD/lib:${LD_LIBRARY_PATH:-}"
+pkg-config --cflags --libs readcon-db
+```
+
+Attach assets to an already-published tag with Actions → **C ABI
+library tarball** → `tag=vX.Y.Z` (packager from the workflow ref;
+sources from the tag).
+
+Fortran: `fortran/ReadConDb` (`bind(C)` against the C ABI). Point
+fpm at this prefix instead of `target/release`:
+
+```bash
+cd fortran/ReadConDb
+fpm test --flag "$(pkg-config --cflags readcon-db) -cpp" \
+  --link-flag "$(pkg-config --libs readcon-db) -ldl -lpthread -lm"
+```
 
 ## Documentation
 

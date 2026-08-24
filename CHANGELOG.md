@@ -9,8 +9,13 @@
 ### Documentation
 - Position this crate as the CPC companion campaign store (not a second paper)
 - Freeze the fair ASE.db campaign table for a paper appendix (`paper/cpc/freeze/`)
+- Campaign ops runbook for multi-shard writers (`docs/source/campaign.md`)
+- Fortran/C install path for the prebuilt `libreadcon_db` tarball
 
 ### Features
+- Prebuilt C ABI tarball (`scripts/package-clib.sh`,
+  `readcon-db-clib-$VER-$target`) for Fortran/C consumers without a
+  local cargo
 - Batched RCSO pack (`RCSB`): `pack_frames` / `rkrdb_pack_frames` / `bcast_packed_frames` on the caller comm
 - `readcon-db drain <local_root> <pfs_root>` compact-snapshots `data.mdb`
   (no `lock.mdb`) after node-local ingest and refuses dest overwrite
