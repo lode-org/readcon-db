@@ -3,6 +3,9 @@
 ## Unreleased
 
 ### Packaging
+- `scripts/check_version_lockstep.sh` gates Cargo, Python, meson, pixi,
+  Fortran, CITATION, Sphinx, and the readcon-core 0.14.7 pin
+- SECURITY.md, CONTRIBUTING.md, and CODE_OF_CONDUCT.md
 - Prebuilt C ABI tarball (`readcon-db-clib-$VERSION-$target.tar.gz`)
   via `scripts/package-clib.sh` and `c_lib_tarball.yml` (shipped
   headers + `libreadcon_db` + `readcon-db.pc`; cbindgen is not required)
