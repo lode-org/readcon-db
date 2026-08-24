@@ -130,7 +130,7 @@ fn main() -> ExitCode {
             }
             "reindex" => {
                 let corpus = args.first().ok_or("corpus")?.clone();
-                let db = ConCorpus::open(&corpus)?;
+                let db = ConCorpus::open_existing(&corpus)?;
                 let n = db.reindex()?;
                 println!("reindexed {n} frames");
             }
@@ -325,7 +325,7 @@ fn main() -> ExitCode {
                         _ => i += 1,
                     }
                 }
-                let db = ConCorpus::open(&corpus)?;
+                let db = ConCorpus::open_readonly(&corpus)?;
                 let mut sel = Select::new().natoms_range(nmin, nmax);
                 if let Some(t) = traj {
                     sel = sel.trajectory(t);
@@ -631,7 +631,7 @@ fn main() -> ExitCode {
                         _ => i += 1,
                     }
                 }
-                let db = ConCorpus::open(&corpus)?;
+                let db = ConCorpus::open_existing(&corpus)?;
                 let n = db.cook_frame(FrameKey {
                     traj_id: traj,
                     frame_idx: frame,
@@ -640,7 +640,7 @@ fn main() -> ExitCode {
             }
             "recook-all" => {
                 let corpus = args.first().ok_or("corpus")?.clone();
-                let db = ConCorpus::open(&corpus)?;
+                let db = ConCorpus::open_existing(&corpus)?;
                 let n = db.recook_all()?;
                 println!("recooked {n} frames");
             }
@@ -662,7 +662,7 @@ fn main() -> ExitCode {
                         _ => i += 1,
                     }
                 }
-                let db = ConCorpus::open(&corpus)?;
+                let db = ConCorpus::open_existing(&corpus)?;
                 db.delete_cooked_soa(FrameKey {
                     traj_id: traj,
                     frame_idx: frame,
@@ -687,7 +687,7 @@ fn main() -> ExitCode {
                         _ => i += 1,
                     }
                 }
-                let db = ConCorpus::open(&corpus)?;
+                let db = ConCorpus::open_existing(&corpus)?;
                 let key = FrameKey {
                     traj_id: traj,
                     frame_idx: frame,

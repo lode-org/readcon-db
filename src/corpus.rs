@@ -111,6 +111,18 @@ impl ConCorpus {
         Self::open_with(path, false)
     }
 
+    /// Write-open an existing corpus. Does not mkdir or mint `data.mdb`.
+    pub fn open_existing(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        if !path.join("data.mdb").is_file() {
+            return Err(Error::Message(format!(
+                "not a corpus directory (missing data.mdb): {}",
+                path.display()
+            )));
+        }
+        Self::open_with(path, false)
+    }
+
     /// Open an existing corpus with `MDB_RDONLY`. No mkdir, no write txn.
     /// MPI workers that only *read* should use this — or, better, rank 0
     /// of the *caller* communicator [`Self::pack_frame`] and `MPI_Bcast`
@@ -129,7 +141,7 @@ impl ConCorpus {
             )));
         }
         if readonly {
-            if !path.is_dir() {
+            if !path.join("data.mdb").is_file() {
                 return Err(Error::Message(format!(
                     "readonly open: {} is not a corpus directory",
                     path.display()
@@ -1488,14 +1500,22 @@ impl ConCorpus {
             )));
         }
         let file = OpenOptions::new().write(true).create_new(true).open(path)?;
-        let mut w = BufWriter::new(file);
-        let mut n = 0usize;
-        for k in keys {
-            let fr = self.get_frame(*k)?;
-            write_frame_extxyz(&mut w, &fr, energy_key)?;
-            n += 1;
+        let written = (|| -> Result<usize> {
+            use std::io::Write;
+            let mut w = BufWriter::new(file);
+            let mut n = 0usize;
+            for k in keys {
+                let fr = self.get_frame(*k)?;
+                write_frame_extxyz(&mut w, &fr, energy_key)?;
+                n += 1;
+            }
+            w.flush()?;
+            Ok(n)
+        })();
+        if written.is_err() {
+            let _ = std::fs::remove_file(path);
         }
-        Ok(n)
+        written
     }
 
     pub fn ingest_directory(
@@ -1759,6 +1779,17 @@ mod tests {
         assert!(text.lines().any(|l| l.trim_start().starts_with("Cu ")));
         let err = db.export_extxyz(&uniq, &xyz, "energy").unwrap_err();
         assert!(err.to_string().contains("dest exists"), "{err}");
+        let missing = dir.path().join("missing_key.xyz");
+        let bad = db.export_extxyz(
+            &[FrameKey {
+                traj_id: 99,
+                frame_idx: 0,
+            }],
+            &missing,
+            "energy",
+        );
+        assert!(bad.is_err());
+        assert!(!missing.exists());
     }
 
     #[test]

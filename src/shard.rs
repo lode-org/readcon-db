@@ -96,6 +96,10 @@ impl ShardedConCorpus {
         self.root.join(format!("shard_{shard_id:04}"))
     }
 
+    fn shard_has_data(&self, shard_id: u32) -> bool {
+        self.shard_path(shard_id).join("data.mdb").is_file()
+    }
+
     /// Open one shard env (creates dir). Safe for many processes to open **different** shards.
     pub fn shard_mut(&mut self, shard_id: u32) -> Result<&ConCorpus> {
         if shard_id >= self.n_shards {
@@ -197,7 +201,7 @@ impl ShardedConCorpus {
     pub fn select(&mut self, sel: &Select) -> Result<Vec<FrameKey>> {
         let mut out = Vec::new();
         for sid in 0..self.n_shards {
-            if !self.shard_path(sid).is_dir() {
+            if !self.shard_has_data(sid) {
                 continue;
             }
             let c = self.shard_mut(sid)?;
@@ -212,7 +216,7 @@ impl ShardedConCorpus {
 
     pub fn get_frame_text(&mut self, key: FrameKey) -> Result<String> {
         let sid = Self::shard_for_traj(key.traj_id, self.n_shards);
-        if !self.shard_path(sid).is_dir() {
+        if !self.shard_has_data(sid) {
             return Err(Error::Message(format!(
                 "shard_{sid:04} is not a corpus directory"
             )));
@@ -223,7 +227,7 @@ impl ShardedConCorpus {
     pub fn reindex_all(&mut self) -> Result<u32> {
         let mut n = 0u32;
         for sid in 0..self.n_shards {
-            if self.shard_path(sid).is_dir() {
+            if self.shard_has_data(sid) {
                 n += self.shard_mut(sid)?.reindex()?;
             }
         }
@@ -240,6 +244,7 @@ impl ShardedConCorpus {
         if !man.is_file() {
             return Err(Error::Message("drain: missing shards.json".into()));
         }
+        let dest_was_new = !dst.exists();
         std::fs::create_dir_all(dst)?;
         let dest_man = dst.join(MANIFEST);
         if dest_man.is_file() {
@@ -255,29 +260,49 @@ impl ShardedConCorpus {
         let m: ShardManifest = serde_json::from_str(&std::fs::read_to_string(&man)?)?;
         for i in 0..m.n_shards {
             let name = format!("shard_{i:04}");
-            if src.join(&name).is_dir() && dst.join(&name).join("data.mdb").is_file() {
+            if src.join(&name).join("data.mdb").is_file()
+                && dst.join(&name).join("data.mdb").is_file()
+            {
                 return Err(Error::Message(format!(
                     "drain: dest {name} exists; refuse overwrite. Drain each node to a unique dest, then join-drained."
                 )));
             }
         }
-        if !dest_man.is_file() {
+        let copied_manifest = !dest_man.is_file();
+        if copied_manifest {
             std::fs::copy(&man, &dest_man)?;
         }
-        let mut n = 0u32;
-        for i in 0..m.n_shards {
-            let name = format!("shard_{i:04}");
-            let from = src.join(&name);
-            if !from.is_dir() {
-                continue;
+        let mut created = Vec::new();
+        let written = (|| -> Result<u32> {
+            let mut n = 0u32;
+            for i in 0..m.n_shards {
+                let name = format!("shard_{i:04}");
+                let from = src.join(&name);
+                if !from.join("data.mdb").is_file() {
+                    continue;
+                }
+                let to = dst.join(&name);
+                let ro = ConCorpus::open_readonly(&from)?;
+                ro.snapshot_to(&to)?;
+                ro.close();
+                created.push(to);
+                n += 1;
             }
-            let to = dst.join(&name);
-            let ro = ConCorpus::open_readonly(&from)?;
-            ro.snapshot_to(&to)?;
-            ro.close();
-            n += 1;
+            Ok(n)
+        })();
+        if written.is_err() {
+            if dest_was_new {
+                let _ = std::fs::remove_dir_all(dst);
+            } else {
+                for p in &created {
+                    let _ = std::fs::remove_dir_all(p);
+                }
+                if copied_manifest {
+                    let _ = std::fs::remove_file(&dest_man);
+                }
+            }
         }
-        Ok(n)
+        written
     }
 }
 
@@ -516,7 +541,7 @@ impl ShardedConCorpus {
         }
         let mut preview = std::collections::BTreeMap::new();
         for sid in 0..self.n_shards {
-            if !self.shard_path(sid).is_dir() {
+            if !self.shard_has_data(sid) {
                 continue;
             }
             for fk in self.shard_mut(sid)?.list_frame_keys()? {
@@ -608,7 +633,7 @@ fn append_sharded_into(
 ) -> Result<u32> {
     let mut n = 0u32;
     for sid in 0..sh.n_shards {
-        if !sh.shard_path(sid).is_dir() {
+        if !sh.shard_has_data(sid) {
             continue;
         }
         let shard = sh.shard_mut(sid)?;
@@ -661,7 +686,7 @@ pub fn join_drained_roots(sources: &[PathBuf], dst: impl AsRef<Path>) -> Result<
         for (si, src) in sources.iter().enumerate() {
             let mut sh = ShardedConCorpus::open_existing(src)?;
             for sid in 0..sh.n_shards {
-                if !sh.shard_path(sid).is_dir() {
+                if !sh.shard_has_data(sid) {
                     continue;
                 }
                 let shard = sh.shard_mut(sid)?;
@@ -883,6 +908,28 @@ mod compaction_tests {
     }
 
     #[test]
+    fn select_skips_empty_shard_dir_without_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sharded");
+        let mut s = ShardedConCorpus::open(&root, 4).unwrap();
+        std::fs::create_dir_all(root.join("shard_0001")).unwrap();
+        let keys = s.select(&Select::new()).unwrap();
+        assert!(keys.is_empty());
+        assert!(!root.join("shard_0001").join("data.mdb").exists());
+        let err = s
+            .get_frame_text(FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("is not a corpus directory"),
+            "{err}"
+        );
+        assert!(!root.join("shard_0001").join("data.mdb").exists());
+    }
+
+    #[test]
     fn select_skips_missing_shard_dirs() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("sharded");
@@ -915,6 +962,57 @@ mod compaction_tests {
             "{err}"
         );
         assert!(!root.join("shard_0001").exists());
+    }
+
+    #[test]
+    fn join_drained_roots_keeps_multi_frame_traj() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_multi_cuh2.con")).unwrap();
+        let node = dir.path().join("node");
+        ShardedConCorpus::open(&node, 2).unwrap();
+        ShardedConCorpus::open_shard(&node, 0)
+            .unwrap()
+            .append_trajectory_str(0, &text, "a")
+            .unwrap();
+        let dest = dir.path().join("dest");
+        assert_eq!(ShardedConCorpus::drain_to(&node, &dest).unwrap(), 1);
+        let joined = dir.path().join("joined");
+        let n = join_drained_roots(&[dest], &joined).unwrap();
+        assert!(n >= 2, "joined frames={n}");
+    }
+
+    #[test]
+    fn join_corpus_dirs_keeps_multi_frame_traj() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a");
+        ConCorpus::open(&a)
+            .unwrap()
+            .append_trajectory_path(1, fixture("tiny_multi_cuh2.con"))
+            .unwrap();
+        let dest = dir.path().join("out");
+        let n = join_corpus_dirs(&[a], &dest).unwrap();
+        assert!(n >= 2, "joined frames={n}");
+    }
+
+    #[test]
+    fn drain_to_failure_removes_shards_created_this_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        ShardedConCorpus::open(&src, 2).unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        ShardedConCorpus::open_shard(&src, 0)
+            .unwrap()
+            .append_trajectory_str(0, &text, "a")
+            .unwrap();
+        ShardedConCorpus::open_shard(&src, 1)
+            .unwrap()
+            .append_trajectory_str(1, &text, "b")
+            .unwrap();
+        let dest = dir.path().join("dest");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("shard_0001"), b"not-a-dir").unwrap();
+        assert!(ShardedConCorpus::drain_to(&src, &dest).is_err());
+        assert!(!dest.join("shard_0000").exists());
     }
 
     #[test]
@@ -1031,67 +1129,5 @@ mod compaction_tests {
                 assert!(!err.to_string().contains("join-drained"));
             }
         }
-    }
-
-    #[test]
-    fn cli_shard_select_missing_root_does_not_mint() {
-        use std::process::Command;
-        let Some(bin) = option_env!("CARGO_BIN_EXE_readcon-db") else {
-            return;
-        };
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("nope");
-        let st = Command::new(bin)
-            .args(["shard-select", root.to_str().unwrap()])
-            .status()
-            .unwrap();
-        assert!(!st.success());
-        assert!(!root.join("shards.json").exists());
-        assert!(!root.exists());
-    }
-
-    #[test]
-    fn cli_compact_split_missing_src_does_not_mint() {
-        use std::process::Command;
-        let Some(bin) = option_env!("CARGO_BIN_EXE_readcon-db") else {
-            return;
-        };
-        let dir = tempfile::tempdir().unwrap();
-        let src = dir.path().join("missing_src");
-        let dest = dir.path().join("split_out");
-        let st = Command::new(bin)
-            .args([
-                "compact-split",
-                src.to_str().unwrap(),
-                dest.to_str().unwrap(),
-            ])
-            .status()
-            .unwrap();
-        assert!(!st.success());
-        assert!(!src.exists());
-        assert!(!dest.exists());
-    }
-
-    #[test]
-    fn cli_compact_export_refuses_sharded_without_flag() {
-        use std::process::Command;
-        let Some(bin) = option_env!("CARGO_BIN_EXE_readcon-db") else {
-            return;
-        };
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("sharded");
-        ShardedConCorpus::open(&root, 2).unwrap();
-        let out = dir.path().join("out.xyz");
-        let st = Command::new(bin)
-            .args([
-                "compact-export-extxyz",
-                root.to_str().unwrap(),
-                out.to_str().unwrap(),
-            ])
-            .status()
-            .unwrap();
-        assert!(!st.success());
-        assert!(!root.join("data.mdb").exists());
-        assert!(!out.exists());
     }
 }

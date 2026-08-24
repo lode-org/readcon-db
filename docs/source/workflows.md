@@ -82,8 +82,12 @@ every frame. Do **not** use ASE as the XYZ reader for this stack. Peer docs:
 
 ## Optional XYZ *export*
 
-`export_extxyz` / CLI `dedup-export` only for external tools that demand XYZ on disk.
-Implementation does not call ASE.
+`export_extxyz` / CLI `dedup-export` / `compact-export-extxyz` only for
+external tools that demand XYZ on disk. Dest must not exist (`create_new`;
+a write failure removes the dest). `Lattice` is the same triclinic
+`[3][3]` as H5MD (`boxl`+angles or `lattice_vectors`). `pbc` is CON
+`header.pbc()` (`T`/`F`, default `T T T`). Implementation does not call ASE.
+`compact-export-extxyz --sharded` joins through a temp dest that is removed.
 
 ## ASE `.db` comparison (measurement only)
 

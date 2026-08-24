@@ -352,6 +352,18 @@ mod tests {
     }
 
     #[test]
+    fn collect_h5md_rejects_changing_natoms() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            .unwrap();
+        db.extend_trajectory_path(1, fixture("sulfolene.con"))
+            .unwrap();
+        let err = db.collect_h5md(1).unwrap_err();
+        assert!(err.to_string().contains("fixed natoms"), "{err}");
+    }
+
+    #[test]
     fn collect_h5md_rejects_changing_pbc() {
         let dir = tempfile::tempdir().unwrap();
         let db = ConCorpus::open(dir.path()).unwrap();
