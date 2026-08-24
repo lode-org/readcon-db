@@ -387,6 +387,20 @@ mod tests {
     }
 
     #[test]
+    fn collect_h5md_open_readonly() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let db = ConCorpus::open(dir.path()).unwrap();
+            db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+                .unwrap();
+            db.close();
+        }
+        let ro = ConCorpus::open_readonly(dir.path()).unwrap();
+        let a = ro.collect_h5md(1).unwrap();
+        assert!(a.n_frames >= 1);
+    }
+
+    #[test]
     fn collect_h5md_two_frame_distinct_boxl() {
         let dir = tempfile::tempdir().unwrap();
         let db = ConCorpus::open(dir.path()).unwrap();

@@ -216,7 +216,7 @@ see decision artifact from the storage-model review (session SCRATCH
 | Mode | CLI | Use |
 |------|-----|-----|
 | **sharded-lmdb** | `shard-init` / `compact-split` | HPC multi-writer; parallel rank ingest |
-| **single-env-lmdb** | `compact-join` / ordinary `ingest` | Laptop analysis; one `ConCorpus::open` |
+| **single-env-lmdb** | `compact-join` / ordinary `ingest` | Laptop analysis; `ConCorpus::open_readonly` |
 | **extxyz** | `compact-export-extxyz` [--sharded] | External ML tools (non-LMDB) |
 
 Join copies CON blobs by traj (ids preserved; duplicate traj across shards errors).

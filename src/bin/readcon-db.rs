@@ -512,15 +512,7 @@ fn main() -> ExitCode {
                     let n = db.append_trajectory_path_units(tid, &f, units.clone())?;
                     println!("shard {sid} traj {tid}: {n} frames from {f}");
                     tid += 1;
-                    // skip ids that don't map to this shard
-                    while ShardedConCorpus::shard_for_traj(tid, {
-                        let m: readcon_db::ShardManifest =
-                            serde_json::from_str(&std::fs::read_to_string(
-                                std::path::Path::new(&root).join("shards.json"),
-                            )?)?;
-                        m.n_shards
-                    }) != sid
-                    {
+                    while ShardedConCorpus::shard_for_traj(tid, m.n_shards) != sid {
                         tid += 1;
                     }
                 }

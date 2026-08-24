@@ -32,6 +32,8 @@ uint32_t npos = 0, nfrc = 0, nvel = 0; uint8_t has_f = 0, has_v = 0;
 rkrdb_get_positions(id, 1, 0, xyz, 256, &npos);
 rkrdb_get_forces(id, 1, 0, frc, 256, &nfrc, &has_f);
 rkrdb_get_velocities(id, 1, 0, vel, 256, &nvel, &has_v);
+rkrdb_cook_frame(id, 1, 0);
+rkrdb_recook_all(id);
 rkrdb_select_basic(id, 1, "Cu", 1, 100000, 0);
 /* Metadata filters: flags bit0=forces, bit1=velocities, bit2=energy present */
 rkrdb_select_meta(id, /*traj*/ -1, "Cu", 1, 100000,
@@ -75,6 +77,8 @@ bool has_f = false, has_v = false;
 db.get_positions(1, 0, xyz, 256);
 db.get_forces(1, 0, frc, 256, &has_f);
 db.get_velocities(1, 0, vel, 256, &has_v);
+db.cook_frame(1, 0);
+db.recook_all();
 db.select_basic(1, "Cu", 1, 100000, 0);
 db.select_meta(-1, "Cu", 1, 100000, -50.0, 0.0, 1, 1u, 0);
 ```

@@ -84,7 +84,7 @@ program mpi_bcast_frame
       write (error_unit, '(a)') 'open_readonly failed'
       call MPI_Abort(comm, 2, ierr)
     end if
-    call db_pack_frames(id, [traj, traj], [frame, frame + 1], 2_c_int32_t, &
+    call db_pack_frames(id, [traj], [frame], 1_c_int32_t, &
                         buf, buflen, nbytes, status)
     call db_close(id, status)
     if (status /= rkrdb_ok .or. nbytes <= 0) then

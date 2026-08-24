@@ -1365,18 +1365,34 @@ mod tests {
                 "undeclared header.time dest ps times[0]={}",
                 times[0]
             );
-            let tids = [1u64];
-            let fids = [0u32];
-            let mut pbuf = vec![0u8; 1 << 20];
+            assert_eq!(rkrdb_recook_all(id), RKRDB_OK);
+            let multi = CString::new(fixture("tiny_multi_cuh2.con").to_str().unwrap()).unwrap();
+            let mut n2 = 0u32;
+            assert_eq!(
+                rkrdb_append_trajectory(id, 3, multi.as_ptr(), &mut n2),
+                RKRDB_OK
+            );
+            let tids = [3u64, 3];
+            let fids = [0u32, 1];
+            let need =
+                rkrdb_pack_frames(id, tids.as_ptr(), fids.as_ptr(), 2, std::ptr::null_mut(), 0);
+            assert!(need > 0, "pack_frames size={need}");
+            let mut pbuf = vec![0u8; need as usize];
             let npack = rkrdb_pack_frames(
                 id,
                 tids.as_ptr(),
                 fids.as_ptr(),
-                1,
+                2,
                 pbuf.as_mut_ptr(),
                 pbuf.len(),
             );
-            assert!(npack > 0, "pack_frames={npack}");
+            assert_eq!(npack, need);
+            let mut nfr = 0u32;
+            assert_eq!(
+                rkrdb_unpack_batch_nframes(pbuf.as_ptr(), npack as usize, &mut nfr),
+                RKRDB_OK
+            );
+            assert_eq!(nfr, 2);
             let mut nf = 0u32;
             let mut na = 0u32;
             assert_eq!(rkrdb_h5md_shape(id, 1, &mut nf, &mut na), RKRDB_OK);

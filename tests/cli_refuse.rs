@@ -90,6 +90,33 @@ fn cook_missing_path_does_not_mint() {
 }
 
 #[test]
+fn shard_ingest_missing_manifest_does_not_mint() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("nope");
+    let con = dir.path().join("t.con");
+    std::fs::copy(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/resources/test/tiny_cuh2.con"),
+        &con,
+    )
+    .unwrap();
+    let st = bin()
+        .args([
+            "shard-ingest",
+            root.to_str().unwrap(),
+            "--shard",
+            "0",
+            "--start-id",
+            "0",
+            con.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(!st.success());
+    assert!(!root.join("shards.json").exists());
+    assert!(!root.exists());
+}
+
+#[test]
 fn shard_ingest_wrong_start_does_not_mint_shard() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("hpc");

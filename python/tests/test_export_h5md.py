@@ -9,6 +9,18 @@ from readcon_db import ConCorpus, canonicalize_unit, unit_conversion_factor
 FIXTURE = Path(__file__).resolve().parents[2] / "resources" / "test"
 
 
+def test_export_h5md_readonly_corpus(tmp_path):
+    path = tmp_path / "corpus"
+    w = ConCorpus(str(path))
+    w.append_trajectory(1, str(FIXTURE / "tiny_cuh2.con"))
+    del w
+    ro = ConCorpus(str(path), readonly=True)
+    out = tmp_path / "ro.h5"
+    n = ro.export_h5md(1, str(out))
+    assert n >= 1
+    assert out.is_file()
+
+
 def test_export_h5md_tn3_and_units(tmp_path):
     db = ConCorpus(str(tmp_path / "corpus"))
     n = db.append_trajectory(1, str(FIXTURE / "tiny_multi_cuh2.con"))

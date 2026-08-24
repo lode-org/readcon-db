@@ -11,6 +11,7 @@ maturin develop --features python
 from readcon_db import ConCorpus
 
 db = ConCorpus("/tmp/corpus")
+ro = ConCorpus("/tmp/corpus", readonly=True)
 db.append_trajectory(1, "run.con")
 keys = db.select(
     traj_id=1,

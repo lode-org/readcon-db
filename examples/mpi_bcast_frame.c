@@ -72,9 +72,9 @@ int main(int argc, char **argv) {
     {
         uint8_t *batch = NULL;
         int bn = 0;
-        uint64_t tids[2] = {traj, traj};
-        uint32_t fids[2] = {frame, frame + 1};
-        int st2 = rkrdb_bcast_packed_frames(comm, 0, dir, tids, fids, 2, &batch, &bn);
+        uint64_t tids[1] = {traj};
+        uint32_t fids[1] = {frame};
+        int st2 = rkrdb_bcast_packed_frames(comm, 0, dir, tids, fids, 1, &batch, &bn);
         if (st2 != RKRDB_OK) {
             if (rank == 0)
                 fprintf(stderr, "bcast_packed_frames failed (%d)\n", st2);
