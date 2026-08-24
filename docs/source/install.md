@@ -80,7 +80,49 @@ A process that uses both C APIs must link the **shared** objects
 already contains the Rust core and rust-std, and the duplicate
 symbols fail at link.
 
-Fortran: `fortran/ReadConDb` (`bind(C)` against the C ABI).
+## Prebuilt C ABI (no local cargo)
+
+Unpack `readcon-db-clib-$VERSION-$target.tar.gz` from the GitHub
+Release, then `export READCON_DB_LIB` / `PKG_CONFIG_PATH`. Attach
+assets to an already-published tag with Actions → **C ABI library
+tarball** → `tag=vX.Y.Z`.
+
+```bash
+VER=0.1.4
+TARGET=x86_64-unknown-linux-gnu
+curl -fsSL -O "https://github.com/lode-org/readcon-db/releases/download/v${VER}/readcon-db-clib-${VER}-${TARGET}.tar.gz"
+tar -xzf "readcon-db-clib-${VER}-${TARGET}.tar.gz"
+PREFIX="$PWD/readcon-db-clib-${VER}-${TARGET}"
+export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+export LD_LIBRARY_PATH="$PREFIX/lib:${LD_LIBRARY_PATH:-}"
+export READCON_DB_LIB="$PREFIX/lib/libreadcon_db.so"
+pkg-config --cflags --libs readcon-db
+```
+
+The cxx tarball still needs rustc/cargo. The clib tarball is the
+Fortran / C path that does not.
+
+## Fortran
+
+`fortran/ReadConDb` (`bind(C)` against the C ABI). Notes:
+`fortran/README.md`. Smoke after unpacking the clib prefix:
+
+```bash
+cd fortran/ReadConDb
+fpm build --flag "$(pkg-config --cflags readcon-db)" \
+  --link-flag "$(pkg-config --libs readcon-db) -ldl -lpthread -lm"
+```
+
+From a checkout (after a release build of the cdylib):
+
+```bash
+cd fortran/ReadConDb && fpm build --flag "-I../../include" \
+  --link-flag "-L../../target/release -lreadcon_db -ldl -lpthread -lm"
+```
+
+Campaign shard/drain/join is the `readcon-db` CLI (in `bin/` of the
+clib tarball when the Release build produced it). See
+[campaign ops](campaign.md).
 
 ## Documentation
 

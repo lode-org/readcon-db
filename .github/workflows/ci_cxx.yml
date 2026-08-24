@@ -29,6 +29,9 @@ jobs:
       - name: Structural gate (no cbindgen required)
         run: bash scripts/check-cxx-dist.sh
 
+      - name: Prebuilt C ABI gate (fixture prefix, no cargo)
+        run: bash scripts/check-clib-dist.sh --self-test
+
       - name: Note cbindgen is unused
         run: |
           if command -v cbindgen >/dev/null 2>&1; then

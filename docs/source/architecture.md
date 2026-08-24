@@ -39,7 +39,7 @@ authority. Dest units are Å / ps / kJ mol^{-1} Å^{-1}; velocity dest is
 
 **Drain/join:** node-local `shard-ingest`, `drain_to` compact-snapshots
 `data.mdb` (refuse overwrite), then `join-drained`. `compact-join` is
-the single-root join (`open_existing`).
+the single-root join (`open_existing`). Ops: [campaign](campaign.md).
 
 **Cooked SoA tier:** optional RCSO in `frames_soa` accelerates `get_positions` / `get_forces` / `get_velocities` without CON parse when valid. RCSO is non-authoritative: CON text in `frames` remains sole authority for hash/dedup/join/reindex. RCSO is not fully equivalent (no symbols/metadata/exact bytes). See `docs/orgmode/cooked-soa.org`.
 
@@ -96,5 +96,7 @@ select avoids decode.
 ```
 
 Fortran uses `bind(C)` wrappers under `fortran/ReadConDb/` (docs-level snippet;
-not a long CPC listing). The CPC manuscript is the readcon-core paper; this
+not a long CPC listing). Prebuilt `libreadcon_db` is
+`readcon-db-clib-$VERSION-$target.tar.gz` on the GitHub Release
+([install](install.md)). The CPC manuscript is the readcon-core paper; this
 crate is the companion campaign store ([CPC companion](cpc.md)).

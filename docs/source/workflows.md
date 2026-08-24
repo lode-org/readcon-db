@@ -28,7 +28,9 @@ Many frames on one collective: `rkrdb_bcast_packed_frames` / Python
 window, not one EndStep per image.
 
 Node-local ingest, then drain to the PFS (Frontier `/mnt/bb`, Aurora
-`/tmp`):
+`/tmp`): one writer per shard id, or unique dest per node when shard
+ids overlap, then `join-drained`. Full sequence, refuses, and C/Fortran
+shard-directory opens: [campaign ops](campaign.md).
 
 ```bash
 readcon-db shard-init /mnt/bb/$USER/campaign --shards 64

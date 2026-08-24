@@ -14,3 +14,7 @@ sed -e "s/@VERSION@/${VERSION}/g" -e "s/@SHA256@/${SHA}/g" \
 ```
 
 Attach the tarball to the GitHub Release for `v$VERSION`.
+
+The prebuilt C ABI (`readcon-db-clib-$VERSION-$target.tar.gz`) is a
+separate asset (`scripts/package-clib.sh`). Meson wrap still uses the
+cxx *source* tarball.

@@ -16,7 +16,7 @@ Selection is an explicit Rust/`Select` builder (or `rkrdb_select_*` / `rkrdb_sel
 **H5MD interchange:** `export_h5md` / `collect_h5md` write one `[T][N][3]`
 trajectory (CON stays authority). **Drain/join:** node-local `shard-ingest`,
 `drain` compact-snapshots `data.mdb`, then `join-drained`. `compact-join`
-is the single-root join.
+is the single-root join. Ops: [campaign](campaign.md).
 
 
 **Benchmarks:** fair ASE comparison → `examples/benchmarks/fair_campaign.py` (same CON ladder; not Cu2 stand-ins). Paper appendix freeze: `paper/cpc/freeze/` ([CPC companion](cpc.md)).
