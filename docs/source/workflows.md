@@ -71,9 +71,12 @@ Metadata predicates use secondary indexes documented in [architecture](architect
 
 ## XYZ and other formats
 
-Use **readcon-core chemfiles ingress** (`read_chemfiles`, Rust/C equivalents) to obtain
-`ConFrame`s, write CON if needed, then ingest. Do **not** use ASE as the XYZ reader
-for this stack. Peer docs: [readcon-core](https://lode-org.github.io/readcon-core/).
+Use **readcon-core chemfiles ingress** (`read_chemfiles`, `read_chemfiles_nth`,
+Rust/C `rkr_read_chemfiles*`) to obtain `ConFrame`s, write CON if needed, then
+ingest. Chemfiles converts format units on read (GRO nm → Å) and stamps line-2
+`units` as Å / ps / amu; use `skip` / `step` / `read_step` rather than loading
+every frame. Do **not** use ASE as the XYZ reader for this stack. Peer docs:
+[readcon-core](https://lode-org.github.io/readcon-core/).
 
 ## Optional XYZ *export*
 
