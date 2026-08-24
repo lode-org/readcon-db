@@ -55,9 +55,7 @@ fn boundary_from_pbc(pbc: Option<[bool; 3]>) -> [String; 3] {
 }
 
 fn boxl_to_edges33(boxl: &[f64; 3]) -> [f64; 9] {
-    [
-        boxl[0], 0.0, 0.0, 0.0, boxl[1], 0.0, 0.0, 0.0, boxl[2],
-    ]
+    [boxl[0], 0.0, 0.0, 0.0, boxl[1], 0.0, 0.0, 0.0, boxl[2]]
 }
 
 fn uc(from: &str, to: &str) -> Result<f64> {
@@ -81,9 +79,7 @@ fn force_scale_to_engine(energy_u: &str, length_u: &str) -> Result<f64> {
 fn time_scale_to_ps(from: &str) -> Result<f64> {
     match uc(from, H5MD_TIME_CORE) {
         Ok(f) => Ok(f),
-        Err(_)
-            if from.eq_ignore_ascii_case("ns") || from.eq_ignore_ascii_case("nanosecond") =>
-        {
+        Err(_) if from.eq_ignore_ascii_case("ns") || from.eq_ignore_ascii_case("nanosecond") => {
             Ok(1e3)
         }
         Err(e) => Err(e),
@@ -190,8 +186,23 @@ impl ConCorpus {
                     "H5MD export needs fixed natoms in the trajectory".into(),
                 ));
             }
+            let z_here: Vec<i32> = self
+                .get_frame(*k)?
+                .atom_data
+                .iter()
+                .map(|a| readcon_core::helpers::symbol_to_atomic_number(a.symbol.as_ref()) as i32)
+                .collect();
+            if z_here != species_z {
+                return Err(crate::error::Error::Message(
+                    "H5MD export needs fixed species Z in the trajectory".into(),
+                ));
+            }
             for p in &cooked.positions {
-                positions.extend_from_slice(&[p[0] * len_scale, p[1] * len_scale, p[2] * len_scale]);
+                positions.extend_from_slice(&[
+                    p[0] * len_scale,
+                    p[1] * len_scale,
+                    p[2] * len_scale,
+                ]);
             }
             vel_rows.push(match cooked.velocities {
                 Some(rows) => Some(
@@ -316,19 +327,15 @@ mod tests {
         for item in readcon_core::iterators::ConFrameIterator::new(&text) {
             frames.push(item.unwrap());
         }
-        frames[0].header.metadata.insert(
-            "pbc".into(),
-            serde_json::json!([false, false, false]),
-        );
+        frames[0]
+            .header
+            .metadata
+            .insert("pbc".into(), serde_json::json!([false, false, false]));
         db.append_trajectory_frames(1, &frames, "t").unwrap();
         let a = db.collect_h5md(1).unwrap();
         assert_eq!(
             a.boundary,
-            [
-                "none".to_string(),
-                "none".to_string(),
-                "none".to_string()
-            ]
+            ["none".to_string(), "none".to_string(), "none".to_string()]
         );
     }
 
@@ -385,7 +392,11 @@ mod tests {
         );
         db.append_trajectory_frames(1, &frames, "t").unwrap();
         let a = db.collect_h5md(1).unwrap();
-        assert!((a.times[0] - 0.0125).abs() < 1e-12, "12.5 fs -> ps, got {}", a.times[0]);
+        assert!(
+            (a.times[0] - 0.0125).abs() < 1e-12,
+            "12.5 fs -> ps, got {}",
+            a.times[0]
+        );
         assert_eq!(a.time_unit, "ps");
     }
 
@@ -427,7 +438,11 @@ mod tests {
         );
         db.append_trajectory_frames(1, &frames, "t").unwrap();
         let a = db.collect_h5md(1).unwrap();
-        assert!((a.times[0] - 2000.0).abs() < 1e-9, "2 ns -> ps, got {}", a.times[0]);
+        assert!(
+            (a.times[0] - 2000.0).abs() < 1e-9,
+            "2 ns -> ps, got {}",
+            a.times[0]
+        );
         assert_eq!(a.time_unit, "ps");
     }
 
@@ -535,11 +550,8 @@ mod tests {
         );
         db.append_trajectory_frames(1, &frames, "t").unwrap();
         let before = db.collect_h5md(1).unwrap();
-        db.set_trajectory_units(
-            1,
-            serde_json::json!({"length":"nm","energy":"eV"}),
-        )
-        .unwrap();
+        db.set_trajectory_units(1, serde_json::json!({"length":"nm","energy":"eV"}))
+            .unwrap();
         let after = db.collect_h5md(1).unwrap();
         assert!((before.edges[0] - box0).abs() < 1e-9);
         assert!((after.edges[0] - box0).abs() < 1e-9);
@@ -551,6 +563,63 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(u["length"], "nm");
+    }
+
+    #[test]
+    fn collect_h5md_rejects_changing_species_z() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_multi_cuh2.con")).unwrap();
+        let mut frames = Vec::new();
+        for item in readcon_core::iterators::ConFrameIterator::new(&text) {
+            frames.push(item.unwrap());
+        }
+        assert!(frames.len() >= 2);
+        assert!(!frames[1].atom_data.is_empty());
+        frames[1].atom_data[0].symbol = std::sync::Arc::from("Au");
+        db.append_trajectory_frames(1, &frames, "t").unwrap();
+        let err = db.collect_h5md(1).unwrap_err();
+        assert!(err.to_string().contains("fixed species Z"), "{err}");
+    }
+
+    #[test]
+    fn collect_h5md_after_cook_set_units_keeps_dest_vel() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.convel"))
+            .unwrap();
+        db.cook_frame(crate::keys::FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        })
+        .unwrap();
+        let before = db.collect_h5md(1).unwrap();
+        db.set_trajectory_units(1, serde_json::json!({"length": "nm", "energy": "eV"}))
+            .unwrap();
+        let after = db.collect_h5md(1).unwrap();
+        let bv = before.velocities.expect("vel");
+        let av = after.velocities.expect("vel");
+        assert_eq!(bv.len(), av.len());
+        let native = db
+            .get_velocities(crate::keys::FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap()
+            .expect("native vel");
+        let u = db
+            .frame_units(crate::keys::FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap();
+        for (i, (b, a)) in bv.iter().zip(av.iter()).enumerate() {
+            assert!(
+                (b - a).abs() < 1e-9,
+                "dest vel[{i}]: before={b} after={a} native0={} units={u:?}",
+                native[0][0]
+            );
+        }
     }
 
     #[test]
@@ -576,7 +645,11 @@ mod tests {
         let after = db.collect_h5md(1).unwrap();
         assert!((before.edges[0] - after.edges[0]).abs() < 1e-9);
         assert_eq!(before.positions.len(), after.positions.len());
-        for (i, (b, a)) in before.positions.iter().zip(after.positions.iter()).enumerate()
+        for (i, (b, a)) in before
+            .positions
+            .iter()
+            .zip(after.positions.iter())
+            .enumerate()
         {
             assert!(
                 (b - a).abs() < 1e-9,

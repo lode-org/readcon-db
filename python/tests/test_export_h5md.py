@@ -45,6 +45,7 @@ def test_export_h5md_tn3_and_units(tmp_path):
         assert 29 in z[:]
         assert 1 in z[:]
         assert "force" not in f["particles/all"]
+        assert "velocity" not in f["particles/all"]
         assert f["particles/all/box/edges/step"].shape == (n,)
         assert f["particles/all/box"].attrs["dimension"] == 3
         _assert_fixed_ascii(f["h5md/author"].attrs, "name")
@@ -54,6 +55,18 @@ def test_export_h5md_tn3_and_units(tmp_path):
         assert _as_str(f["particles/all/position/value"].attrs["unit"]) == "Angstrom"
         assert _as_str(f["particles/all/position/time"].attrs["unit"]) == "ps"
         assert _as_str(f["particles/all/box/edges/value"].attrs["unit"]) == "Angstrom"
+
+
+def test_export_h5md_refuses_existing_dest(tmp_path):
+    db = ConCorpus(str(tmp_path / "corpus"))
+    db.append_trajectory(1, str(FIXTURE / "tiny_cuh2.con"))
+    out = tmp_path / "traj.h5"
+    db.export_h5md(1, str(out))
+    try:
+        db.export_h5md(1, str(out))
+        raise AssertionError("expected dest exists")
+    except RuntimeError as e:
+        assert "dest exists" in str(e)
 
 
 def _as_str(x):
@@ -202,6 +215,10 @@ def test_export_h5md_mdanalysis_reader_with_velocity(tmp_path):
     ts = reader.ts
     assert ts.has_velocities
     assert abs(float(ts.velocities[0, 0]) - 1.234) < 1e-3
+    with h5py.File(out, "r") as f:
+        assert f["particles/all/velocity/step"].shape == (n,)
+        assert f["particles/all/velocity/time"].shape == (n,)
+        assert _as_str(f["particles/all/velocity/time"].attrs["unit"]) == "ps"
     native = db.get_velocities(1, 0)
     assert native is not None
     assert abs(float(native[0][0]) - 0.001234) < 1e-9

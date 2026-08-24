@@ -9,6 +9,13 @@
 //! readcon-db drain <local_root> <pfs_root>
 //! readcon-db join-drained <single_dst> <drained_root>...
 //! readcon-db compact-join <sharded_root> <single_dst>
+//! readcon-db compact-split <single_src> <sharded_dst> [--shards N]
+//! readcon-db compact-export-extxyz <root> <out.xyz> [--sharded] [--symbol S]
+//! readcon-db shard-select <root> [--symbol S]
+//! readcon-db cook-frame <corpus_dir> --traj T --frame F
+//! readcon-db recook-all <corpus_dir>
+//! readcon-db delete-cooked <corpus_dir> --traj T --frame F
+//! readcon-db positions <corpus_dir> --traj T --frame F
 //! readcon-db dedup-export <corpus_dir> [filters...] -o train.xyz
 //! readcon-db reindex <corpus_dir>
 //! readcon-db hash-file <file.con>
@@ -18,7 +25,8 @@ use std::env;
 use std::process::ExitCode;
 
 use readcon_db::{
-    join_drained_roots, ConCorpus, FrameKey, Select, ShardedConCorpus, DEFAULT_N_SHARDS,
+    join_drained_roots, open_single_env_for_export, ConCorpus, FrameKey, Select, ShardedConCorpus,
+    DEFAULT_N_SHARDS,
 };
 
 fn usage() -> ExitCode {
@@ -58,9 +66,7 @@ fn usage() -> ExitCode {
 }
 
 fn parse_sym_count(s: &str) -> Result<(String, u32), Box<dyn std::error::Error>> {
-    let (sym, cnt) = s
-        .split_once(':')
-        .ok_or("expected SYM:COUNT")?;
+    let (sym, cnt) = s.split_once(':').ok_or("expected SYM:COUNT")?;
     Ok((sym.to_string(), cnt.parse()?))
 }
 
@@ -212,34 +218,94 @@ fn main() -> ExitCode {
                             i += 2;
                         }
 
-                        "--mass-min" => { mass_min = Some(args.get(i + 1).ok_or("m")?.parse()?); i += 2; }
-                        "--mass-max" => { mass_max = Some(args.get(i + 1).ok_or("m")?.parse()?); i += 2; }
-                        "--volume-min" => { vol_min = Some(args.get(i + 1).ok_or("v")?.parse()?); i += 2; }
-                        "--volume-max" => { vol_max = Some(args.get(i + 1).ok_or("v")?.parse()?); i += 2; }
+                        "--mass-min" => {
+                            mass_min = Some(args.get(i + 1).ok_or("m")?.parse()?);
+                            i += 2;
+                        }
+                        "--mass-max" => {
+                            mass_max = Some(args.get(i + 1).ok_or("m")?.parse()?);
+                            i += 2;
+                        }
+                        "--volume-min" => {
+                            vol_min = Some(args.get(i + 1).ok_or("v")?.parse()?);
+                            i += 2;
+                        }
+                        "--volume-max" => {
+                            vol_max = Some(args.get(i + 1).ok_or("v")?.parse()?);
+                            i += 2;
+                        }
                         "--pbc" => {
                             let s = args.get(i + 1).ok_or("x,y,z")?;
                             let parts: Vec<_> = s.split(',').collect();
-                            if parts.len() != 3 { return Err("pbc needs X,Y,Z as 0/1 or true/false".into()); }
+                            if parts.len() != 3 {
+                                return Err("pbc needs X,Y,Z as 0/1 or true/false".into());
+                            }
                             let parse_b = |x: &str| -> Result<bool, Box<dyn std::error::Error>> {
-                                Ok(matches!(x.trim().to_ascii_lowercase().as_str(), "1" | "true" | "t" | "yes"))
+                                Ok(matches!(
+                                    x.trim().to_ascii_lowercase().as_str(),
+                                    "1" | "true" | "t" | "yes"
+                                ))
                             };
-                            pbc = Some([parse_b(parts[0])?, parse_b(parts[1])?, parse_b(parts[2])?]);
+                            pbc =
+                                Some([parse_b(parts[0])?, parse_b(parts[1])?, parse_b(parts[2])?]);
                             i += 2;
                         }
-                        "--time-min" => { time_min = Some(args.get(i + 1).ok_or("t")?.parse()?); i += 2; }
-                        "--time-max" => { time_max = Some(args.get(i + 1).ok_or("t")?.parse()?); i += 2; }
-                        "--timestep-min" => { timestep_min = Some(args.get(i + 1).ok_or("dt")?.parse()?); i += 2; }
-                        "--timestep-max" => { timestep_max = Some(args.get(i + 1).ok_or("dt")?.parse()?); i += 2; }
-                        "--frame-index-min" => { fi_min = Some(args.get(i + 1).ok_or("i")?.parse()?); i += 2; }
-                        "--frame-index-max" => { fi_max = Some(args.get(i + 1).ok_or("i")?.parse()?); i += 2; }
-                        "--neb-bead-min" => { bead_min = Some(args.get(i + 1).ok_or("n")?.parse()?); i += 2; }
-                        "--neb-bead-max" => { bead_max = Some(args.get(i + 1).ok_or("n")?.parse()?); i += 2; }
-                        "--neb-band-min" => { band_min = Some(args.get(i + 1).ok_or("b")?.parse()?); i += 2; }
-                        "--neb-band-max" => { band_max = Some(args.get(i + 1).ok_or("b")?.parse()?); i += 2; }
-                        "--charge-min" => { charge_min = Some(args.get(i + 1).ok_or("c")?.parse()?); i += 2; }
-                        "--charge-max" => { charge_max = Some(args.get(i + 1).ok_or("c")?.parse()?); i += 2; }
-                        "--magmom-min" => { mag_min = Some(args.get(i + 1).ok_or("m")?.parse()?); i += 2; }
-                        "--magmom-max" => { mag_max = Some(args.get(i + 1).ok_or("m")?.parse()?); i += 2; }
+                        "--time-min" => {
+                            time_min = Some(args.get(i + 1).ok_or("t")?.parse()?);
+                            i += 2;
+                        }
+                        "--time-max" => {
+                            time_max = Some(args.get(i + 1).ok_or("t")?.parse()?);
+                            i += 2;
+                        }
+                        "--timestep-min" => {
+                            timestep_min = Some(args.get(i + 1).ok_or("dt")?.parse()?);
+                            i += 2;
+                        }
+                        "--timestep-max" => {
+                            timestep_max = Some(args.get(i + 1).ok_or("dt")?.parse()?);
+                            i += 2;
+                        }
+                        "--frame-index-min" => {
+                            fi_min = Some(args.get(i + 1).ok_or("i")?.parse()?);
+                            i += 2;
+                        }
+                        "--frame-index-max" => {
+                            fi_max = Some(args.get(i + 1).ok_or("i")?.parse()?);
+                            i += 2;
+                        }
+                        "--neb-bead-min" => {
+                            bead_min = Some(args.get(i + 1).ok_or("n")?.parse()?);
+                            i += 2;
+                        }
+                        "--neb-bead-max" => {
+                            bead_max = Some(args.get(i + 1).ok_or("n")?.parse()?);
+                            i += 2;
+                        }
+                        "--neb-band-min" => {
+                            band_min = Some(args.get(i + 1).ok_or("b")?.parse()?);
+                            i += 2;
+                        }
+                        "--neb-band-max" => {
+                            band_max = Some(args.get(i + 1).ok_or("b")?.parse()?);
+                            i += 2;
+                        }
+                        "--charge-min" => {
+                            charge_min = Some(args.get(i + 1).ok_or("c")?.parse()?);
+                            i += 2;
+                        }
+                        "--charge-max" => {
+                            charge_max = Some(args.get(i + 1).ok_or("c")?.parse()?);
+                            i += 2;
+                        }
+                        "--magmom-min" => {
+                            mag_min = Some(args.get(i + 1).ok_or("m")?.parse()?);
+                            i += 2;
+                        }
+                        "--magmom-max" => {
+                            mag_max = Some(args.get(i + 1).ok_or("m")?.parse()?);
+                            i += 2;
+                        }
                         "--require-forces" => {
                             req_forces = true;
                             i += 1;
@@ -277,16 +343,25 @@ fn main() -> ExitCode {
                     sel = sel.fmax_range(fmin.unwrap_or(0.0), fmax.unwrap_or(f64::INFINITY));
                 }
                 if mass_min.is_some() || mass_max.is_some() {
-                    sel = sel.mass_range(mass_min.unwrap_or(f64::NEG_INFINITY), mass_max.unwrap_or(f64::INFINITY));
+                    sel = sel.mass_range(
+                        mass_min.unwrap_or(f64::NEG_INFINITY),
+                        mass_max.unwrap_or(f64::INFINITY),
+                    );
                 }
                 if vol_min.is_some() || vol_max.is_some() {
-                    sel = sel.volume_range(vol_min.unwrap_or(f64::NEG_INFINITY), vol_max.unwrap_or(f64::INFINITY));
+                    sel = sel.volume_range(
+                        vol_min.unwrap_or(f64::NEG_INFINITY),
+                        vol_max.unwrap_or(f64::INFINITY),
+                    );
                 }
                 if let Some(p) = pbc {
                     sel = sel.pbc(p);
                 }
                 if time_min.is_some() || time_max.is_some() {
-                    sel = sel.time_range(time_min.unwrap_or(f64::NEG_INFINITY), time_max.unwrap_or(f64::INFINITY));
+                    sel = sel.time_range(
+                        time_min.unwrap_or(f64::NEG_INFINITY),
+                        time_max.unwrap_or(f64::INFINITY),
+                    );
                 }
                 if timestep_min.is_some() || timestep_max.is_some() {
                     sel = sel.timestep_range(
@@ -295,10 +370,16 @@ fn main() -> ExitCode {
                     );
                 }
                 if fi_min.is_some() || fi_max.is_some() {
-                    sel = sel.frame_index_range(fi_min.unwrap_or(f64::NEG_INFINITY), fi_max.unwrap_or(f64::INFINITY));
+                    sel = sel.frame_index_range(
+                        fi_min.unwrap_or(f64::NEG_INFINITY),
+                        fi_max.unwrap_or(f64::INFINITY),
+                    );
                 }
                 if bead_min.is_some() || bead_max.is_some() {
-                    sel = sel.neb_bead_range(bead_min.unwrap_or(f64::NEG_INFINITY), bead_max.unwrap_or(f64::INFINITY));
+                    sel = sel.neb_bead_range(
+                        bead_min.unwrap_or(f64::NEG_INFINITY),
+                        bead_max.unwrap_or(f64::INFINITY),
+                    );
                 }
                 if band_min.is_some() || band_max.is_some() {
                     sel = sel.neb_band_range(
@@ -307,10 +388,16 @@ fn main() -> ExitCode {
                     );
                 }
                 if charge_min.is_some() || charge_max.is_some() {
-                    sel = sel.charge_range(charge_min.unwrap_or(f64::NEG_INFINITY), charge_max.unwrap_or(f64::INFINITY));
+                    sel = sel.charge_range(
+                        charge_min.unwrap_or(f64::NEG_INFINITY),
+                        charge_max.unwrap_or(f64::INFINITY),
+                    );
                 }
                 if mag_min.is_some() || mag_max.is_some() {
-                    sel = sel.magmom_range(mag_min.unwrap_or(f64::NEG_INFINITY), mag_max.unwrap_or(f64::INFINITY));
+                    sel = sel.magmom_range(
+                        mag_min.unwrap_or(f64::NEG_INFINITY),
+                        mag_max.unwrap_or(f64::INFINITY),
+                    );
                 }
 
                 for (sym, c) in elem_exact {
@@ -401,9 +488,10 @@ fn main() -> ExitCode {
                 for f in files {
                     // Ensure traj routes to this shard
                     let routed = ShardedConCorpus::shard_for_traj(tid, {
-                        let m: readcon_db::ShardManifest = serde_json::from_str(
-                            &std::fs::read_to_string(std::path::Path::new(&root).join("shards.json"))?,
-                        )?;
+                        let m: readcon_db::ShardManifest =
+                            serde_json::from_str(&std::fs::read_to_string(
+                                std::path::Path::new(&root).join("shards.json"),
+                            )?)?;
                         m.n_shards
                     });
                     if routed != sid {
@@ -417,9 +505,10 @@ fn main() -> ExitCode {
                     tid += 1;
                     // skip ids that don't map to this shard
                     while ShardedConCorpus::shard_for_traj(tid, {
-                        let m: readcon_db::ShardManifest = serde_json::from_str(
-                            &std::fs::read_to_string(std::path::Path::new(&root).join("shards.json"))?,
-                        )?;
+                        let m: readcon_db::ShardManifest =
+                            serde_json::from_str(&std::fs::read_to_string(
+                                std::path::Path::new(&root).join("shards.json"),
+                            )?)?;
                         m.n_shards
                     }) != sid
                     {
@@ -439,7 +528,7 @@ fn main() -> ExitCode {
                         i += 1;
                     }
                 }
-                let mut db = ShardedConCorpus::open(&root, DEFAULT_N_SHARDS)?;
+                let mut db = ShardedConCorpus::open_existing(&root)?;
                 let mut sel = Select::new();
                 if let Some(s) = symbol {
                     sel = sel.require_symbol(s);
@@ -459,11 +548,8 @@ fn main() -> ExitCode {
             }
             "join-drained" => {
                 let dst = args.first().ok_or("single_dst")?.clone();
-                let srcs: Vec<std::path::PathBuf> = args
-                    .iter()
-                    .skip(1)
-                    .map(std::path::PathBuf::from)
-                    .collect();
+                let srcs: Vec<std::path::PathBuf> =
+                    args.iter().skip(1).map(std::path::PathBuf::from).collect();
                 if srcs.is_empty() {
                     return Err("join-drained needs at least one drained root".into());
                 }
@@ -490,7 +576,7 @@ fn main() -> ExitCode {
                         i += 1;
                     }
                 }
-                let single = ConCorpus::open(&src)?;
+                let single = ConCorpus::open_readonly(&src)?;
                 let n = ShardedConCorpus::split_single_to_sharded(&single, &dst, ns)?;
                 println!("split {n} frames -> {dst} ({ns} shards, sharded-lmdb)");
             }
@@ -518,27 +604,12 @@ fn main() -> ExitCode {
                     sel = sel.require_symbol(s);
                 }
                 let n = if sharded {
-                    let joined = std::env::temp_dir().join(format!(
-                        "readcon_db_join_{}_{}",
-                        std::process::id(),
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_nanos())
-                            .unwrap_or(0)
-                    ));
-                    if joined.exists() {
-                        return Err("compact-export-extxyz: temp join dest exists".into());
-                    }
                     let mut sc2 = ShardedConCorpus::open_existing(&src)?;
-                    sc2.join_to_single_env(&joined)?;
-                    let db = ConCorpus::open(&joined)?;
-                    let keys = db.select(&sel)?;
-                    let n = db.export_extxyz(&keys, &out, "energy")?;
-                    n
+                    sc2.export_extxyz(&sel, &out, "energy")?
                 } else {
-                    let db = ConCorpus::open(&src)?;
+                    let db = open_single_env_for_export(&src)?;
                     let keys = db.select(&sel)?;
-                    db.export_extxyz(&keys, &out, "energy")?
+                    db.export_extxyz(&keys, &out, "energy")? as u32
                 };
                 println!("wrote {n} frames extxyz -> {out} (analysis export)");
             }

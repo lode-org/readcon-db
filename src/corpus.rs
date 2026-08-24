@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::export_xyz::write_frame_extxyz;
 use crate::frame_scalars::{
-    frame_cell_volume, frame_charge, frame_frame_index, frame_magmom, frame_neb_band, frame_neb_bead,
-    frame_pbc_mask, frame_time, frame_timestep, frame_total_mass,
+    frame_cell_volume, frame_charge, frame_frame_index, frame_magmom, frame_neb_band,
+    frame_neb_bead, frame_pbc_mask, frame_time, frame_timestep, frame_total_mass,
 };
 use crate::keys::{
     composition_formula, elem_count_key, elem_count_symbol_prefix, energy_bin_key, flag_key,
@@ -146,7 +146,8 @@ impl ConCorpus {
 
         if readonly {
             let rtxn = env.read_txn()?;
-            let missing = |name: &str| Error::Message(format!("readonly open: missing database {name}"));
+            let missing =
+                |name: &str| Error::Message(format!("readonly open: missing database {name}"));
             let frames = env
                 .open_database(&rtxn, Some("frames"))?
                 .ok_or_else(|| missing("frames"))?;
@@ -292,7 +293,8 @@ impl ConCorpus {
         self.env.prepare_for_closing().wait();
     }
 
-    /// Compact snapshot of `data.mdb` only. No lockfile. Dest must not exist.
+    /// Compact snapshot of `data.mdb` only. No lockfile. Creates `dest_dir`
+    /// if needed; refuses if `dest_dir/data.mdb` already exists.
     pub fn snapshot_to(&self, dest_dir: impl AsRef<Path>) -> Result<()> {
         let dest = dest_dir.as_ref();
         fs::create_dir_all(dest)?;
@@ -326,7 +328,6 @@ impl ConCorpus {
     pub fn export_frame_blob(&self, key: FrameKey) -> Result<String> {
         self.get_frame_text(key)
     }
-
 
     /// CPU-only: derive every secondary key for one frame (call **outside** write_txn).
     /// Screening scalars come from [`readcon_core::index_proj::FrameIndexProjection`].
@@ -484,7 +485,13 @@ impl ConCorpus {
     }
 
     /// Reindex path: build puts then put (derivation not under a multi-frame exclusive prepare loop).
-    fn index_frame(&self, wtxn: &mut RwTxn, fk: FrameKey, frame: &ConFrame, blob: &str) -> Result<()> {
+    fn index_frame(
+        &self,
+        wtxn: &mut RwTxn,
+        fk: FrameKey,
+        frame: &ConFrame,
+        blob: &str,
+    ) -> Result<()> {
         let puts = Self::build_index_puts(fk, frame, blob.to_owned());
         self.put_index_puts(wtxn, &puts)
     }
@@ -503,10 +510,7 @@ impl ConCorpus {
                 Some(Err(e)) => return Err(Error::Parse(e.to_string())),
                 Some(Ok(x)) => x,
             };
-            let fk = FrameKey {
-                traj_id,
-                frame_idx,
-            };
+            let fk = FrameKey { traj_id, frame_idx };
             out.push(Self::build_index_puts(fk, &frame, blob.to_owned()));
             frame_idx += 1;
         }
@@ -542,10 +546,7 @@ impl ConCorpus {
             }
             let blob = String::from_utf8(buf.into_inner())
                 .map_err(|e| Error::Message(format!("utf8: {e}")))?;
-            let fk = FrameKey {
-                traj_id,
-                frame_idx,
-            };
+            let fk = FrameKey { traj_id, frame_idx };
             out.push(Self::build_index_puts(fk, fr, blob));
             frame_idx += 1;
         }
@@ -571,14 +572,8 @@ impl ConCorpus {
         for p in prepared {
             self.put_index_puts(&mut wtxn, p)?;
         }
-        let n_frames = prepared
-            .last()
-            .map(|p| p.fk.frame_idx + 1)
-            .unwrap_or(0);
-        let meta = TrajMeta {
-            n_frames,
-            source,
-        };
+        let n_frames = prepared.last().map(|p| p.fk.frame_idx + 1).unwrap_or(0);
+        let meta = TrajMeta { n_frames, source };
         self.traj_meta
             .put(&mut wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
         wtxn.commit()?;
@@ -629,7 +624,9 @@ impl ConCorpus {
             fr.header.set_units(merged);
             frames.push(fr);
         }
-        let prepared = Self::prepare_trajectory_frames(traj_id, &frames, 0)?;
+        // Default CON writer is 6 decimals; dest Å/ps velocities are ~1e-3
+        // in CON fs and lose digits unless the rewrite keeps f64 digits.
+        let prepared = Self::prepare_trajectory_frames_precise(traj_id, &frames, 0, Some(17))?;
         let mut wtxn = self.env.write_txn()?;
         for p in &old_puts {
             self.delete_index_puts(&mut wtxn, p)?;
@@ -728,10 +725,7 @@ impl ConCorpus {
             .last()
             .map(|p| p.fk.frame_idx + 1)
             .unwrap_or(start_idx);
-        let meta = TrajMeta {
-            n_frames,
-            source,
-        };
+        let meta = TrajMeta { n_frames, source };
         self.traj_meta
             .put(&mut wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
         wtxn.commit()?;
@@ -903,11 +897,7 @@ impl ConCorpus {
         self.get_frame_text_txn(&rtxn, key)
     }
 
-    fn get_frame_text_txn(
-        &self,
-        rtxn: &heed::RoTxn<'_>,
-        key: FrameKey,
-    ) -> Result<String> {
+    fn get_frame_text_txn(&self, rtxn: &heed::RoTxn<'_>, key: FrameKey) -> Result<String> {
         let fk_b = key.to_bytes();
         match self.frames.get(rtxn, &fk_b[..])? {
             Some(s) => Ok(s.to_owned()),
@@ -935,15 +925,13 @@ impl ConCorpus {
         let mut total = 0u64;
         let mut checksum = 0u64;
         for frame_idx in 0..n_frames {
-            let key = FrameKey {
-                traj_id,
-                frame_idx,
-            };
+            let key = FrameKey { traj_id, frame_idx };
             // Owned copy — same cost class as get_frame_text, batched under one txn.
             let owned = self.get_frame_text_txn(&rtxn, key)?;
             total += owned.len() as u64;
             for (i, b) in owned.as_bytes().iter().enumerate() {
-                checksum = checksum.wrapping_add((*b as u64).wrapping_mul((i as u64).wrapping_add(1)));
+                checksum =
+                    checksum.wrapping_add((*b as u64).wrapping_mul((i as u64).wrapping_add(1)));
             }
         }
         // Prevent dead-code elimination of the fold in optimized builds used by benchmarks.
@@ -966,10 +954,7 @@ impl ConCorpus {
     pub fn get_cooked_soa_bytes(&self, key: FrameKey) -> Result<Option<Vec<u8>>> {
         let rtxn = self.env.read_txn()?;
         let fk_b = key.to_bytes();
-        Ok(self
-            .frames_soa
-            .get(&rtxn, &fk_b[..])?
-            .map(|b| b.to_vec()))
+        Ok(self.frames_soa.get(&rtxn, &fk_b[..])?.map(|b| b.to_vec()))
     }
 
     /// True if a **valid** RCSO blob is stored (decode succeeds). Missing/corrupt → false.
@@ -995,11 +980,7 @@ impl ConCorpus {
         }
         // Fallback: authoritative CON text → parse (never invent from indexes alone).
         let fr = self.get_frame(key)?;
-        Ok(fr
-            .atom_data
-            .iter()
-            .map(|a| [a.x, a.y, a.z])
-            .collect())
+        Ok(fr.atom_data.iter().map(|a| [a.x, a.y, a.z]).collect())
     }
 
     /// Prefer cooked forces when the RCSO flag block is present (**no CON parse** on hit);
@@ -1296,7 +1277,10 @@ impl ConCorpus {
             sets.push(s);
         }
 
-        let scan_ord = |db: Database<Bytes, Unit>, lo: Option<f64>, hi: Option<f64>| -> Result<BTreeSet<FrameKey>> {
+        let scan_ord = |db: Database<Bytes, Unit>,
+                        lo: Option<f64>,
+                        hi: Option<f64>|
+         -> Result<BTreeSet<FrameKey>> {
             let lo_e = lo.unwrap_or(f64::NEG_INFINITY);
             let hi_e = hi.unwrap_or(f64::INFINITY);
             let lo_bits = ordered_f64_bits(lo_e).unwrap_or(0);
@@ -1382,16 +1366,32 @@ impl ConCorpus {
             sets.push(scan_meta(META_TIME, sel.time_min, sel.time_max)?);
         }
         if sel.timestep_min.is_some() || sel.timestep_max.is_some() {
-            sets.push(scan_meta(META_TIMESTEP, sel.timestep_min, sel.timestep_max)?);
+            sets.push(scan_meta(
+                META_TIMESTEP,
+                sel.timestep_min,
+                sel.timestep_max,
+            )?);
         }
         if sel.frame_index_min.is_some() || sel.frame_index_max.is_some() {
-            sets.push(scan_meta(META_FRAME_INDEX, sel.frame_index_min, sel.frame_index_max)?);
+            sets.push(scan_meta(
+                META_FRAME_INDEX,
+                sel.frame_index_min,
+                sel.frame_index_max,
+            )?);
         }
         if sel.neb_bead_min.is_some() || sel.neb_bead_max.is_some() {
-            sets.push(scan_meta(META_NEB_BEAD, sel.neb_bead_min, sel.neb_bead_max)?);
+            sets.push(scan_meta(
+                META_NEB_BEAD,
+                sel.neb_bead_min,
+                sel.neb_bead_max,
+            )?);
         }
         if sel.neb_band_min.is_some() || sel.neb_band_max.is_some() {
-            sets.push(scan_meta(META_NEB_BAND, sel.neb_band_min, sel.neb_band_max)?);
+            sets.push(scan_meta(
+                META_NEB_BAND,
+                sel.neb_band_min,
+                sel.neb_band_max,
+            )?);
         }
         if sel.charge_min.is_some() || sel.charge_max.is_some() {
             sets.push(scan_meta(META_CHARGE, sel.charge_min, sel.charge_max)?);
@@ -1561,9 +1561,7 @@ mod tests {
         let h = db.frame_hash(k0).unwrap();
         assert_eq!(db.find_by_hash(h).unwrap(), Some(k0));
 
-        let by_hash = db
-            .select(&Select::new().exact_hash(h.to_bytes()))
-            .unwrap();
+        let by_hash = db.select(&Select::new().exact_hash(h.to_bytes())).unwrap();
         assert_eq!(by_hash, vec![k0]);
 
         let cu = db
@@ -1591,24 +1589,22 @@ mod tests {
             .unwrap()
             .expect("velocities");
         assert!((v[0][0] - 0.001234).abs() < 1e-12, "got {}", v[0][0]);
-        assert!(
-            db.get_velocities(FrameKey {
+        assert!(db
+            .get_velocities(FrameKey {
                 traj_id: 1,
                 frame_idx: 0,
             })
             .unwrap()
-            .is_some()
-        );
+            .is_some());
         db.append_trajectory_path(2, fixture("tiny_cuh2.con"))
             .unwrap();
-        assert!(
-            db.get_velocities(FrameKey {
+        assert!(db
+            .get_velocities(FrameKey {
                 traj_id: 2,
                 frame_idx: 0,
             })
             .unwrap()
-            .is_none()
-        );
+            .is_none());
     }
 
     #[test]
@@ -1708,9 +1704,7 @@ mod tests {
         let ro = ConCorpus::open_readonly(dir.path()).unwrap();
         let packed2 = ro.pack_frame(key).unwrap();
         assert_eq!(packed, packed2);
-        let batch = ro
-            .pack_frames(&[key, key])
-            .unwrap();
+        let batch = ro.pack_frames(&[key, key]).unwrap();
         let parts = crate::cooked_soa::decode_batch(&batch).unwrap();
         assert_eq!(parts.len(), 2);
         assert_eq!(parts[0], packed);
@@ -1850,9 +1844,7 @@ mod tests {
         let cu_min2 = db.select(&Select::new().element_min("Cu", 2)).unwrap();
         assert!(cu_min2.iter().any(|k| k.traj_id == 1));
 
-        let wrong = db
-            .select(&Select::new().exact_composition("Fe:1"))
-            .unwrap();
+        let wrong = db.select(&Select::new().exact_composition("Fe:1")).unwrap();
         assert!(wrong.is_empty());
 
         let fr_f = db
@@ -1915,11 +1907,7 @@ mod tests {
             .unwrap();
         assert_eq!(n2, 1);
         let mem = db
-            .select(
-                &Select::new()
-                    .trajectory(10)
-                    .exact_composition("Cu:2|H:2"),
-            )
+            .select(&Select::new().trajectory(10).exact_composition("Cu:2|H:2"))
             .unwrap();
         assert_eq!(mem.len(), 1);
 
@@ -1992,7 +1980,8 @@ mod tests {
             let db = Arc::clone(&db);
             let text = text.clone();
             handles.push(thread::spawn(move || {
-                db.append_trajectory_str(tid, &text, format!("t{tid}")).unwrap()
+                db.append_trajectory_str(tid, &text, format!("t{tid}"))
+                    .unwrap()
             }));
         }
         let mut counts = Vec::new();
@@ -2051,7 +2040,8 @@ mod tests {
         let db = ConCorpus::open(dir.path()).unwrap();
 
         // Frame A: Cu2H2 default cell from fixture path
-        db.append_trajectory_path(1, fixture("tiny_cuh2.con")).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            .unwrap();
         let fr1 = db
             .get_frame(FrameKey {
                 traj_id: 1,
@@ -2090,9 +2080,7 @@ mod tests {
         assert!(by_vol_small.iter().any(|k| k.traj_id == 1));
         assert!(!by_vol_small.iter().any(|k| k.traj_id == 2));
 
-        let pbc_match = db
-            .select(&Select::new().pbc([true, true, false]))
-            .unwrap();
+        let pbc_match = db.select(&Select::new().pbc([true, true, false])).unwrap();
         assert_eq!(pbc_match.len(), 1);
         assert_eq!(pbc_match[0].traj_id, 2);
         let pbc_miss = db.select(&Select::new().pbc([true, true, true])).unwrap();
@@ -2101,7 +2089,13 @@ mod tests {
         let fi = db
             .select(&Select::new().frame_index_range(7.0, 7.0))
             .unwrap();
-        assert_eq!(fi, vec![FrameKey { traj_id: 2, frame_idx: 0 }]);
+        assert_eq!(
+            fi,
+            vec![FrameKey {
+                traj_id: 2,
+                frame_idx: 0
+            }]
+        );
         let fi_miss = db
             .select(&Select::new().frame_index_range(99.0, 100.0))
             .unwrap();
@@ -2122,9 +2116,7 @@ mod tests {
                 frame_idx: 0
             }]
         );
-        let dt_miss = db
-            .select(&Select::new().timestep_range(9.0, 10.0))
-            .unwrap();
+        let dt_miss = db.select(&Select::new().timestep_range(9.0, 10.0)).unwrap();
         assert!(dt_miss.is_empty());
         // traj 1 has no timestep metadata → must not satisfy a finite timestep window
         assert!(!dt.iter().any(|k| k.traj_id == 1));
@@ -2177,7 +2169,8 @@ mod tests {
             traj_id: 1,
             frame_idx: 0,
         };
-        db.append_trajectory_path(1, fixture("tiny_cuh2.con")).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            .unwrap();
         // default: no cooked
         assert!(db.get_cooked_soa_bytes(key).unwrap().is_none());
         let pos_via_parse = db.get_positions(key).unwrap();
@@ -2199,10 +2192,7 @@ mod tests {
         // CON authority unchanged
         assert_eq!(db.get_frame_text(key).unwrap(), text_before);
         assert_eq!(db.frame_hash(key).unwrap().to_bytes(), h_before.to_bytes());
-        assert_eq!(
-            db.find_by_hash(h_before).unwrap(),
-            Some(key)
-        );
+        assert_eq!(db.find_by_hash(h_before).unwrap(), Some(key));
         let pos_cooked = db.get_positions(key).unwrap();
         assert_eq!(pos_cooked, cooked.positions);
 
@@ -2264,7 +2254,8 @@ mod tests {
     fn cooked_soa_recook_all() {
         let dir = tempfile::tempdir().unwrap();
         let db = ConCorpus::open(dir.path()).unwrap();
-        db.append_trajectory_path(1, fixture("tiny_cuh2.con")).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            .unwrap();
         db.append_trajectory_path(2, fixture("tiny_cuh2_forces.con"))
             .unwrap();
         let n = db.recook_all().unwrap();

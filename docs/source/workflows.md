@@ -53,7 +53,9 @@ db.export_h5md(traj_id=1, path="traj.h5")
 ```
 
 Time on the file is dest `ps`: CON `header.time()`, or `i * timestep`,
-else the frame index. Missing `units.time` is CON `fs`.
+else the frame index. Missing `units.time` is CON `fs`. Optional force
+and velocity groups are dest `kJ mol-1 Angstrom-1` and `Angstrom ps-1`.
+`readcon-db compact-join` is the single-root join (`open_existing`).
 
 ## CON-native (default)
 

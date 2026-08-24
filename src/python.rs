@@ -29,10 +29,7 @@ impl PyConCorpus {
     /// Rank 0 packs; workers call :func:`unpack_positions` on the copy.
     fn pack_frame(&self, traj_id: u64, frame_idx: u32) -> PyResult<Vec<u8>> {
         self.inner
-            .pack_frame(FrameKey {
-                traj_id,
-                frame_idx,
-            })
+            .pack_frame(FrameKey { traj_id, frame_idx })
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -40,10 +37,7 @@ impl PyConCorpus {
     fn pack_frames(&self, keys: Vec<(u64, u32)>) -> PyResult<Vec<u8>> {
         let fks: Vec<FrameKey> = keys
             .into_iter()
-            .map(|(traj_id, frame_idx)| FrameKey {
-                traj_id,
-                frame_idx,
-            })
+            .map(|(traj_id, frame_idx)| FrameKey { traj_id, frame_idx })
             .collect();
         self.inner
             .pack_frames(&fks)
@@ -72,6 +66,11 @@ impl PyConCorpus {
     /// Cooked H5MD interchange (h5py). CON text stays authority in the corpus.
     /// One `[T][N][3]` dataset per trajectory. Fixed N only.
     fn export_h5md(&self, py: Python<'_>, traj_id: u64, path: &str) -> PyResult<u32> {
+        if std::path::Path::new(path).exists() {
+            return Err(PyRuntimeError::new_err(format!(
+                "export_h5md dest exists: {path}"
+            )));
+        }
         let h5py = py
             .import("h5py")
             .map_err(|_| PyRuntimeError::new_err("export_h5md requires h5py"))?;
@@ -81,131 +80,140 @@ impl PyConCorpus {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let n_frames = a.n_frames;
         let natoms = a.natoms;
-        let file = h5py.call_method1("File", (path, "w"))?;
+        let file = h5py.call_method1("File", (path, "x"))?;
         let written = (|| -> PyResult<u32> {
-        let np = py.import("numpy")?;
-        let put = |obj: &Bound<'_, PyAny>, name: &str, data: Bound<'_, PyAny>| -> PyResult<()> {
-            let d = PyDict::new(obj.py());
-            d.set_item("data", data)?;
-            obj.call_method("create_dataset", (name,), Some(&d))?;
-            Ok(())
-        };
-        let ascii_attr = |obj: &Bound<'_, PyAny>, name: &str, val: &str, n: usize| -> PyResult<()> {
-            let dt = h5py.call_method("string_dtype", ("ascii", n), None)?;
-            let kw = PyDict::new(obj.py());
-            kw.set_item("dtype", dt)?;
-            obj.getattr("attrs")?
-                .call_method("create", (name, val), Some(&kw))?;
-            Ok(())
-        };
-        // Physical `unit` is an H5MD string (a few chars). Store it as a
-        // Python str so MDAnalysis 2.10 can index `_unit_translation`
-        // (fixed ASCII `S` dtypes come back as `bytes` and KeyError).
-        // author/creator/boundary stay fixed ASCII below.
-        let unit_attr = |obj: &Bound<'_, PyAny>, name: &str, val: &str| -> PyResult<()> {
-            obj.getattr("attrs")?.set_item(name, val)?;
-            Ok(())
-        };
-        let write_td = |parent: &Bound<'_, PyAny>, name: &str, value: Bound<'_, PyAny>, step: Bound<'_, PyAny>, time: Bound<'_, PyAny>, unit: &str, tunit: &str| -> PyResult<()> {
-            let g = parent.call_method1("create_group", (name,))?;
-            put(&g, "value", value)?;
-            put(&g, "step", step)?;
-            put(&g, "time", time)?;
-            let val = g.call_method1("__getitem__", ("value",))?;
-            unit_attr(&val, "unit", unit)?;
-            let tm = g.call_method1("__getitem__", ("time",))?;
-            unit_attr(&tm, "unit", tunit)?;
-            Ok(())
-        };
-        let h5md = file.call_method1("create_group", ("h5md",))?;
-        let h5md_attrs = h5md.getattr("attrs")?;
-        h5md_attrs.set_item("version", (1i32, 1i32))?;
-        let author = h5md.call_method1("create_group", ("author",))?;
-        ascii_attr(&author, "name", "readcon-db", 32)?;
-        let creator = h5md.call_method1("create_group", ("creator",))?;
-        ascii_attr(&creator, "name", "readcon-db", 32)?;
-        ascii_attr(&creator, "version", env!("CARGO_PKG_VERSION"), 16)?;
-        let particles = file.call_method1("create_group", ("particles",))?;
-        let all = particles.call_method1("create_group", ("all",))?;
-        let boxg = all.call_method1("create_group", ("box",))?;
-        let attrs = boxg.getattr("attrs")?;
-        attrs.set_item("dimension", 3)?;
-        let dt8 = h5py.call_method("string_dtype", ("ascii", 8), None)?;
-        let bnd_kw = PyDict::new(py);
-        bnd_kw.set_item("dtype", dt8)?;
-        let bnd = np.call_method(
-            "array",
-            ((
-                a.boundary[0].as_str(),
-                a.boundary[1].as_str(),
-                a.boundary[2].as_str(),
-            ),),
-            Some(&bnd_kw),
-        )?;
-        attrs.call_method("create", ("boundary", bnd), None)?;
-        let dtype_kw = PyDict::new(py);
-        dtype_kw.set_item("dtype", "float64")?;
-        let i64_kw = PyDict::new(py);
-        i64_kw.set_item("dtype", "int64")?;
-        let i32_kw = PyDict::new(py);
-        i32_kw.set_item("dtype", "int32")?;
-        let step = np.call_method("arange", (n_frames as i64,), Some(&i64_kw))?;
-        let time = np.call_method("asarray", (a.times,), Some(&dtype_kw))?;
-        let pos_arr = np
-            .call_method("asarray", (a.positions,), Some(&dtype_kw))?
-            .call_method1("reshape", ((n_frames, natoms, 3),))?;
-        write_td(
-            &all,
-            "position",
-            pos_arr,
-            step.clone(),
-            time.clone(),
-            a.length_unit.as_str(),
-            a.time_unit.as_str(),
-        )?;
-        let edges_arr = np
-            .call_method("asarray", (a.edges,), Some(&dtype_kw))?
-            .call_method1("reshape", ((n_frames, 3, 3),))?;
-        write_td(
-            &boxg,
-            "edges",
-            edges_arr,
-            step.clone(),
-            time.clone(),
-            a.length_unit.as_str(),
-            a.time_unit.as_str(),
-        )?;
-        if let Some(fbuf) = a.forces {
-            let f_arr = np
-                .call_method("asarray", (fbuf,), Some(&dtype_kw))?
+            let np = py.import("numpy")?;
+            let put =
+                |obj: &Bound<'_, PyAny>, name: &str, data: Bound<'_, PyAny>| -> PyResult<()> {
+                    let d = PyDict::new(obj.py());
+                    d.set_item("data", data)?;
+                    obj.call_method("create_dataset", (name,), Some(&d))?;
+                    Ok(())
+                };
+            let ascii_attr =
+                |obj: &Bound<'_, PyAny>, name: &str, val: &str, n: usize| -> PyResult<()> {
+                    let dt = h5py.call_method("string_dtype", ("ascii", n), None)?;
+                    let kw = PyDict::new(obj.py());
+                    kw.set_item("dtype", dt)?;
+                    obj.getattr("attrs")?
+                        .call_method("create", (name, val), Some(&kw))?;
+                    Ok(())
+                };
+            // Physical `unit` is an H5MD string (a few chars). Store it as a
+            // Python str so MDAnalysis 2.10 can index `_unit_translation`
+            // (fixed ASCII `S` dtypes come back as `bytes` and KeyError).
+            // author/creator/boundary stay fixed ASCII below.
+            let unit_attr = |obj: &Bound<'_, PyAny>, name: &str, val: &str| -> PyResult<()> {
+                obj.getattr("attrs")?.set_item(name, val)?;
+                Ok(())
+            };
+            let write_td = |parent: &Bound<'_, PyAny>,
+                            name: &str,
+                            value: Bound<'_, PyAny>,
+                            step: Bound<'_, PyAny>,
+                            time: Bound<'_, PyAny>,
+                            unit: &str,
+                            tunit: &str|
+             -> PyResult<()> {
+                let g = parent.call_method1("create_group", (name,))?;
+                put(&g, "value", value)?;
+                put(&g, "step", step)?;
+                put(&g, "time", time)?;
+                let val = g.call_method1("__getitem__", ("value",))?;
+                unit_attr(&val, "unit", unit)?;
+                let tm = g.call_method1("__getitem__", ("time",))?;
+                unit_attr(&tm, "unit", tunit)?;
+                Ok(())
+            };
+            let h5md = file.call_method1("create_group", ("h5md",))?;
+            let h5md_attrs = h5md.getattr("attrs")?;
+            h5md_attrs.set_item("version", (1i32, 1i32))?;
+            let author = h5md.call_method1("create_group", ("author",))?;
+            ascii_attr(&author, "name", "readcon-db", 32)?;
+            let creator = h5md.call_method1("create_group", ("creator",))?;
+            ascii_attr(&creator, "name", "readcon-db", 32)?;
+            ascii_attr(&creator, "version", env!("CARGO_PKG_VERSION"), 16)?;
+            let particles = file.call_method1("create_group", ("particles",))?;
+            let all = particles.call_method1("create_group", ("all",))?;
+            let boxg = all.call_method1("create_group", ("box",))?;
+            let attrs = boxg.getattr("attrs")?;
+            attrs.set_item("dimension", 3)?;
+            let dt8 = h5py.call_method("string_dtype", ("ascii", 8), None)?;
+            let bnd_kw = PyDict::new(py);
+            bnd_kw.set_item("dtype", dt8)?;
+            let bnd = np.call_method(
+                "array",
+                ((
+                    a.boundary[0].as_str(),
+                    a.boundary[1].as_str(),
+                    a.boundary[2].as_str(),
+                ),),
+                Some(&bnd_kw),
+            )?;
+            attrs.call_method("create", ("boundary", bnd), None)?;
+            let dtype_kw = PyDict::new(py);
+            dtype_kw.set_item("dtype", "float64")?;
+            let i64_kw = PyDict::new(py);
+            i64_kw.set_item("dtype", "int64")?;
+            let i32_kw = PyDict::new(py);
+            i32_kw.set_item("dtype", "int32")?;
+            let step = np.call_method("arange", (n_frames as i64,), Some(&i64_kw))?;
+            let time = np.call_method("asarray", (a.times,), Some(&dtype_kw))?;
+            let pos_arr = np
+                .call_method("asarray", (a.positions,), Some(&dtype_kw))?
                 .call_method1("reshape", ((n_frames, natoms, 3),))?;
             write_td(
                 &all,
-                "force",
-                f_arr,
+                "position",
+                pos_arr,
                 step.clone(),
                 time.clone(),
-                a.force_unit.as_str(),
+                a.length_unit.as_str(),
                 a.time_unit.as_str(),
             )?;
-        }
-        if let Some(vbuf) = a.velocities {
-            let v_arr = np
-                .call_method("asarray", (vbuf,), Some(&dtype_kw))?
-                .call_method1("reshape", ((n_frames, natoms, 3),))?;
+            let edges_arr = np
+                .call_method("asarray", (a.edges,), Some(&dtype_kw))?
+                .call_method1("reshape", ((n_frames, 3, 3),))?;
             write_td(
-                &all,
-                "velocity",
-                v_arr,
-                step,
-                time,
-                a.velocity_unit.as_str(),
+                &boxg,
+                "edges",
+                edges_arr,
+                step.clone(),
+                time.clone(),
+                a.length_unit.as_str(),
                 a.time_unit.as_str(),
             )?;
-        }
-        let spec_arr = np.call_method("asarray", (a.species_z,), Some(&i32_kw))?;
-        put(&all, "species", spec_arr)?;
-        Ok(n_frames as u32)
+            if let Some(fbuf) = a.forces {
+                let f_arr = np
+                    .call_method("asarray", (fbuf,), Some(&dtype_kw))?
+                    .call_method1("reshape", ((n_frames, natoms, 3),))?;
+                write_td(
+                    &all,
+                    "force",
+                    f_arr,
+                    step.clone(),
+                    time.clone(),
+                    a.force_unit.as_str(),
+                    a.time_unit.as_str(),
+                )?;
+            }
+            if let Some(vbuf) = a.velocities {
+                let v_arr = np
+                    .call_method("asarray", (vbuf,), Some(&dtype_kw))?
+                    .call_method1("reshape", ((n_frames, natoms, 3),))?;
+                write_td(
+                    &all,
+                    "velocity",
+                    v_arr,
+                    step,
+                    time,
+                    a.velocity_unit.as_str(),
+                    a.time_unit.as_str(),
+                )?;
+            }
+            let spec_arr = np.call_method("asarray", (a.species_z,), Some(&i32_kw))?;
+            put(&all, "species", spec_arr)?;
+            Ok(n_frames as u32)
         })();
         let _ = file.call_method0("close");
         written
@@ -247,10 +255,7 @@ impl PyConCorpus {
     fn get_units(&self, traj_id: u64, frame_idx: u32) -> PyResult<Option<String>> {
         let v = self
             .inner
-            .frame_units(FrameKey {
-                traj_id,
-                frame_idx,
-            })
+            .frame_units(FrameKey { traj_id, frame_idx })
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(v.map(|x| x.to_string()))
     }
@@ -347,16 +352,28 @@ impl PyConCorpus {
             sel = sel.fmax_range(fmax_min.unwrap_or(0.0), fmax_max.unwrap_or(f64::INFINITY));
         }
         if mass_min.is_some() || mass_max.is_some() {
-            sel = sel.mass_range(mass_min.unwrap_or(f64::NEG_INFINITY), mass_max.unwrap_or(f64::INFINITY));
+            sel = sel.mass_range(
+                mass_min.unwrap_or(f64::NEG_INFINITY),
+                mass_max.unwrap_or(f64::INFINITY),
+            );
         }
         if volume_min.is_some() || volume_max.is_some() {
-            sel = sel.volume_range(volume_min.unwrap_or(f64::NEG_INFINITY), volume_max.unwrap_or(f64::INFINITY));
+            sel = sel.volume_range(
+                volume_min.unwrap_or(f64::NEG_INFINITY),
+                volume_max.unwrap_or(f64::INFINITY),
+            );
         }
         if frame_index_min.is_some() || frame_index_max.is_some() {
-            sel = sel.frame_index_range(frame_index_min.unwrap_or(f64::NEG_INFINITY), frame_index_max.unwrap_or(f64::INFINITY));
+            sel = sel.frame_index_range(
+                frame_index_min.unwrap_or(f64::NEG_INFINITY),
+                frame_index_max.unwrap_or(f64::INFINITY),
+            );
         }
         if charge_min.is_some() || charge_max.is_some() {
-            sel = sel.charge_range(charge_min.unwrap_or(f64::NEG_INFINITY), charge_max.unwrap_or(f64::INFINITY));
+            sel = sel.charge_range(
+                charge_min.unwrap_or(f64::NEG_INFINITY),
+                charge_max.unwrap_or(f64::INFINITY),
+            );
         }
         if let Some(pairs) = element_exact {
             for (sym, c) in pairs {
@@ -387,10 +404,7 @@ impl PyConCorpus {
             .inner
             .select(&sel)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        Ok(keys
-            .into_iter()
-            .map(|k| (k.traj_id, k.frame_idx))
-            .collect())
+        Ok(keys.into_iter().map(|k| (k.traj_id, k.frame_idx)).collect())
     }
 
     fn reindex(&self) -> PyResult<u32> {
@@ -401,38 +415,26 @@ impl PyConCorpus {
 
     fn frame_formula(&self, traj_id: u64, frame_idx: u32) -> PyResult<String> {
         self.inner
-            .frame_formula(FrameKey {
-                traj_id,
-                frame_idx,
-            })
+            .frame_formula(FrameKey { traj_id, frame_idx })
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Opt-in RCSO cook; CON text in `frames` remains authority.
     fn cook_frame(&self, traj_id: u64, frame_idx: u32) -> PyResult<usize> {
         self.inner
-            .cook_frame(FrameKey {
-                traj_id,
-                frame_idx,
-            })
+            .cook_frame(FrameKey { traj_id, frame_idx })
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     fn delete_cooked_soa(&self, traj_id: u64, frame_idx: u32) -> PyResult<()> {
         self.inner
-            .delete_cooked_soa(FrameKey {
-                traj_id,
-                frame_idx,
-            })
+            .delete_cooked_soa(FrameKey { traj_id, frame_idx })
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     fn has_valid_cooked_soa(&self, traj_id: u64, frame_idx: u32) -> PyResult<bool> {
         self.inner
-            .has_valid_cooked_soa(FrameKey {
-                traj_id,
-                frame_idx,
-            })
+            .has_valid_cooked_soa(FrameKey { traj_id, frame_idx })
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -446,10 +448,7 @@ impl PyConCorpus {
     fn get_positions(&self, traj_id: u64, frame_idx: u32) -> PyResult<Vec<(f64, f64, f64)>> {
         let v = self
             .inner
-            .get_positions(FrameKey {
-                traj_id,
-                frame_idx,
-            })
+            .get_positions(FrameKey { traj_id, frame_idx })
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(v.into_iter().map(|r| (r[0], r[1], r[2])).collect())
     }
@@ -457,21 +456,19 @@ impl PyConCorpus {
     fn get_forces(&self, traj_id: u64, frame_idx: u32) -> PyResult<Option<Vec<(f64, f64, f64)>>> {
         let v = self
             .inner
-            .get_forces(FrameKey {
-                traj_id,
-                frame_idx,
-            })
+            .get_forces(FrameKey { traj_id, frame_idx })
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(v.map(|rows| rows.into_iter().map(|r| (r[0], r[1], r[2])).collect()))
     }
 
-    fn get_velocities(&self, traj_id: u64, frame_idx: u32) -> PyResult<Option<Vec<(f64, f64, f64)>>> {
+    fn get_velocities(
+        &self,
+        traj_id: u64,
+        frame_idx: u32,
+    ) -> PyResult<Option<Vec<(f64, f64, f64)>>> {
         let v = self
             .inner
-            .get_velocities(FrameKey {
-                traj_id,
-                frame_idx,
-            })
+            .get_velocities(FrameKey { traj_id, frame_idx })
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(v.map(|rows| rows.into_iter().map(|r| (r[0], r[1], r[2])).collect()))
     }
@@ -479,10 +476,7 @@ impl PyConCorpus {
     fn frame_hash(&self, traj_id: u64, frame_idx: u32) -> PyResult<Vec<u8>> {
         let h = self
             .inner
-            .frame_hash(FrameKey {
-                traj_id,
-                frame_idx,
-            })
+            .frame_hash(FrameKey { traj_id, frame_idx })
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(h.to_bytes().to_vec())
     }
@@ -503,10 +497,7 @@ impl PyConCorpus {
 
     fn get_frame_text(&self, traj_id: u64, frame_idx: u32) -> PyResult<String> {
         self.inner
-            .get_frame_text(FrameKey {
-                traj_id,
-                frame_idx,
-            })
+            .get_frame_text(FrameKey { traj_id, frame_idx })
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -604,10 +595,7 @@ fn bcast_packed_frame(
     let rank: i32 = comm.call_method0("Get_rank")?.extract()?;
     let payload: (Option<String>, Option<Vec<u8>>) = if rank == root {
         match ConCorpus::open_readonly(corpus_dir) {
-            Ok(db) => match db.pack_frame(FrameKey {
-                traj_id,
-                frame_idx,
-            }) {
+            Ok(db) => match db.pack_frame(FrameKey { traj_id, frame_idx }) {
                 Ok(bytes) => {
                     db.close();
                     (None, Some(bytes))
@@ -645,10 +633,7 @@ fn bcast_packed_frames(
             Ok(db) => {
                 let fks: Vec<FrameKey> = keys
                     .into_iter()
-                    .map(|(traj_id, frame_idx)| FrameKey {
-                        traj_id,
-                        frame_idx,
-                    })
+                    .map(|(traj_id, frame_idx)| FrameKey { traj_id, frame_idx })
                     .collect();
                 match db.pack_frames(&fks) {
                     Ok(bytes) => {

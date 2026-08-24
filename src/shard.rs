@@ -43,7 +43,7 @@ impl ShardedConCorpus {
         let root = root.as_ref();
         if !root.join(MANIFEST).is_file() {
             return Err(Error::Message(format!(
-                "join-drained: missing shards.json: {}",
+                "missing shards.json: {}",
                 root.display()
             )));
         }
@@ -93,8 +93,7 @@ impl ShardedConCorpus {
     }
 
     fn shard_path(&self, shard_id: u32) -> PathBuf {
-        self.root
-            .join(format!("shard_{shard_id:04}"))
+        self.root.join(format!("shard_{shard_id:04}"))
     }
 
     /// Open one shard env (creates dir). Safe for many processes to open **different** shards.
@@ -114,7 +113,10 @@ impl ShardedConCorpus {
     }
 
     /// Open only the shard for `traj_id` (HPC rank typically owns one shard).
-    pub fn open_shard_for_traj(root: impl AsRef<Path>, traj_id: TrajId) -> Result<(u32, ConCorpus)> {
+    pub fn open_shard_for_traj(
+        root: impl AsRef<Path>,
+        traj_id: TrajId,
+    ) -> Result<(u32, ConCorpus)> {
         let root = root.as_ref();
         let manifest_path = root.join(MANIFEST);
         let n_shards = if manifest_path.is_file() {
@@ -191,10 +193,13 @@ impl ShardedConCorpus {
         c.append_trajectory_frames(traj_id, frames, source)
     }
 
-    /// Fan-out select across all shards (read-only; opens missing shards).
+    /// Fan-out select across shards that already exist (does not mint empty envs).
     pub fn select(&mut self, sel: &Select) -> Result<Vec<FrameKey>> {
         let mut out = Vec::new();
         for sid in 0..self.n_shards {
+            if !self.shard_path(sid).is_dir() {
+                continue;
+            }
             let c = self.shard_mut(sid)?;
             out.extend(c.select(sel)?);
         }
@@ -207,6 +212,11 @@ impl ShardedConCorpus {
 
     pub fn get_frame_text(&mut self, key: FrameKey) -> Result<String> {
         let sid = Self::shard_for_traj(key.traj_id, self.n_shards);
+        if !self.shard_path(sid).is_dir() {
+            return Err(Error::Message(format!(
+                "shard_{sid:04} is not a corpus directory"
+            )));
+        }
         self.shard_mut(sid)?.get_frame_text(key)
     }
 
@@ -375,10 +385,7 @@ mod tests {
         let missing = dir.path().join("nope");
         let dest = dir.path().join("out");
         let err = join_drained_roots(&[missing], &dest).unwrap_err();
-        assert!(
-            err.to_string().contains("missing shards.json"),
-            "{err}"
-        );
+        assert!(err.to_string().contains("missing shards.json"), "{err}");
         assert!(!dest.exists());
     }
 
@@ -451,7 +458,10 @@ mod tests {
         let sharded_keys = fan.select(&Select::new().require_symbol("Cu")).unwrap();
         let base_keys = single.select(&Select::new().require_symbol("Cu")).unwrap();
         assert_eq!(sharded_keys.len(), base_keys.len());
-        let mut sk: Vec<_> = sharded_keys.iter().map(|k| (k.traj_id, k.frame_idx)).collect();
+        let mut sk: Vec<_> = sharded_keys
+            .iter()
+            .map(|k| (k.traj_id, k.frame_idx))
+            .collect();
         let mut bk: Vec<_> = base_keys.iter().map(|k| (k.traj_id, k.frame_idx)).collect();
         sk.sort_unstable();
         bk.sort_unstable();
@@ -504,9 +514,58 @@ impl ShardedConCorpus {
                 dst.display()
             )));
         }
+        let mut preview = std::collections::BTreeSet::new();
+        for sid in 0..self.n_shards {
+            if !self.shard_path(sid).is_dir() {
+                continue;
+            }
+            for fk in self.shard_mut(sid)?.list_frame_keys()? {
+                if !preview.insert(fk.traj_id) {
+                    return Err(Error::Message(format!(
+                        "traj_id {} appears in multiple shards or join sources",
+                        fk.traj_id
+                    )));
+                }
+            }
+        }
         let out = ConCorpus::open(dst)?;
         let mut seen_traj = std::collections::BTreeSet::new();
         append_sharded_into(self, &out, &mut seen_traj)
+    }
+
+    /// Join into a temp single-env, export extxyz, then remove the temp dest.
+    pub fn export_extxyz(
+        &mut self,
+        sel: &Select,
+        out: impl AsRef<Path>,
+        energy_key: &str,
+    ) -> Result<u32> {
+        let joined = std::env::temp_dir().join(format!(
+            "readcon_db_join_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        if joined.exists() {
+            return Err(Error::Message(
+                "export_extxyz: temp join dest exists".into(),
+            ));
+        }
+        struct RemoveOnDrop(PathBuf);
+        impl Drop for RemoveOnDrop {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _guard = RemoveOnDrop(joined.clone());
+        self.join_to_single_env(&joined)?;
+        let db = ConCorpus::open_readonly(&joined)?;
+        let keys = db.select(sel)?;
+        let n = db.export_extxyz(&keys, out, energy_key)?;
+        db.close();
+        Ok(n as u32)
     }
 
     /// **Split:** read a **single-env** corpus and write a new sharded root at `dst_root`
@@ -641,6 +700,29 @@ pub fn join_corpus_dirs(sources: &[PathBuf], dst: impl AsRef<Path>) -> Result<u3
             dst.display()
         )));
     }
+    for src in sources {
+        if !src.join("data.mdb").is_file() {
+            return Err(Error::Message(format!(
+                "join: missing data.mdb: {}",
+                src.display()
+            )));
+        }
+    }
+    {
+        let mut preview = std::collections::BTreeSet::new();
+        for src in sources {
+            let c = ConCorpus::open_readonly(src)?;
+            for fk in c.list_frame_keys()? {
+                if !preview.insert(fk.traj_id) {
+                    return Err(Error::Message(format!(
+                        "duplicate traj_id {} across join sources",
+                        fk.traj_id
+                    )));
+                }
+            }
+            c.close();
+        }
+    }
     let out = ConCorpus::open(dst)?;
     let mut n = 0u32;
     let mut seen = std::collections::BTreeSet::new();
@@ -669,9 +751,22 @@ pub fn join_corpus_dirs(sources: &[PathBuf], dst: impl AsRef<Path>) -> Result<u3
     Ok(n)
 }
 
+/// Open a single-env corpus for analysis export. Refuses a sharded root so
+/// `ConCorpus::open` cannot mint `data.mdb` next to `shards.json`.
+pub fn open_single_env_for_export(src: impl AsRef<Path>) -> Result<ConCorpus> {
+    let src = src.as_ref();
+    if src.join(MANIFEST).is_file() {
+        return Err(Error::Message(
+            "compact-export-extxyz: sharded root needs --sharded".into(),
+        ));
+    }
+    ConCorpus::open_readonly(src)
+}
+
 #[cfg(test)]
 mod compaction_tests {
     use super::*;
+    use crate::keys::FrameKey;
     use crate::select::Select;
 
     fn fixture(name: &str) -> PathBuf {
@@ -741,11 +836,7 @@ mod compaction_tests {
         assert_eq!(ShardedConCorpus::drain_to(&node_b, &dest_b).unwrap(), 1);
         assert!(ShardedConCorpus::drain_to(&node_a, &dest_a).is_err());
         let joined = dir.path().join("joined");
-        let n = join_drained_roots(
-            &[dest_a.clone(), dest_b.clone()],
-            &joined,
-        )
-        .unwrap();
+        let n = join_drained_roots(&[dest_a.clone(), dest_b.clone()], &joined).unwrap();
         assert!(n >= 2);
         let db = ConCorpus::open(&joined).unwrap();
         let keys = db.select(&Select::new()).unwrap();
@@ -782,5 +873,199 @@ mod compaction_tests {
         assert_eq!(CorpusExportKind::ShardedLmdb.as_str(), "sharded-lmdb");
         assert_eq!(CorpusExportKind::SingleEnvLmdb.as_str(), "single-env-lmdb");
         assert_eq!(CorpusExportKind::ExtXyz.as_str(), "extxyz");
+    }
+
+    #[test]
+    fn select_skips_missing_shard_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sharded");
+        let mut s = ShardedConCorpus::open(&root, 8).unwrap();
+        s.append_trajectory_path(0, fixture("tiny_cuh2.con"))
+            .unwrap();
+        drop(s);
+        let mut s = ShardedConCorpus::open_existing(&root).unwrap();
+        let keys = s.select(&Select::new()).unwrap();
+        assert_eq!(keys.len(), 1);
+        let present: Vec<u32> = (0..8)
+            .filter(|&i| root.join(format!("shard_{i:04}")).is_dir())
+            .collect();
+        assert_eq!(present, vec![0]);
+    }
+
+    #[test]
+    fn get_frame_text_missing_shard_does_not_mint() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sharded");
+        let mut s = ShardedConCorpus::open(&root, 4).unwrap();
+        let err = s
+            .get_frame_text(FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("is not a corpus directory"),
+            "{err}"
+        );
+        assert!(!root.join("shard_0001").exists());
+    }
+
+    #[test]
+    fn join_to_single_env_duplicate_traj_does_not_create_dest() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sharded");
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let mut s = ShardedConCorpus::open(&root, 2).unwrap();
+        s.shard_mut(0)
+            .unwrap()
+            .append_trajectory_str(0, &text, "a")
+            .unwrap();
+        s.shard_mut(1)
+            .unwrap()
+            .append_trajectory_str(0, &text, "b")
+            .unwrap();
+        let dest = dir.path().join("out");
+        let err = s.join_to_single_env(&dest).unwrap_err();
+        assert!(err.to_string().contains("traj_id"), "{err}");
+        assert!(!dest.exists());
+    }
+
+    #[test]
+    fn join_corpus_dirs_duplicate_does_not_create_dest() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let a = dir.path().join("a");
+        let b = dir.path().join("b");
+        ConCorpus::open(&a)
+            .unwrap()
+            .append_trajectory_str(1, &text, "a")
+            .unwrap();
+        ConCorpus::open(&b)
+            .unwrap()
+            .append_trajectory_str(1, &text, "b")
+            .unwrap();
+        let dest = dir.path().join("out");
+        let err = join_corpus_dirs(&[a, b], &dest).unwrap_err();
+        assert!(err.to_string().contains("duplicate traj_id"), "{err}");
+        assert!(!dest.exists());
+    }
+
+    #[test]
+    fn join_corpus_dirs_missing_mdb_does_not_create_dest() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope");
+        std::fs::create_dir_all(&missing).unwrap();
+        let dest = dir.path().join("out");
+        let err = join_corpus_dirs(&[missing], &dest).unwrap_err();
+        assert!(err.to_string().contains("missing data.mdb"), "{err}");
+        assert!(!dest.exists());
+    }
+
+    #[test]
+    fn open_single_env_for_export_refuses_sharded_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sharded");
+        ShardedConCorpus::open(&root, 2).unwrap();
+        assert!(!root.join("data.mdb").exists());
+        match open_single_env_for_export(&root) {
+            Ok(_) => panic!("expected sharded-root refuse"),
+            Err(err) => assert!(err.to_string().contains("--sharded"), "{err}"),
+        }
+        assert!(!root.join("data.mdb").exists());
+    }
+
+    #[test]
+    fn export_extxyz_removes_temp_join() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sharded");
+        let mut s = ShardedConCorpus::open(&root, 2).unwrap();
+        s.append_trajectory_path(0, fixture("tiny_cuh2.con"))
+            .unwrap();
+        let out = dir.path().join("out.xyz");
+        let n = s.export_extxyz(&Select::new(), &out, "energy").unwrap();
+        assert!(n >= 1);
+        assert!(out.is_file());
+        let prefix = format!("readcon_db_join_{}_", std::process::id());
+        let leftovers: Vec<_> = std::env::temp_dir()
+            .read_dir()
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
+    #[test]
+    fn open_existing_error_is_missing_shards_json() {
+        let dir = tempfile::tempdir().unwrap();
+        match ShardedConCorpus::open_existing(dir.path().join("nope")) {
+            Ok(_) => panic!("expected missing shards.json"),
+            Err(err) => {
+                assert!(err.to_string().starts_with("missing shards.json:"), "{err}");
+                assert!(!err.to_string().contains("join-drained"));
+            }
+        }
+    }
+
+    #[test]
+    fn cli_shard_select_missing_root_does_not_mint() {
+        use std::process::Command;
+        let Some(bin) = option_env!("CARGO_BIN_EXE_readcon-db") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("nope");
+        let st = Command::new(bin)
+            .args(["shard-select", root.to_str().unwrap()])
+            .status()
+            .unwrap();
+        assert!(!st.success());
+        assert!(!root.join("shards.json").exists());
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn cli_compact_split_missing_src_does_not_mint() {
+        use std::process::Command;
+        let Some(bin) = option_env!("CARGO_BIN_EXE_readcon-db") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("missing_src");
+        let dest = dir.path().join("split_out");
+        let st = Command::new(bin)
+            .args([
+                "compact-split",
+                src.to_str().unwrap(),
+                dest.to_str().unwrap(),
+            ])
+            .status()
+            .unwrap();
+        assert!(!st.success());
+        assert!(!src.exists());
+        assert!(!dest.exists());
+    }
+
+    #[test]
+    fn cli_compact_export_refuses_sharded_without_flag() {
+        use std::process::Command;
+        let Some(bin) = option_env!("CARGO_BIN_EXE_readcon-db") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sharded");
+        ShardedConCorpus::open(&root, 2).unwrap();
+        let out = dir.path().join("out.xyz");
+        let st = Command::new(bin)
+            .args([
+                "compact-export-extxyz",
+                root.to_str().unwrap(),
+                out.to_str().unwrap(),
+            ])
+            .status()
+            .unwrap();
+        assert!(!st.success());
+        assert!(!root.join("data.mdb").exists());
+        assert!(!out.exists());
     }
 }
