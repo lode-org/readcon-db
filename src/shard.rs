@@ -38,6 +38,18 @@ pub struct ShardedConCorpus {
 }
 
 impl ShardedConCorpus {
+    /// Open a sharded root that already has `shards.json`. Does not mkdir.
+    pub fn open_existing(root: impl AsRef<Path>) -> Result<Self> {
+        let root = root.as_ref();
+        if !root.join(MANIFEST).is_file() {
+            return Err(Error::Message(format!(
+                "join-drained: missing shards.json: {}",
+                root.display()
+            )));
+        }
+        Self::open(root, 1)
+    }
+
     /// Create or open a sharded root. If manifest missing, writes one with `n_shards`.
     pub fn open(root: impl AsRef<Path>, n_shards: u32) -> Result<Self> {
         let root = root.as_ref().to_path_buf();
@@ -109,6 +121,7 @@ impl ShardedConCorpus {
             let m: ShardManifest = serde_json::from_str(&std::fs::read_to_string(&manifest_path)?)?;
             m.n_shards
         } else {
+            let _ = Self::open(root, DEFAULT_N_SHARDS)?;
             DEFAULT_N_SHARDS
         };
         let sid = Self::shard_for_traj(traj_id, n_shards);
@@ -325,6 +338,19 @@ mod tests {
     }
 
     #[test]
+    fn join_drained_roots_missing_source_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope");
+        let dest = dir.path().join("out");
+        let err = join_drained_roots(&[missing], &dest).unwrap_err();
+        assert!(
+            err.to_string().contains("missing shards.json"),
+            "{err}"
+        );
+        assert!(!dest.exists());
+    }
+
+    #[test]
     fn drain_refuse_does_not_write_manifest() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("hpc");
@@ -536,11 +562,19 @@ pub fn join_drained_roots(sources: &[PathBuf], dst: impl AsRef<Path>) -> Result<
             dst.display()
         )));
     }
+    for src in sources {
+        if !src.join(MANIFEST).is_file() {
+            return Err(Error::Message(format!(
+                "join-drained: missing shards.json: {}",
+                src.display()
+            )));
+        }
+    }
     let out = ConCorpus::open(dst)?;
     let mut n = 0u32;
     let mut seen = std::collections::BTreeSet::new();
     for src in sources {
-        let mut sh = ShardedConCorpus::open(src, 1)?;
+        let mut sh = ShardedConCorpus::open_existing(src)?;
         n += append_sharded_into(&mut sh, &out, &mut seen)?;
     }
     Ok(n)

@@ -27,7 +27,12 @@ def test_export_h5md_tn3_and_units(tmp_path):
         assert pos.ndim == 3
         assert "step" in f["particles/all/position"]
         assert f["particles/all/position/step"].shape == (n,)
-        assert f["particles/all/position/time"].shape == (n,)
+        times = f["particles/all/position/time"][:]
+        assert times.shape == (n,)
+        for i, t in enumerate(times):
+            assert abs(float(t) - float(i)) < 1e-12
+        bnd = [_as_str(x) for x in f["particles/all/box"].attrs["boundary"]]
+        assert bnd == ["periodic", "periodic", "periodic"]
         assert _as_str(f["particles/all/position/time"].attrs["unit"]) == "ps"
         assert _as_str(pos.attrs["unit"]) == "Angstrom"
         edges = f["particles/all/box/edges/value"]
@@ -115,8 +120,8 @@ def test_export_h5md_mixed_forces_zero_pad(tmp_path):
         na = 6.02214076e23
         scale = (e_j / l_m) / ((1000.0 / na) / 1e-10)
         np.testing.assert_allclose(force[idx], native * scale)
-        bnd = f["particles/all/box"].attrs["boundary"]
-        assert len(bnd) == 3
+        bnd = [_as_str(x) for x in f["particles/all/box"].attrs["boundary"]]
+        assert bnd == ["periodic", "periodic", "periodic"]
 
 
 def test_export_h5md_con_fallback_matches_rcso(tmp_path):
@@ -200,6 +205,9 @@ def test_export_h5md_mdanalysis_reader_with_velocity(tmp_path):
     native = db.get_velocities(1, 0)
     assert native is not None
     assert abs(float(native[0][0]) - 0.001234) < 1e-9
+    bare = ConCorpus(str(tmp_path / "bare"))
+    bare.append_trajectory(2, str(FIXTURE / "tiny_cuh2.con"))
+    assert bare.get_velocities(2, 0) is None
 
 
 def test_export_h5md_mdanalysis_reader(tmp_path):

@@ -63,4 +63,4 @@ CON line-2 `units` is the authority.
 
 ## Cooked SoA (RCSO)
 
-See `docs/orgmode/cooked-soa.org`. Tier is opt-in; CON text remains authority. Bindings expose cook / delete / has-valid / positions / forces / velocities.
+See `docs/orgmode/cooked-soa.org`. Tier is opt-in; CON text remains authority. Fortran exposes cook / delete / has-valid / `db_get_velocities`; positions and forces use the C buffer API.

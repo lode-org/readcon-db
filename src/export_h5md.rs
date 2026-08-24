@@ -290,7 +290,21 @@ mod tests {
         assert_eq!(a.species_z.len(), a.natoms);
         assert!(a.species_z.iter().all(|&z| z > 0));
         assert_eq!(a.boundary.len(), 3);
+        assert_eq!(
+            a.boundary,
+            [
+                "periodic".to_string(),
+                "periodic".to_string(),
+                "periodic".to_string()
+            ]
+        );
         assert_eq!(a.times.len(), a.n_frames);
+        for (i, t) in a.times.iter().enumerate() {
+            assert!(
+                (*t - i as f64).abs() < 1e-12,
+                "frame-index dest ps: times[{i}]={t}"
+            );
+        }
     }
 
     #[test]
@@ -512,6 +526,39 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(u["length"], "nm");
+    }
+
+    #[test]
+    fn collect_h5md_after_cook_and_set_units() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            .unwrap();
+        db.cook_frame(crate::keys::FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        })
+        .unwrap();
+        assert!(db
+            .has_valid_cooked_soa(crate::keys::FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap());
+        let before = db.collect_h5md(1).unwrap();
+        db.set_trajectory_units(1, serde_json::json!({"length": "nm", "energy": "eV"}))
+            .unwrap();
+        let after = db.collect_h5md(1).unwrap();
+        assert!((before.edges[0] - after.edges[0]).abs() < 1e-9);
+        assert_eq!(
+            db.frame_units(crate::keys::FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap()
+            .unwrap()["length"],
+            "nm"
+        );
     }
 
     #[test]

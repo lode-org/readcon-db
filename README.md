@@ -86,8 +86,8 @@ Foreign trajectories: **`readcon.read_chemfiles("traj.xyz")` → frames → inge
   already own.
 - **H5MD interchange** — `export_h5md` / `collect_h5md` writes one
   `[T][N][3]` trajectory (CON stays authority). Engine dest is Å / ps /
-  kJ mol^{-1} Angstrom^{-1}. Callers stamp units on ingest; missing `units.time` is
-  CON `fs`.
+  kJ mol^{-1} Angstrom^{-1}; velocity dest is `Angstrom ps-1`. Callers stamp
+  units on ingest; missing `units.time` is CON `fs`.
 - **Node-local drain/join** — `shard-ingest` then `drain` to a unique
   dest (`data.mdb` only, refuse overwrite), then `join-drained`.
 

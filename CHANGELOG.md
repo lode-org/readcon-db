@@ -14,6 +14,8 @@
   aliases are canonicalized into CON metadata (`A` → `angstrom`).
   `set_units` converts stored numbers; append/extend stamp incoming
   values.
+- `join_drained_roots` requires `shards.json`; `open_shard_for_traj`
+  writes the manifest so drain can run.
 - `rkrdb_get_velocities` matches `get_forces` (`out_has_velocities`; no
   throw on absence). Drain refuses dest shards before writing `shards.json`.
 - C/C++/Fortran `rkrdb_h5md_species` copies collect integer Z; Corpus

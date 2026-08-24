@@ -1406,6 +1406,11 @@ mod tests {
             // stamped A → dest Å; first Cu x on tiny_cuh2.con
             assert!((pos[0] - 0.6394).abs() < 1e-4, "dest A x0={}", pos[0]);
             assert!(pos.iter().any(|&x| x != 0.0));
+            let mut no_f = [0.0f64; 8];
+            assert_eq!(
+                rkrdb_h5md_forces(id, 1, no_f.as_mut_ptr(), no_f.len()),
+                RKRDB_NOT_FOUND
+            );
             let mut edges = vec![0.0f64; (nf as usize) * 9];
             assert_eq!(
                 rkrdb_h5md_edges(id, 1, edges.as_mut_ptr(), edges.len()),

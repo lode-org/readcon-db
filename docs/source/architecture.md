@@ -34,7 +34,8 @@ Environment (Heed / LMDB)
 
 **H5MD interchange:** `collect_h5md` / `export_h5md` emit one `[T][N][3]`
 trajectory (position, optional force and velocity). CON text stays
-authority. Dest units are Å / ps / kJ mol^{-1} Å^{-1}.
+authority. Dest units are Å / ps / kJ mol^{-1} Å^{-1}; velocity dest is
+`Angstrom ps-1`.
 
 **Drain/join:** node-local `shard-ingest`, `drain_to` compact-snapshots
 `data.mdb` (refuse overwrite), then `join-drained`.
