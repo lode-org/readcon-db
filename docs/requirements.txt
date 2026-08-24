@@ -1,3 +1,5 @@
-sphinx>=7
+# Direct docs dependencies. Pages and CI install the locked set via
+# pixi.lock (pixi.toml [feature.docs]). Refresh: pixi lock
+sphinx>=7,<9
 furo>=2024.1
 myst-parser>=2

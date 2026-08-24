@@ -89,10 +89,10 @@ Fortran: `fortran/ReadConDb` (`bind(C)` against the C ABI).
 - Design notes: [`docs/design.md`](https://github.com/lode-org/readcon-db/blob/main/docs/design.md) in the repository
 
 ```bash
-cd docs
-pip install -r requirements.txt
-sphinx-build -b html source _build/html
+pixi r -e docs docbld
 ```
+
+`pixi.lock` pins Sphinx, Furo, and MyST to the same set Pages publishes. Refresh with `pixi lock` after editing `pixi.toml` `[feature.docs]`.
 
 ## Static marketing page
 

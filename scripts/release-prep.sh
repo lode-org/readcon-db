@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Prepare a release commit.
 # Usage: scripts/release-prep.sh X.Y.Z
-# Requires: cog, prek, lychee, sphinx-build. cargo test unless
+# Requires: cog, prek, lychee, pixi (docs env). cargo test unless
 # READCON_RELEASE_PREP_SKIP_TESTS=1 (run tests on the remote builder).
 # Then open a PR, merge, and: git tag -s vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z
 set -euo pipefail
@@ -55,7 +55,9 @@ echo "==> prek"
 prek run -a
 
 echo "==> docs (sphinx) and lychee"
-if command -v sphinx-build >/dev/null 2>&1; then
+if command -v pixi >/dev/null 2>&1 && [[ -f pixi.lock ]]; then
+  pixi r -e docs docbld
+elif command -v sphinx-build >/dev/null 2>&1; then
   sphinx-build -b html docs/source docs/_build/html
 else
   python3 -m sphinx -b html docs/source docs/_build/html
