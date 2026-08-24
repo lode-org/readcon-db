@@ -97,7 +97,7 @@ fn frame_time_ps(h: &readcon_core::types::FrameHeader, frame_idx: u32) -> Result
     Ok(f64::from(frame_idx))
 }
 
-fn edges33_from_header(h: &readcon_core::types::FrameHeader) -> [f64; 9] {
+pub(crate) fn edges33_from_header(h: &readcon_core::types::FrameHeader) -> [f64; 9] {
     if let Some(arr) = h.metadata.get("lattice_vectors").and_then(|v| v.as_array()) {
         if arr.len() == 3 {
             let mut out = [0.0f64; 9];
@@ -184,6 +184,11 @@ impl ConCorpus {
             if cooked.natoms as usize != natoms {
                 return Err(crate::error::Error::Message(
                     "H5MD export needs fixed natoms in the trajectory".into(),
+                ));
+            }
+            if boundary_from_pbc(fr.header.pbc()) != boundary {
+                return Err(crate::error::Error::Message(
+                    "H5MD export needs fixed box/boundary in the trajectory".into(),
                 ));
             }
             let z_here: Vec<i32> = self
@@ -316,6 +321,57 @@ mod tests {
                 "frame-index dest ps: times[{i}]={t}"
             );
         }
+    }
+
+    #[test]
+    fn export_extxyz_writes_pbc_and_triclinic_lattice() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let mut frames = Vec::new();
+        for item in readcon_core::iterators::ConFrameIterator::new(&text) {
+            frames.push(item.unwrap());
+        }
+        frames[0].header.angles = [60.0, 90.0, 70.0];
+        frames[0]
+            .header
+            .metadata
+            .insert("pbc".into(), serde_json::json!([false, true, false]));
+        db.append_trajectory_frames(1, &frames, "t").unwrap();
+        let keys = db
+            .select(&crate::select::Select::new().trajectory(1))
+            .unwrap();
+        let xyz = dir.path().join("t.xyz");
+        db.export_extxyz(&keys, &xyz, "energy").unwrap();
+        let out = std::fs::read_to_string(&xyz).unwrap();
+        assert!(out.contains("pbc=\"F T F\""), "{out}");
+        assert!(!out.contains("pbc=\"T T T\""));
+        let e = crate::export_h5md::edges33_from_header(&frames[0].header);
+        assert!(e[3].abs() > 1e-9, "triclinic b_x");
+        assert!(out.contains(&format!("{:.10}", e[3])), "{out}");
+    }
+
+    #[test]
+    fn collect_h5md_rejects_changing_pbc() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_multi_cuh2.con")).unwrap();
+        let mut frames = Vec::new();
+        for item in readcon_core::iterators::ConFrameIterator::new(&text) {
+            frames.push(item.unwrap());
+        }
+        assert!(frames.len() >= 2);
+        frames[0]
+            .header
+            .metadata
+            .insert("pbc".into(), serde_json::json!([true, true, true]));
+        frames[1]
+            .header
+            .metadata
+            .insert("pbc".into(), serde_json::json!([false, false, false]));
+        db.append_trajectory_frames(1, &frames, "t").unwrap();
+        let err = db.collect_h5md(1).unwrap_err();
+        assert!(err.to_string().contains("fixed box/boundary"), "{err}");
     }
 
     #[test]

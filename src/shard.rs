@@ -514,18 +514,13 @@ impl ShardedConCorpus {
                 dst.display()
             )));
         }
-        let mut preview = std::collections::BTreeSet::new();
+        let mut preview = std::collections::BTreeMap::new();
         for sid in 0..self.n_shards {
             if !self.shard_path(sid).is_dir() {
                 continue;
             }
             for fk in self.shard_mut(sid)?.list_frame_keys()? {
-                if !preview.insert(fk.traj_id) {
-                    return Err(Error::Message(format!(
-                        "traj_id {} appears in multiple shards or join sources",
-                        fk.traj_id
-                    )));
-                }
+                preview_traj(&mut preview, fk.traj_id, u64::from(sid))?;
             }
         }
         let out = ConCorpus::open(dst)?;
@@ -662,21 +657,17 @@ pub fn join_drained_roots(sources: &[PathBuf], dst: impl AsRef<Path>) -> Result<
         }
     }
     {
-        let mut preview = std::collections::BTreeSet::new();
-        for src in sources {
+        let mut preview = std::collections::BTreeMap::new();
+        for (si, src) in sources.iter().enumerate() {
             let mut sh = ShardedConCorpus::open_existing(src)?;
             for sid in 0..sh.n_shards {
                 if !sh.shard_path(sid).is_dir() {
                     continue;
                 }
                 let shard = sh.shard_mut(sid)?;
+                let owner = ((si as u64) << 32) | u64::from(sid);
                 for fk in shard.list_frame_keys()? {
-                    if !preview.insert(fk.traj_id) {
-                        return Err(Error::Message(format!(
-                            "traj_id {} appears in multiple shards or join sources",
-                            fk.traj_id
-                        )));
-                    }
+                    preview_traj(&mut preview, fk.traj_id, owner)?;
                 }
             }
         }
@@ -709,16 +700,11 @@ pub fn join_corpus_dirs(sources: &[PathBuf], dst: impl AsRef<Path>) -> Result<u3
         }
     }
     {
-        let mut preview = std::collections::BTreeSet::new();
-        for src in sources {
+        let mut preview = std::collections::BTreeMap::new();
+        for (si, src) in sources.iter().enumerate() {
             let c = ConCorpus::open_readonly(src)?;
             for fk in c.list_frame_keys()? {
-                if !preview.insert(fk.traj_id) {
-                    return Err(Error::Message(format!(
-                        "duplicate traj_id {} across join sources",
-                        fk.traj_id
-                    )));
-                }
+                preview_traj(&mut preview, fk.traj_id, si as u64)?;
             }
             c.close();
         }
@@ -749,6 +735,27 @@ pub fn join_corpus_dirs(sources: &[PathBuf], dst: impl AsRef<Path>) -> Result<u3
         }
     }
     Ok(n)
+}
+
+/// Record `traj_id` under `owner`. Extra frames of the same traj on the
+/// same owner are fine; the same traj on a different owner is a collision.
+fn preview_traj(
+    preview: &mut std::collections::BTreeMap<u64, u64>,
+    traj_id: u64,
+    owner: u64,
+) -> Result<()> {
+    match preview.entry(traj_id) {
+        std::collections::btree_map::Entry::Occupied(e) if *e.get() != owner => {
+            Err(Error::Message(format!(
+                "traj_id {traj_id} appears in multiple shards or join sources"
+            )))
+        }
+        std::collections::btree_map::Entry::Occupied(_) => Ok(()),
+        std::collections::btree_map::Entry::Vacant(e) => {
+            e.insert(owner);
+            Ok(())
+        }
+    }
 }
 
 /// Open a single-env corpus for analysis export. Refuses a sharded root so
@@ -911,6 +918,22 @@ mod compaction_tests {
     }
 
     #[test]
+    fn join_to_single_env_keeps_multi_frame_traj() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sharded");
+        let mut s = ShardedConCorpus::open(&root, 2).unwrap();
+        s.append_trajectory_path(0, fixture("tiny_multi_cuh2.con"))
+            .unwrap();
+        let dest = dir.path().join("out");
+        let n = s.join_to_single_env(&dest).unwrap();
+        assert!(n >= 2, "joined frames={n}");
+        let db = ConCorpus::open(&dest).unwrap();
+        let keys = db.select(&Select::new()).unwrap();
+        assert!(keys.len() >= 2);
+        assert!(keys.iter().all(|k| k.traj_id == 0));
+    }
+
+    #[test]
     fn join_to_single_env_duplicate_traj_does_not_create_dest() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("sharded");
@@ -946,7 +969,10 @@ mod compaction_tests {
             .unwrap();
         let dest = dir.path().join("out");
         let err = join_corpus_dirs(&[a, b], &dest).unwrap_err();
-        assert!(err.to_string().contains("duplicate traj_id"), "{err}");
+        assert!(
+            err.to_string().contains("traj_id") || err.to_string().contains("duplicate"),
+            "{err}"
+        );
         assert!(!dest.exists());
     }
 

@@ -69,6 +69,26 @@ def test_export_h5md_refuses_existing_dest(tmp_path):
         assert "dest exists" in str(e)
 
 
+def test_export_h5md_write_failure_removes_dest(tmp_path, monkeypatch):
+    import numpy as np
+
+    db = ConCorpus(str(tmp_path / "corpus"))
+    db.append_trajectory(1, str(FIXTURE / "tiny_cuh2.con"))
+    out = tmp_path / "traj.h5"
+
+    def boom(*_a, **_k):
+        raise RuntimeError("injected write fail")
+
+    monkeypatch.setattr(np, "asarray", boom)
+    monkeypatch.setattr(np, "arange", boom)
+    try:
+        db.export_h5md(1, str(out))
+        raise AssertionError("expected write fail")
+    except RuntimeError:
+        pass
+    assert not out.exists()
+
+
 def _as_str(x):
     if isinstance(x, (bytes, np.bytes_)):
         return x.decode("ascii", "replace").rstrip("\x00")

@@ -122,6 +122,12 @@ impl ConCorpus {
 
     fn open_with(path: impl AsRef<Path>, readonly: bool) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
+        if path.join("shards.json").is_file() {
+            return Err(Error::Message(format!(
+                "refusing to open a sharded root as a single-env corpus: {}",
+                path.display()
+            )));
+        }
         if readonly {
             if !path.is_dir() {
                 return Err(Error::Message(format!(
@@ -1472,9 +1478,17 @@ impl ConCorpus {
         path: impl AsRef<Path>,
         energy_key: &str,
     ) -> Result<usize> {
-        use std::fs::File;
+        use std::fs::OpenOptions;
         use std::io::BufWriter;
-        let mut w = BufWriter::new(File::create(path)?);
+        let path = path.as_ref();
+        if path.exists() {
+            return Err(Error::Message(format!(
+                "export_extxyz dest exists: {}",
+                path.display()
+            )));
+        }
+        let file = OpenOptions::new().write(true).create_new(true).open(path)?;
+        let mut w = BufWriter::new(file);
         let mut n = 0usize;
         for k in keys {
             let fr = self.get_frame(*k)?;
@@ -1743,6 +1757,21 @@ mod tests {
         assert!(text.contains("Lattice="));
         assert!(text.contains("Properties="));
         assert!(text.lines().any(|l| l.trim_start().starts_with("Cu ")));
+        let err = db.export_extxyz(&uniq, &xyz, "energy").unwrap_err();
+        assert!(err.to_string().contains("dest exists"), "{err}");
+    }
+
+    #[test]
+    fn open_refuses_sharded_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sharded");
+        crate::ShardedConCorpus::open(&root, 2).unwrap();
+        assert!(root.join("shards.json").is_file());
+        match ConCorpus::open(&root) {
+            Ok(_) => panic!("expected sharded-root refuse"),
+            Err(err) => assert!(err.to_string().contains("sharded root"), "{err}"),
+        }
+        assert!(!root.join("data.mdb").exists());
     }
 
     #[test]

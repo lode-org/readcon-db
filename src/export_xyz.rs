@@ -6,19 +6,19 @@ use std::io::{self, Write};
 use readcon_core::types::ConFrame;
 
 /// Write one frame as ASE-compatible extxyz (Lattice, Properties, energy/forces in info/arrays).
-pub fn write_frame_extxyz<W: Write>(w: &mut W, frame: &ConFrame, energy_key: &str) -> io::Result<()> {
+pub fn write_frame_extxyz<W: Write>(
+    w: &mut W,
+    frame: &ConFrame,
+    energy_key: &str,
+) -> io::Result<()> {
     let n = frame.atom_data.len();
     writeln!(w, "{n}")?;
 
-    // Cell as 3x3 row-major from lengths/angles (orthorhombic approximation if angles ~90)
-    let (lx, ly, lz) = (
-        frame.header.boxl[0],
-        frame.header.boxl[1],
-        frame.header.boxl[2],
+    let e = crate::export_h5md::edges33_from_header(&frame.header);
+    let lattice = format!(
+        "{:.10} {:.10} {:.10} {:.10} {:.10} {:.10} {:.10} {:.10} {:.10}",
+        e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7], e[8]
     );
-    // CON stores cell lengths on header; angles on header.angles — use orthorhombic box for export
-    // (full triclinic can be added; metatrain accepts Lattice=)
-    let lattice = format!("{lx:.10} 0 0 0 {ly:.10} 0 0 0 {lz:.10}");
 
     let mut energy = None;
     if let Some(v) = frame.header.metadata.get("energy") {
@@ -36,14 +36,26 @@ pub fn write_frame_extxyz<W: Write>(w: &mut W, frame: &ConFrame, energy_key: &st
         "species:S:1:pos:R:3"
     };
 
-    write!(w, "Lattice=\"{lattice}\" Properties={props} pbc=\"T T T\"")?;
+    let pbc = frame.header.pbc().unwrap_or([true, true, true]);
+    let tf = |b: bool| if b { "T" } else { "F" };
+    write!(
+        w,
+        "Lattice=\"{lattice}\" Properties={props} pbc=\"{} {} {}\"",
+        tf(pbc[0]),
+        tf(pbc[1]),
+        tf(pbc[2])
+    )?;
     if let Some(e) = energy {
         write!(w, " {energy_key}={e:.10}")?;
     }
     writeln!(w)?;
 
     for a in &frame.atom_data {
-        write!(w, "{:<2} {:16.10} {:16.10} {:16.10}", a.symbol, a.x, a.y, a.z)?;
+        write!(
+            w,
+            "{:<2} {:16.10} {:16.10} {:16.10}",
+            a.symbol, a.x, a.y, a.z
+        )?;
         if has_forces {
             let f = a.force.unwrap_or([0.0; 3]);
             write!(w, " {:16.10} {:16.10} {:16.10}", f[0], f[1], f[2])?;

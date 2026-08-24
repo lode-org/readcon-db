@@ -131,10 +131,7 @@ pub unsafe extern "C" fn rkrdb_pack_frame(
     if buf.is_null() || buflen == 0 {
         return RKRDB_NULL;
     }
-    let key = FrameKey {
-        traj_id,
-        frame_idx,
-    };
+    let key = FrameKey { traj_id, frame_idx };
     with_handle(id, |h| match h.corpus.pack_frame(key) {
         Ok(bytes) => {
             if bytes.len() > buflen {
@@ -174,10 +171,7 @@ pub unsafe extern "C" fn rkrdb_pack_frames(
     let keys: Vec<FrameKey> = trajs
         .iter()
         .zip(frames.iter())
-        .map(|(&traj_id, &frame_idx)| FrameKey {
-            traj_id,
-            frame_idx,
-        })
+        .map(|(&traj_id, &frame_idx)| FrameKey { traj_id, frame_idx })
         .collect();
     with_handle(id, |h| match h.corpus.pack_frames(&keys) {
         Ok(bytes) => {
@@ -317,7 +311,9 @@ fn parse_units_json(p: *const c_char) -> Result<Option<serde_json::Value>, c_int
     if p.is_null() {
         return Ok(None);
     }
-    let s = unsafe { CStr::from_ptr(p) }.to_str().map_err(|_| RKRDB_ERR)?;
+    let s = unsafe { CStr::from_ptr(p) }
+        .to_str()
+        .map_err(|_| RKRDB_ERR)?;
     if s.is_empty() {
         return Ok(None);
     }
@@ -473,10 +469,7 @@ pub unsafe extern "C" fn rkrdb_frame_units(
         Ok(c) => c,
         Err(c) => return c,
     };
-    match corpus.frame_units(FrameKey {
-        traj_id,
-        frame_idx,
-    }) {
+    match corpus.frame_units(FrameKey { traj_id, frame_idx }) {
         Ok(Some(v)) => {
             let s = v.to_string();
             if s.len() + 1 > buflen {
@@ -619,7 +612,6 @@ pub unsafe extern "C" fn rkrdb_select_meta(
     .unwrap_or(RKRDB_NULL)
 }
 
-
 /// Rebuild secondary indexes from authoritative frame blobs.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_reindex(id: usize) -> c_int {
@@ -637,10 +629,10 @@ pub unsafe extern "C" fn rkrdb_reindex(id: usize) -> c_int {
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_cook_frame(id: usize, traj_id: u64, frame_idx: u32) -> c_int {
     with_handle(id, |h| {
-        match h.corpus.cook_frame(crate::keys::FrameKey {
-            traj_id,
-            frame_idx,
-        }) {
+        match h
+            .corpus
+            .cook_frame(crate::keys::FrameKey { traj_id, frame_idx })
+        {
             Ok(_) => Ok(RKRDB_OK),
             Err(e) => {
                 set_err(h, e);
@@ -655,10 +647,10 @@ pub unsafe extern "C" fn rkrdb_cook_frame(id: usize, traj_id: u64, frame_idx: u3
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_delete_cooked(id: usize, traj_id: u64, frame_idx: u32) -> c_int {
     with_handle(id, |h| {
-        match h.corpus.delete_cooked_soa(crate::keys::FrameKey {
-            traj_id,
-            frame_idx,
-        }) {
+        match h
+            .corpus
+            .delete_cooked_soa(crate::keys::FrameKey { traj_id, frame_idx })
+        {
             Ok(()) => Ok(RKRDB_OK),
             Err(e) => {
                 set_err(h, e);
@@ -673,10 +665,10 @@ pub unsafe extern "C" fn rkrdb_delete_cooked(id: usize, traj_id: u64, frame_idx:
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_has_valid_cooked(id: usize, traj_id: u64, frame_idx: u32) -> c_int {
     with_handle(id, |h| {
-        match h.corpus.has_valid_cooked_soa(crate::keys::FrameKey {
-            traj_id,
-            frame_idx,
-        }) {
+        match h
+            .corpus
+            .has_valid_cooked_soa(crate::keys::FrameKey { traj_id, frame_idx })
+        {
             Ok(true) => Ok(1),
             Ok(false) => Ok(0),
             Err(e) => {
@@ -703,10 +695,10 @@ pub unsafe extern "C" fn rkrdb_get_positions(
         return RKRDB_NULL;
     }
     with_handle(id, |h| {
-        match h.corpus.get_positions(crate::keys::FrameKey {
-            traj_id,
-            frame_idx,
-        }) {
+        match h
+            .corpus
+            .get_positions(crate::keys::FrameKey { traj_id, frame_idx })
+        {
             Ok(pos) => {
                 let n = pos.len() as u32;
                 if n > capacity_atoms {
@@ -750,10 +742,10 @@ pub unsafe extern "C" fn rkrdb_get_forces(
         return RKRDB_NULL;
     }
     with_handle(id, |h| {
-        match h.corpus.get_forces(crate::keys::FrameKey {
-            traj_id,
-            frame_idx,
-        }) {
+        match h
+            .corpus
+            .get_forces(crate::keys::FrameKey { traj_id, frame_idx })
+        {
             Ok(None) => {
                 unsafe {
                     *out_has_forces = 0;
@@ -818,10 +810,10 @@ pub unsafe extern "C" fn rkrdb_frame_formula(
         return RKRDB_NULL;
     }
     with_handle(id, |h| {
-        match h.corpus.frame_formula(crate::keys::FrameKey {
-            traj_id,
-            frame_idx,
-        }) {
+        match h
+            .corpus
+            .frame_formula(crate::keys::FrameKey { traj_id, frame_idx })
+        {
             Ok(s) => {
                 let bytes = s.as_bytes();
                 if bytes.len() + 1 > buflen {
@@ -972,10 +964,7 @@ pub unsafe extern "C" fn rkrdb_frame_hash(
     if out_hash16.is_null() {
         return RKRDB_NULL;
     }
-    let key = FrameKey {
-        traj_id,
-        frame_idx,
-    };
+    let key = FrameKey { traj_id, frame_idx };
     with_handle(id, |h| match h.corpus.frame_hash(key) {
         Ok(hash) => {
             let b = hash.to_bytes();
@@ -1002,10 +991,7 @@ pub unsafe extern "C" fn rkrdb_get_frame_text(
     if buf.is_null() || buflen == 0 {
         return RKRDB_NULL;
     }
-    let key = FrameKey {
-        traj_id,
-        frame_idx,
-    };
+    let key = FrameKey { traj_id, frame_idx };
     with_handle(id, |h| match h.corpus.get_frame_text(key) {
         Ok(text) => {
             let bytes = text.as_bytes();
@@ -1035,10 +1021,7 @@ pub unsafe extern "C" fn rkrdb_get_frame(
     traj_id: u64,
     frame_idx: u32,
 ) -> *mut std::ffi::c_void {
-    let key = FrameKey {
-        traj_id,
-        frame_idx,
-    };
+    let key = FrameKey { traj_id, frame_idx };
     with_handle(id, |h| match h.corpus.get_frame(key) {
         Ok(frame) => Ok(Box::into_raw(Box::new(frame)) as *mut std::ffi::c_void),
         Err(e) => {
@@ -1170,14 +1153,7 @@ pub unsafe extern "C" fn rkrdb_h5md_forces(
     out: *mut f64,
     cap: usize,
 ) -> c_int {
-    h5md_copy_slice(
-        id,
-        traj_id,
-        out,
-        cap,
-        |a| a.forces.as_deref(),
-        "no forces",
-    )
+    h5md_copy_slice(id, traj_id, out, cap, |a| a.forces.as_deref(), "no forces")
 }
 
 #[no_mangle]
@@ -1249,12 +1225,10 @@ pub unsafe extern "C" fn rkrdb_get_velocities(
         Ok(c) => c,
         Err(c) => return c,
     };
-    match corpus.get_velocities(FrameKey {
-        traj_id,
-        frame_idx,
-    }) {
+    match corpus.get_velocities(FrameKey { traj_id, frame_idx }) {
         Ok(Some(rows)) => {
             if rows.len() > capacity_atoms as usize {
+                set_err_id(id, "velocities buffer too small");
                 return RKRDB_ERR;
             }
             unsafe {
@@ -1392,14 +1366,7 @@ mod tests {
             assert!(nf >= 1 && na >= 1);
             let mut pos = vec![0.0f64; (nf as usize) * (na as usize) * 3];
             assert_eq!(
-                rkrdb_h5md_positions(
-                    id,
-                    1,
-                    pos.as_mut_ptr(),
-                    pos.len(),
-                    &mut nf,
-                    &mut na
-                ),
+                rkrdb_h5md_positions(id, 1, pos.as_mut_ptr(), pos.len(), &mut nf, &mut na),
                 RKRDB_OK
             );
             assert_eq!(pos.len(), (nf as usize) * (na as usize) * 3);
@@ -1451,13 +1418,7 @@ mod tests {
             let ext_u = CString::new(r#"{"length":"A","energy":"ev"}"#).unwrap();
             let mut n2 = 0u32;
             assert_eq!(
-                rkrdb_extend_trajectory_units(
-                    id,
-                    1,
-                    forces.as_ptr(),
-                    ext_u.as_ptr(),
-                    &mut n2
-                ),
+                rkrdb_extend_trajectory_units(id, 1, forces.as_ptr(), ext_u.as_ptr(), &mut n2),
                 RKRDB_OK
             );
             assert!(n2 >= 1);
@@ -1508,6 +1469,17 @@ mod tests {
                 "native vx0={}",
                 native[0]
             );
+            let mut tiny = [0.0f64; 1];
+            let mut ntiny = 0u32;
+            let mut htiny = 0u8;
+            assert_eq!(
+                rkrdb_get_velocities(id2, 2, 0, tiny.as_mut_ptr(), 0, &mut ntiny, &mut htiny),
+                RKRDB_ERR
+            );
+            let mut ebuf = vec![0i8; 128];
+            assert!(rkrdb_last_error(id2, ebuf.as_mut_ptr(), ebuf.len()) >= 0);
+            let es = CStr::from_ptr(ebuf.as_ptr()).to_str().unwrap();
+            assert!(es.contains("too small"), "{es}");
             let mut none = vec![0.0f64; 8];
             let mut nn = 99u32;
             let mut has_none = 1u8;

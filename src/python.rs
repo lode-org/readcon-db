@@ -216,6 +216,9 @@ impl PyConCorpus {
             Ok(n_frames as u32)
         })();
         let _ = file.call_method0("close");
+        if written.is_err() {
+            let _ = std::fs::remove_file(path);
+        }
         written
     }
 
