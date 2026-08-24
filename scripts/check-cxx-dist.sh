@@ -47,7 +47,17 @@ fi
 
 # Tarball assembler exists
 [[ -x scripts/package-cxx.sh ]] || die "scripts/package-cxx.sh must be executable"
+[[ -x scripts/package-clib.sh ]] || die "scripts/package-clib.sh must be executable"
+[[ -x scripts/check-clib-dist.sh ]] || die "scripts/check-clib-dist.sh must be executable"
+if ! bash scripts/check-clib-dist.sh --no-self-test; then
+    die "check-clib-dist.sh --no-self-test failed"
+fi
 [[ -f scripts/meson_cargo_build.py ]] || die "missing scripts/meson_cargo_build.py"
+if ! grep -q 'workflow_dispatch:' .github/workflows/c_lib_tarball.yml \
+    || ! grep -q 'tag:' .github/workflows/c_lib_tarball.yml \
+    || ! grep -q 'inputs.tag' .github/workflows/c_lib_tarball.yml; then
+    die "c_lib_tarball.yml must accept workflow_dispatch inputs.tag (attach-to-tag)"
+fi
 
 # CMake version is not hardcoded to a stale release
 if grep -nE 'project\(readcon-db VERSION 0\.13' CMakeLists.txt; then
