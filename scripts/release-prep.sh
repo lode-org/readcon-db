@@ -51,6 +51,9 @@ echo "==> CHANGELOG via cog"
 } > /tmp/CHANGELOG.md
 mv /tmp/CHANGELOG.md CHANGELOG.md
 
+echo "==> version lockstep"
+scripts/check_version_lockstep.sh
+
 echo "==> prek"
 prek run -a
 

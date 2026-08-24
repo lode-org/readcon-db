@@ -29,6 +29,7 @@ pixi lock
 | Documentation | `ci_docs.yml` | push, PR | Locked Sphinx HTML (`pixi.lock`) + lychee |
 | Pages | `pages.yml` | push to main | Deploy site + locked Sphinx docs |
 | Lint | `lint.yml` | PR | Conventional commits + large-file audit |
+| Version lockstep | `scripts/check_version_lockstep.sh` | `cargo test` | Cargo, Python, meson, pixi, Fortran, CITATION, Sphinx, core pin |
 | C/C++ dist | `ci_cxx.yml` | push, PR | CMake/Meson/pkg-config without cbindgen; clib fixture gate |
 | crates.io | `crates_publish.yml` | `v*` tag | `cargo publish --locked` |
 | Python wheels | `python-wheels.yml` | `v*` tag, PR | maturin matrix → PyPI |
