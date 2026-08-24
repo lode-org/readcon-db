@@ -348,6 +348,28 @@ mod tests {
     }
 
     #[test]
+    fn join_drained_duplicate_traj_does_not_create_dest() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a");
+        let b = dir.path().join("b");
+        ShardedConCorpus::open(&a, 1).unwrap();
+        ShardedConCorpus::open(&b, 1).unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        ShardedConCorpus::open_shard(&a, 0)
+            .unwrap()
+            .append_trajectory_str(7, &text, "a")
+            .unwrap();
+        ShardedConCorpus::open_shard(&b, 0)
+            .unwrap()
+            .append_trajectory_str(7, &text, "b")
+            .unwrap();
+        let dest = dir.path().join("out");
+        let err = join_drained_roots(&[a, b], &dest).unwrap_err();
+        assert!(err.to_string().contains("traj_id"), "{err}");
+        assert!(!dest.exists());
+    }
+
+    #[test]
     fn join_drained_roots_missing_source_errors() {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("nope");
@@ -578,6 +600,26 @@ pub fn join_drained_roots(sources: &[PathBuf], dst: impl AsRef<Path>) -> Result<
                 "join-drained: missing shards.json: {}",
                 src.display()
             )));
+        }
+    }
+    {
+        let mut preview = std::collections::BTreeSet::new();
+        for src in sources {
+            let mut sh = ShardedConCorpus::open_existing(src)?;
+            for sid in 0..sh.n_shards {
+                if !sh.shard_path(sid).is_dir() {
+                    continue;
+                }
+                let shard = sh.shard_mut(sid)?;
+                for fk in shard.list_frame_keys()? {
+                    if !preview.insert(fk.traj_id) {
+                        return Err(Error::Message(format!(
+                            "traj_id {} appears in multiple shards or join sources",
+                            fk.traj_id
+                        )));
+                    }
+                }
+            }
         }
     }
     let out = ConCorpus::open(dst)?;

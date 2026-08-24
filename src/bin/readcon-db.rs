@@ -473,7 +473,7 @@ fn main() -> ExitCode {
             "compact-join" => {
                 let src = args.first().ok_or("sharded_root")?.clone();
                 let dst = args.get(1).ok_or("single_dst")?.clone();
-                let mut s = ShardedConCorpus::open(&src, DEFAULT_N_SHARDS)?;
+                let mut s = ShardedConCorpus::open_existing(&src)?;
                 let n = s.join_to_single_env(&dst)?;
                 println!("joined {n} frames -> {dst} (single-env-lmdb)");
             }
@@ -519,16 +519,21 @@ fn main() -> ExitCode {
                 }
                 let n = if sharded {
                     let joined = std::env::temp_dir().join(format!(
-                        "readcon_db_join_{}",
-                        std::process::id()
+                        "readcon_db_join_{}_{}",
+                        std::process::id(),
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_nanos())
+                            .unwrap_or(0)
                     ));
-                    let _ = std::fs::remove_dir_all(&joined);
-                    let mut sc2 = ShardedConCorpus::open(&src, DEFAULT_N_SHARDS)?;
+                    if joined.exists() {
+                        return Err("compact-export-extxyz: temp join dest exists".into());
+                    }
+                    let mut sc2 = ShardedConCorpus::open_existing(&src)?;
                     sc2.join_to_single_env(&joined)?;
                     let db = ConCorpus::open(&joined)?;
                     let keys = db.select(&sel)?;
                     let n = db.export_extxyz(&keys, &out, "energy")?;
-                    let _ = std::fs::remove_dir_all(&joined);
                     n
                 } else {
                     let db = ConCorpus::open(&src)?;

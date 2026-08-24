@@ -1411,6 +1411,11 @@ mod tests {
                 rkrdb_h5md_forces(id, 1, no_f.as_mut_ptr(), no_f.len()),
                 RKRDB_NOT_FOUND
             );
+            let mut no_v = [0.0f64; 8];
+            assert_eq!(
+                rkrdb_h5md_velocities(id, 1, no_v.as_mut_ptr(), no_v.len()),
+                RKRDB_NOT_FOUND
+            );
             let mut edges = vec![0.0f64; (nf as usize) * 9];
             assert_eq!(
                 rkrdb_h5md_edges(id, 1, edges.as_mut_ptr(), edges.len()),

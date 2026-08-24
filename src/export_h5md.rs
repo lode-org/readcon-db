@@ -308,6 +308,31 @@ mod tests {
     }
 
     #[test]
+    fn collect_h5md_boundary_none_from_pbc_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let mut frames = Vec::new();
+        for item in readcon_core::iterators::ConFrameIterator::new(&text) {
+            frames.push(item.unwrap());
+        }
+        frames[0].header.metadata.insert(
+            "pbc".into(),
+            serde_json::json!([false, false, false]),
+        );
+        db.append_trajectory_frames(1, &frames, "t").unwrap();
+        let a = db.collect_h5md(1).unwrap();
+        assert_eq!(
+            a.boundary,
+            [
+                "none".to_string(),
+                "none".to_string(),
+                "none".to_string()
+            ]
+        );
+    }
+
+    #[test]
     fn collect_h5md_pads_mixed_forces() {
         let dir = tempfile::tempdir().unwrap();
         let db = ConCorpus::open(dir.path()).unwrap();
@@ -550,6 +575,14 @@ mod tests {
             .unwrap();
         let after = db.collect_h5md(1).unwrap();
         assert!((before.edges[0] - after.edges[0]).abs() < 1e-9);
+        assert_eq!(before.positions.len(), after.positions.len());
+        for (i, (b, a)) in before.positions.iter().zip(after.positions.iter()).enumerate()
+        {
+            assert!(
+                (b - a).abs() < 1e-9,
+                "dest Å positions after cook+set_units[{i}]: {b} vs {a}"
+            );
+        }
         assert_eq!(
             db.frame_units(crate::keys::FrameKey {
                 traj_id: 1,

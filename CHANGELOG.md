@@ -14,6 +14,8 @@
   aliases are canonicalized into CON metadata (`A` → `angstrom`).
   `set_units` converts stored numbers; append/extend stamp incoming
   values.
+- compact-join uses `open_existing`; join-drained checks traj collisions
+  before creating dest. `pbc` false writes H5MD boundary `none`.
 - Fortran `db_get_positions` / `db_get_forces` / `db_get_velocities`.
 - `join_drained_roots` requires `shards.json`; `open_shard_for_traj`
   writes the manifest so drain can run.
