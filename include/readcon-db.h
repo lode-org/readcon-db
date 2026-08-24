@@ -43,6 +43,12 @@ int rkrdb_append_trajectory(size_t id, uint64_t traj_id, const char *path, uint3
 /** Optional `units_json` (`{"length":"A","energy":"ev"}`); NULL stamps nothing. */
 int rkrdb_append_trajectory_units(size_t id, uint64_t traj_id, const char *path,
                                   const char *units_json, uint32_t *out_n_frames);
+/** Ingest CON text. `source` may be NULL (`memory`). */
+int rkrdb_append_trajectory_str(size_t id, uint64_t traj_id, const char *text,
+                                const char *source, uint32_t *out_n_frames);
+/** Ingest one `RKRConFrame*` from libreadcon_core. Caller keeps the handle. */
+int rkrdb_append_trajectory_frame(size_t id, uint64_t traj_id, const void *frame,
+                                  const char *source, uint32_t *out_n_frames);
 /** Create the trajectory or append CON frames after the live count. */
 int rkrdb_extend_trajectory(size_t id, uint64_t traj_id, const char *path, uint32_t *out_n_frames);
 int rkrdb_extend_trajectory_units(size_t id, uint64_t traj_id, const char *path,
@@ -158,6 +164,23 @@ public:
     uint32_t n = 0;
     if (rkrdb_append_trajectory_units(id_, traj_id, path, units_json, &n) != RKRDB_OK)
       throw std::runtime_error("append failed");
+    return n;
+  }
+
+  uint32_t append_trajectory_str(uint64_t traj_id, const char *text,
+                                 const char *source = nullptr) {
+    uint32_t n = 0;
+    if (rkrdb_append_trajectory_str(id_, traj_id, text, source, &n) != RKRDB_OK)
+      throw std::runtime_error("append_str failed");
+    return n;
+  }
+
+  uint32_t append_trajectory_frame(uint64_t traj_id, const void *frame,
+                                   const char *source = nullptr) {
+    uint32_t n = 0;
+    if (rkrdb_append_trajectory_frame(id_, traj_id, frame, source, &n) !=
+        RKRDB_OK)
+      throw std::runtime_error("append_frame failed");
     return n;
   }
 

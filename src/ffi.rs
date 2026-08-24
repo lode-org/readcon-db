@@ -369,6 +369,89 @@ pub unsafe extern "C" fn rkrdb_append_trajectory(
     rkrdb_append_trajectory_units(id, traj_id, path, ptr::null(), out_n_frames)
 }
 
+/// Ingest CON text. `source` may be NULL (`"memory"`).
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_append_trajectory_str(
+    id: usize,
+    traj_id: u64,
+    text: *const c_char,
+    source: *const c_char,
+    out_n_frames: *mut u32,
+) -> c_int {
+    if text.is_null() {
+        return RKRDB_NULL;
+    }
+    let text = match unsafe { CStr::from_ptr(text) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return RKRDB_ERR,
+    };
+    let source = if source.is_null() {
+        "memory"
+    } else {
+        match unsafe { CStr::from_ptr(source) }.to_str() {
+            Ok(s) if !s.is_empty() => s,
+            Ok(_) => "memory",
+            Err(_) => return RKRDB_ERR,
+        }
+    };
+    let corpus = match corpus_arc(id) {
+        Ok(c) => c,
+        Err(c) => return c,
+    };
+    match corpus.append_trajectory_str(traj_id, text, source) {
+        Ok(n) => {
+            if !out_n_frames.is_null() {
+                unsafe { *out_n_frames = n };
+            }
+            RKRDB_OK
+        }
+        Err(e) => {
+            set_err_id(id, e);
+            RKRDB_ERR
+        }
+    }
+}
+
+/// Ingest one parsed `RKRConFrame*` from libreadcon_core. Caller keeps the handle.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_append_trajectory_frame(
+    id: usize,
+    traj_id: u64,
+    frame: *const std::ffi::c_void,
+    source: *const c_char,
+    out_n_frames: *mut u32,
+) -> c_int {
+    if frame.is_null() {
+        return RKRDB_NULL;
+    }
+    let source = if source.is_null() {
+        "memory"
+    } else {
+        match unsafe { CStr::from_ptr(source) }.to_str() {
+            Ok(s) if !s.is_empty() => s,
+            Ok(_) => "memory",
+            Err(_) => return RKRDB_ERR,
+        }
+    };
+    let corpus = match corpus_arc(id) {
+        Ok(c) => c,
+        Err(c) => return c,
+    };
+    let parsed = unsafe { &*(frame as *const readcon_core::types::ConFrame) };
+    match corpus.append_trajectory_frames(traj_id, std::slice::from_ref(parsed), source) {
+        Ok(n) => {
+            if !out_n_frames.is_null() {
+                unsafe { *out_n_frames = n };
+            }
+            RKRDB_OK
+        }
+        Err(e) => {
+            set_err_id(id, e);
+            RKRDB_ERR
+        }
+    }
+}
+
 /// Create the trajectory or append frames after the live count.
 /// `units_json` is optional; NULL stamps nothing on the new frames.
 #[no_mangle]
@@ -1314,6 +1397,36 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("resources/test")
             .join(name)
+    }
+
+    #[test]
+    fn c_abi_append_str_and_frame() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = CString::new(dir.path().to_str().unwrap()).unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let ctext = CString::new(text).unwrap();
+        let src = CString::new("mem").unwrap();
+        let mut id = 0usize;
+        let mut n = 0u32;
+        unsafe {
+            assert_eq!(rkrdb_open(path.as_ptr(), &mut id), RKRDB_OK);
+            assert_eq!(
+                rkrdb_append_trajectory_str(id, 1, ctext.as_ptr(), src.as_ptr(), &mut n),
+                RKRDB_OK
+            );
+            assert!(n >= 1);
+            let handle = rkrdb_get_frame(id, 1, 0);
+            assert!(!handle.is_null());
+            let mut n2 = 0u32;
+            assert_eq!(
+                rkrdb_append_trajectory_frame(id, 2, handle, src.as_ptr(), &mut n2),
+                RKRDB_OK
+            );
+            assert!(n2 >= 1);
+            let again = rkrdb_get_frame(id, 2, 0);
+            assert!(!again.is_null());
+            rkrdb_close(id);
+        }
     }
 
     #[test]

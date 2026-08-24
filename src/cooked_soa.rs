@@ -194,15 +194,15 @@ pub fn encode_batch(blobs: &[Vec<u8>]) -> Result<Vec<u8>> {
 
 pub fn decode_batch(bytes: &[u8]) -> Result<Vec<Vec<u8>>> {
     if bytes.len() < 12 {
-        return Err(Error::Message("RCSO batch truncated header".into()));
+        return Err(Error::Message("RCSB truncated header".into()));
     }
     if &bytes[0..4] != BATCH_MAGIC {
-        return Err(Error::Message("RCSO batch bad magic".into()));
+        return Err(Error::Message("RCSB bad magic".into()));
     }
     let version = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
     if version != BATCH_VERSION {
         return Err(Error::Message(format!(
-            "RCSO batch unsupported version {version}"
+            "RCSB unsupported version {version}"
         )));
     }
     let n = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
@@ -210,12 +210,12 @@ pub fn decode_batch(bytes: &[u8]) -> Result<Vec<Vec<u8>>> {
     let mut out = Vec::with_capacity(n);
     for _ in 0..n {
         if off + 4 > bytes.len() {
-            return Err(Error::Message("RCSO batch truncated length".into()));
+            return Err(Error::Message("RCSB truncated length".into()));
         }
         let ln = u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap()) as usize;
         off += 4;
         if off + ln > bytes.len() {
-            return Err(Error::Message("RCSO batch truncated blob".into()));
+            return Err(Error::Message("RCSB truncated blob".into()));
         }
         out.push(bytes[off..off + ln].to_vec());
         off += ln;

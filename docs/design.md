@@ -56,7 +56,7 @@ Formula encoding: sorted non-empty symbols, `Sym:count` joined by `|` (e.g. `Cu:
 ## Ingest paths
 
 1. Path / multi-frame CON text (`append_trajectory_path` / `append_trajectory_str`) with `next_with_raw_span` when possible.
-2. **In-memory frames** (`append_trajectory_frames` / `extend_trajectory_frames`) for chemfiles → `ConFrame` → corpus without a temp file.
+2. **In-memory frames** (`append_trajectory_frames` / `extend_trajectory_frames`) for chemfiles → `ConFrame` → corpus without a temp file. Python: `append_trajectory_str` / `append_trajectory_frames`. C: `rkrdb_append_trajectory_str` / `rkrdb_append_trajectory_frame` (`RKRConFrame*`).
 3. Directory ingest (`ingest_directory`).
 
 ## Reindex

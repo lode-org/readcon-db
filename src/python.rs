@@ -246,6 +246,38 @@ impl PyConCorpus {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// Ingest CON text without a temp file.
+    #[pyo3(signature = (traj_id, text, source="memory"))]
+    fn append_trajectory_str(
+        &self,
+        traj_id: u64,
+        text: &str,
+        source: &str,
+    ) -> PyResult<u32> {
+        self.inner
+            .append_trajectory_str(traj_id, text, source)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Ingest already-parsed `readcon` frames (serialized via write_con_string).
+    #[pyo3(signature = (traj_id, frames, source="memory"))]
+    fn append_trajectory_frames(
+        &self,
+        py: Python<'_>,
+        traj_id: u64,
+        frames: Bound<'_, PyAny>,
+        source: &str,
+    ) -> PyResult<u32> {
+        let readcon = py
+            .import("readcon")
+            .map_err(|e| PyRuntimeError::new_err(format!("readcon required: {e}")))?;
+        let text: String = readcon
+            .call_method1("write_con_string", (frames,))
+            .and_then(|v| v.extract())
+            .map_err(|e| PyRuntimeError::new_err(format!("write_con_string: {e}")))?;
+        self.append_trajectory_str(traj_id, &text, source)
+    }
+
     /// Write caller units onto every frame of `traj_id` (canonical names in CON text).
     fn set_units(&self, traj_id: u64, units: Bound<'_, PyDict>) -> PyResult<u32> {
         let u = units_from_pydict(Some(units))?

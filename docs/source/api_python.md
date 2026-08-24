@@ -8,11 +8,15 @@ maturin develop --features python
 ```
 
 ```python
+from pathlib import Path
+import readcon
 from readcon_db import ConCorpus
 
 db = ConCorpus("/tmp/corpus")
 ro = ConCorpus("/tmp/corpus", readonly=True)
 db.append_trajectory(1, "run.con")
+db.append_trajectory_str(2, Path("run.con").read_text(), source="run.con")
+db.append_trajectory_frames(3, readcon.read_con("run.con"))
 keys = db.select(
     traj_id=1,
     symbol="Cu",
