@@ -58,4 +58,6 @@ when you control the stack.
 Even though ASE can open many legacy `.con` files, `.db` is SQLite + `Atoms`:
 weaker multi-reader behavior, no CON-native symbol index, and forces/convel/spec
 v3 gaps on the ASE CON reader. CSE benchmarks (insert/extract/concurrency) are
-in `examples/benchmarks/` and the CPC paper § on ASE `.db` vs readcon-db.
+in `examples/benchmarks/` and, if the CPC paper includes a store-comparison
+appendix, the frozen fair campaign in `paper/cpc/freeze/` (companion material;
+not a second CPC article).

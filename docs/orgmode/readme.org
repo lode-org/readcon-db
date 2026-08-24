@@ -7,6 +7,7 @@
 |-------+------------+-----------|
 | Dual tier / RCSO | [[file:cooked-soa.org][cooked-soa.org]] | Sphinx =architecture.md= + =api_*.md= summaries; this map |
 | Install / overview | Sphinx MyST under =docs/source/= (keep aligned with tier rules) | =sphinx-build= |
+| CPC companion / freeze | [[file:../../paper/cpc/readme.org][paper/cpc/readme.org]] | Sphinx =cpc.md=; TeX from =gen_fair_table.py= |
 | Marketing site | =website/index.html= | static |
 | Logo | =assets/logo/= | |
 

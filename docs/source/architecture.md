@@ -96,4 +96,5 @@ select avoids decode.
 ```
 
 Fortran uses `bind(C)` wrappers under `fortran/ReadConDb/` (docs-level snippet;
-not a long CPC listing).
+not a long CPC listing). The CPC manuscript is the readcon-core paper; this
+crate is the companion campaign store ([CPC companion](cpc.md)).

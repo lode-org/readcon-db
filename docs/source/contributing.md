@@ -64,3 +64,12 @@ git push origin vX.Y.Z
 Do not hand-edit the generated `CHANGELOG.md` section. Extend `cog.toml`
 `[commit_types]` if a historical type blocks `cog changelog`. Push only the
 version tag (`git push origin vX.Y.Z`), not every local tag.
+
+The CPC manuscript is the readcon-core paper; this crate is the companion
+campaign store. Appendix timings, if used, are the freeze under
+`paper/cpc/freeze/`. Check the generated table without re-running the
+campaign:
+
+```bash
+python paper/cpc/scripts/gen_fair_table.py --check
+```

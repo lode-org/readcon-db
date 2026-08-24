@@ -64,6 +64,9 @@ else
 fi
 lychee --config lychee.toml 'docs/_build/html/**/*.html'
 
+echo "==> CPC fair-campaign freeze"
+scripts/check-cpc-freeze.sh
+
 echo "==> C/C++ distribution gate (no cbindgen required)"
 scripts/check-cxx-dist.sh
 

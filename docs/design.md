@@ -99,10 +99,10 @@ Screening scalars and ingest rules live in **readcon-core** so this crate does n
 
 | Crate | Responsibility |
 |-------|----------------|
-| [readcon-core](https://github.com/lode-org/readcon-core) | CON/convel interchange, chemfiles ingress, multi-language hourglass ABI |
-| **readcon-db** (this repo) | Campaign corpora, indexes, mmap multi-reader, exact dedup, reindex |
+| [readcon-core](https://github.com/lode-org/readcon-core) | CON/convel interchange, chemfiles ingress, multi-language hourglass ABI. CPC manuscript main claim. |
+| **readcon-db** (this repo) | Companion campaign store: corpora, indexes, mmap multi-reader, exact dedup, reindex. Not a second CPC paper. |
 
-ASE is calculator-only; not the campaign store.
+ASE is calculator-only; not the campaign store. Fair ASE.db timings for a CPC appendix, if used, are the freeze in `paper/cpc/freeze/`.
 
 ## Security / multi-tenant
 

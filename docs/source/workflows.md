@@ -93,23 +93,29 @@ a write failure removes the dest). `Lattice` is the same triclinic
 
 ## ASE `.db` comparison (measurement only)
 
-See repository `examples/benchmarks/` and the CPC manuscript CSE section. Those timings
-are **unequal workloads** (lightweight ASE `Cu2` stand-ins vs full CON parse+index on
-readcon-db)—CSE orientation for multi-reader behaviour, **not** a fair store-vs-store
-parity claim and **not** “store Atoms in ASE.db” as the product path.
+The CPC manuscript is the readcon-core paper. This crate is the companion
+campaign store. A store-comparison appendix, if used, is the frozen **fair**
+campaign in `paper/cpc/freeze/` ([CPC companion](cpc.md)), not a product path
+and not “store `Atoms` in ASE.db”.
 
+Legacy `examples/benchmarks/bench_ase_db.py` Cu2 stand-ins are **unequal
+workloads** (lightweight ASE rows vs full CON parse+index). Keep them as
+artifacts only; do not promote them into the paper table.
 
 ## Fair ASE.db vs readcon-db campaign
 
 Use **`examples/benchmarks/fair_campaign.py`**: builds a multi-frame CON ladder from a real fixture,
 loads **the same frames** into ASE `.db` (via readcon geometry → `Atoms`) and **readcon-db**,
 records insert/extract/competitive select/8-reader timings, and checks **hit-count agreement**
-for symbol `Cu` and `natoms` range. Results: JSON `ase_fair_campaign_{run}.json` and markdown table.
+for symbol `Cu` and `natoms` range. Live results: JSON `ase_fair_campaign_{run}.json` and
+markdown table. The paper freeze is a copy under `paper/cpc/freeze/`; re-running this
+script does not move that freeze.
 
 ```bash
 # venv with ase + maturin-developed readcon / readcon_db
 python examples/benchmarks/fair_campaign.py --out /tmp/fair_out --run-id 1
 python examples/benchmarks/test_fair_select_parity.py
+python paper/cpc/scripts/gen_fair_table.py --check
 ```
 
 Legacy `bench_ase_db.py` Cu2 timings are **unequal-workload** artifacts only.
