@@ -15,6 +15,7 @@ api_c
 api_python
 api_fortran
 install
+campaign
 workflows
 cpc
 contributing

@@ -2,8 +2,9 @@
 
 Module: `fortran/ReadConDb/src/readcon_db.f90` (`bind(C)` to `rkrdb_*`).
 
-1. `cargo build --release` in the crate root.
-2. Link `libreadcon_db` and use the module:
+Link `libreadcon_db` from a checkout (`cargo build --release`) or from
+the prebuilt `readcon-db-clib-$VERSION-$target.tar.gz` Release asset
+(no local cargo). See [install](install.md) and `fortran/README.md`.
 
 ```fortran
 use readcon_db
@@ -19,7 +20,7 @@ call db_extend_units(id, 1_c_int64_t, "more.con", &
 call db_select_basic(id, 1_c_int64_t, "Cu", 1, 100000, 0, status)
 ```
 
-See helpers `db_open`, `db_append`, `db_select_basic`, `db_result_count`, `db_result_key`, `db_frame_hash`, `db_xxh3_128` in the module source. Point your build system at `include/` for the C header if needed and `target/release/`.
+See helpers `db_open`, `db_append`, `db_select_basic`, `db_result_count`, `db_result_key`, `db_frame_hash`, `db_xxh3_128` in the module source. Point your build system at `include/` for the C header if needed and `target/release/` (or the clib prefix `lib/` + `PKG_CONFIG_PATH`). Campaign shard/drain/join is the CLI; a Fortran rank that owns one shard opens `root/shard_XXXX` with `db_open` ([campaign ops](campaign.md)).
 
 ## MPI: pack on root, Bcast on the caller INTEGER communicator
 

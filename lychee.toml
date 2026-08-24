@@ -17,6 +17,8 @@ exclude = [
   '^https://lode-org\.github\.io/readcon-core/',
   # Edit-this-page targets main; CI/PR runs before merge so blobs 404.
   '^https://github\.com/lode-org/readcon-db/blob/',
+  # clib assets attach via c_lib_tarball.yml after this lands.
+  '^https://github\.com/lode-org/readcon-db/releases/download/.*/readcon-db-clib-',
 ]
 
 exclude_path = [

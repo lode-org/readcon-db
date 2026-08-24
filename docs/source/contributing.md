@@ -29,16 +29,17 @@ pixi lock
 | Documentation | `ci_docs.yml` | push, PR | Locked Sphinx HTML (`pixi.lock`) + lychee |
 | Pages | `pages.yml` | push to main | Deploy site + locked Sphinx docs |
 | Lint | `lint.yml` | PR | Conventional commits + large-file audit |
-| C/C++ dist | `ci_cxx.yml` | push, PR | CMake/Meson/pkg-config without cbindgen |
+| C/C++ dist | `ci_cxx.yml` | push, PR | CMake/Meson/pkg-config without cbindgen; clib fixture gate |
 | crates.io | `crates_publish.yml` | `v*` tag | `cargo publish --locked` |
 | Python wheels | `python-wheels.yml` | `v*` tag, PR | maturin matrix → PyPI |
 | cxx tarball | `cxx_tarball.yml` | GitHub Release | slim + vendor C/C++ source tarballs |
+| C ABI tarball | `c_lib_tarball.yml` | GitHub Release + `workflow_dispatch` tag | Attach prebuilt `libreadcon_db` (`readcon-db-clib-$VER-$target`) |
 
 ## Release
 
 ```text
   scripts/release-prep.sh X.Y.Z
-        │  prek, sphinx + lychee, version bump, cog CHANGELOG, cxx-dist gate
+        │  prek, sphinx + lychee, version bump, cog CHANGELOG, cxx-dist + clib gate
         ▼
   commit: maint: bump to vX.Y.Z   ──►  open Pull Request to main
         ▼
@@ -46,8 +47,12 @@ pixi lock
         │
         ├─► workflow "Publish to crates.io": cargo publish --locked
         ├─► workflow "Python wheels": maturin matrix → PyPI
-        └─► workflow "cxx source tarball": after a GitHub Release exists
+        ├─► workflow "cxx source tarball": after a GitHub Release exists
+        └─► workflow "C ABI library tarball": prebuilt clib (or dispatch tag later)
 ```
+
+Attach prebuilt C ABI to an existing tag: Actions → **C ABI library
+tarball** → `tag=vX.Y.Z` on a branch that has `scripts/package-clib.sh`.
 
 ```bash
 prek run -a

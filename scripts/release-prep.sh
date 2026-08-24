@@ -70,6 +70,9 @@ scripts/check-cpc-freeze.sh
 echo "==> C/C++ distribution gate (no cbindgen required)"
 scripts/check-cxx-dist.sh
 
+echo "==> prebuilt C ABI gate (fixture, no cargo)"
+scripts/check-clib-dist.sh --self-test
+
 echo "==> stage release files"
 git add Cargo.toml Cargo.lock meson.build python/pyproject.toml \
   docs/source/conf.py CHANGELOG.md \
@@ -81,6 +84,7 @@ echo "  # open PR so CI (prek, cog, docs+lychee, cxx) runs"
 echo "  # after merge:"
 echo "  git tag -s v${VER} -m \"v${VER}\""
 echo "  git push origin v${VER}"
-echo "  # crates_publish.yml + python-wheels.yml + cxx_tarball.yml"
+echo "  # crates_publish.yml + python-wheels.yml + cxx_tarball.yml + c_lib_tarball.yml"
 echo "  # After the tag: scripts/package-cxx.sh dist/ --vendor"
 echo "  # Attach readcon-db-cxx-${VER}.tar.gz to the GitHub Release (cxx_tarball.yml)"
+echo "  # Attach readcon-db-clib-${VER}-\$target.tar.gz (c_lib_tarball.yml, or dispatch tag=v${VER})"

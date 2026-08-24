@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Packaging
+- Prebuilt C ABI tarball (`readcon-db-clib-$VERSION-$target.tar.gz`)
+  via `scripts/package-clib.sh` and `c_lib_tarball.yml` (shipped
+  headers + `libreadcon_db` + `readcon-db.pc`; cbindgen is not required)
+
+### Documentation
+- C/Fortran install from the prebuilt clib prefix (no local cargo)
+- Campaign ops runbook for multi-shard writers (`docs/source/campaign.md`)
+
 ### Tests
 - Cargo tests lock CON-text authority for cooked RCSO and cover
   numeric extract (positions, forces, velocities) on parse and cooked paths
