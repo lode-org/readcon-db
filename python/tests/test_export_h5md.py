@@ -216,6 +216,19 @@ def test_export_h5md_append_nm_scales_positions(tmp_path):
         assert t.shape[0] == 1
 
 
+def test_export_h5md_writes_velocity(tmp_path):
+    db = ConCorpus(str(tmp_path / "corpus"))
+    db.append_trajectory(1, str(FIXTURE / "tiny_cuh2.convel"))
+    out = tmp_path / "vel.h5"
+    db.export_h5md(1, str(out))
+    with h5py.File(out, "r") as f:
+        v = f["particles/all/velocity/value"]
+        assert v.ndim == 3
+        assert v.shape[2] == 3
+        assert np.any(v[:] != 0.0)
+        assert _as_str(v.attrs["unit"]) == "Angstrom/ps"
+
+
 def test_ingest_directory_units(tmp_path):
     src = tmp_path / "cons"
     src.mkdir()

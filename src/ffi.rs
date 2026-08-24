@@ -1240,6 +1240,27 @@ mod tests {
             // stamped A → dest Å; first Cu x on tiny_cuh2.con
             assert!((pos[0] - 0.6394).abs() < 1e-4, "dest A x0={}", pos[0]);
             assert!(pos.iter().any(|&x| x != 0.0));
+            let forces = CString::new(fixture("tiny_cuh2_forces.con").to_str().unwrap()).unwrap();
+            let ext_u = CString::new(r#"{"length":"A","energy":"ev"}"#).unwrap();
+            let mut n2 = 0u32;
+            assert_eq!(
+                rkrdb_extend_trajectory_units(
+                    id,
+                    1,
+                    forces.as_ptr(),
+                    ext_u.as_ptr(),
+                    &mut n2
+                ),
+                RKRDB_OK
+            );
+            assert!(n2 >= 1);
+            let mut buf2 = vec![0i8; 256];
+            assert_eq!(
+                rkrdb_frame_units(id, 1, 1, buf2.as_mut_ptr(), buf2.len()),
+                RKRDB_OK
+            );
+            let s2 = CStr::from_ptr(buf2.as_ptr()).to_str().unwrap();
+            assert!(s2.contains("angstrom"), "{s2}");
             assert_eq!(rkrdb_close(id), RKRDB_OK);
         }
     }

@@ -182,9 +182,23 @@ impl PyConCorpus {
                 &all,
                 "force",
                 f_arr,
+                step.clone(),
+                time.clone(),
+                a.force_unit.as_str(),
+                a.time_unit.as_str(),
+            )?;
+        }
+        if let Some(vbuf) = a.velocities {
+            let v_arr = np
+                .call_method("asarray", (vbuf,), Some(&dtype_kw))?
+                .call_method1("reshape", ((n_frames, natoms, 3),))?;
+            write_td(
+                &all,
+                "velocity",
+                v_arr,
                 step,
                 time,
-                a.force_unit.as_str(),
+                a.velocity_unit.as_str(),
                 a.time_unit.as_str(),
             )?;
         }

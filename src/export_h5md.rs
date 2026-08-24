@@ -19,6 +19,9 @@ pub struct H5mdArrays {
     pub species_z: Vec<i32>,
     /// `[T][N][3]` if any frame has forces; frames without forces are zeros.
     pub forces: Option<Vec<f64>>,
+    /// `[T][N][3]` if any frame has velocities; frames without are zeros.
+    pub velocities: Option<Vec<f64>>,
+    pub velocity_unit: String,
     /// H5MD `box` boundary strings, from CON `pbc` (periodic when absent).
     pub boundary: [String; 3],
     /// `[T]` times in [`H5MD_TIME_ATTR`] (CON time or `i * timestep`, else frame index).
@@ -36,6 +39,7 @@ pub const H5MD_TIME_ATTR: &str = "ps";
 /// CON v3 default when `units.time` is absent (`default_v3_units_json`).
 pub const CON_TIME_DEFAULT: &str = "fs";
 pub const H5MD_FORCE_ATTR: &str = "kJ mol-1 Angstrom-1";
+pub const H5MD_VELOCITY_ATTR: &str = "Angstrom/ps";
 /// 1 kJ mol^{-1} Å^{-1} in N. CODATA 2018 N_A.
 const KJ_MOL_ANGSTROM_SI: f64 = (1000.0 / 6.022_140_76e23) / 1e-10;
 
@@ -166,11 +170,14 @@ impl ConCorpus {
         let mut edges = Vec::with_capacity(n_frames * 9);
         let mut times = Vec::with_capacity(n_frames);
         let mut force_rows: Vec<Option<Vec<[f64; 3]>>> = Vec::with_capacity(n_frames);
+        let mut vel_rows: Vec<Option<Vec<[f64; 3]>>> = Vec::with_capacity(n_frames);
         for k in &keys {
             let fr = self.get_frame(*k)?;
             let length_u = header_unit(&fr.header, "length", H5MD_LENGTH_CORE);
             let energy_u = header_unit(&fr.header, "energy", "eV");
+            let time_u = header_unit(&fr.header, "time", CON_TIME_DEFAULT);
             let len_scale = uc(&length_u, H5MD_LENGTH_CORE)?;
+            let vel_scale = len_scale / time_scale_to_ps(&time_u)?;
             times.push(frame_time_ps(&fr.header, k.frame_idx)?);
             let e33 = edges33_from_header(&fr.header);
             for x in e33 {
@@ -186,6 +193,14 @@ impl ConCorpus {
             for p in &cooked.positions {
                 positions.extend_from_slice(&[p[0] * len_scale, p[1] * len_scale, p[2] * len_scale]);
             }
+            vel_rows.push(match cooked.velocities {
+                Some(rows) => Some(
+                    rows.into_iter()
+                        .map(|r| [r[0] * vel_scale, r[1] * vel_scale, r[2] * vel_scale])
+                        .collect(),
+                ),
+                None => None,
+            });
             force_rows.push(match cooked.forces {
                 Some(rows) => {
                     let fscale = force_scale_to_engine(&energy_u, &length_u)?;
@@ -214,6 +229,22 @@ impl ConCorpus {
         } else {
             None
         };
+        let velocities = if vel_rows.iter().any(|v| v.is_some()) {
+            let mut vbuf = vec![0.0f64; n_frames * natoms * 3];
+            for (ti, vo) in vel_rows.iter().enumerate() {
+                if let Some(rows) = vo {
+                    let off = ti * natoms * 3;
+                    for (i, row) in rows.iter().enumerate() {
+                        vbuf[off + i * 3] = row[0];
+                        vbuf[off + i * 3 + 1] = row[1];
+                        vbuf[off + i * 3 + 2] = row[2];
+                    }
+                }
+            }
+            Some(vbuf)
+        } else {
+            None
+        };
         Ok(H5mdArrays {
             n_frames,
             natoms,
@@ -221,6 +252,8 @@ impl ConCorpus {
             edges,
             species_z,
             forces,
+            velocities,
+            velocity_unit: H5MD_VELOCITY_ATTR.into(),
             boundary,
             times,
             time_unit: H5MD_TIME_ATTR.into(),
@@ -479,5 +512,72 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(u["length"], "nm");
+    }
+
+    #[test]
+    fn collect_h5md_species_z_cu_h() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            .unwrap();
+        let a = db.collect_h5md(1).unwrap();
+        assert!(a.species_z.iter().any(|&z| z == 29), "{:?}", a.species_z);
+        assert!(a.species_z.iter().any(|&z| z == 1), "{:?}", a.species_z);
+    }
+
+    #[test]
+    fn collect_h5md_lattice_vectors_win() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let mut frames = Vec::new();
+        for item in readcon_core::iterators::ConFrameIterator::new(&text) {
+            frames.push(item.unwrap());
+        }
+        frames[0].header.metadata.insert(
+            "lattice_vectors".into(),
+            serde_json::json!([[2.0, 0.0, 0.0], [0.5, 2.0, 0.0], [0.0, 0.0, 3.0]]),
+        );
+        db.append_trajectory_frames(1, &frames, "t").unwrap();
+        let a = db.collect_h5md(1).unwrap();
+        assert!((a.edges[0] - 2.0).abs() < 1e-12);
+        assert!((a.edges[3] - 0.5).abs() < 1e-12);
+        assert!((a.edges[8] - 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn collect_h5md_writes_velocities() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.convel"))
+            .unwrap();
+        let a = db.collect_h5md(1).unwrap();
+        let v = a.velocities.expect("velocities");
+        assert_eq!(v.len(), a.n_frames * a.natoms * 3);
+        assert!(v.iter().any(|&x| x != 0.0));
+        assert_eq!(a.velocity_unit, "Angstrom/ps");
+    }
+
+    #[test]
+    fn extend_trajectory_path_units_stamps() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            .unwrap();
+        db.extend_trajectory_path_units(
+            1,
+            fixture("tiny_cuh2_forces.con"),
+            Some(serde_json::json!({"length":"A","energy":"ev"})),
+        )
+        .unwrap();
+        let u = db
+            .frame_units(crate::keys::FrameKey {
+                traj_id: 1,
+                frame_idx: 1,
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(u["length"], "angstrom");
+        assert_eq!(u["energy"], "eV");
     }
 }

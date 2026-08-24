@@ -29,9 +29,15 @@ Environment (Heed / LMDB)
 ├── idx_flags       : (flag_id ‖ FrameKey) → ()    # forces / velocities / has_energy
 ├── frame_by_hash   : xxh3-128 → FrameKey (first wins)
 ├── frames_soa      : FrameKey → RCSO cooked numerics (optional, derived)
-├── frame_by_hash   : xxh3-128 → FrameKey (first wins)
 └── hash_by_frame   : FrameKey → xxh3-128
 ```
+
+**H5MD interchange:** `collect_h5md` / `export_h5md` emit one `[T][N][3]`
+trajectory (position, optional force and velocity). CON text stays
+authority. Dest units are Å / ps / kJ mol^{-1} Å^{-1}.
+
+**Drain/join:** node-local `shard-ingest`, `drain_to` compact-snapshots
+`data.mdb` (refuse overwrite), then `join-drained`.
 
 **Cooked SoA tier:** optional RCSO in `frames_soa` accelerates `get_positions` / `get_forces` without CON parse when valid; CON text in `frames` remains sole authority for hash/dedup/join/reindex. RCSO is not fully equivalent (no symbols/metadata/exact bytes). See `docs/orgmode/cooked-soa.org`.
 

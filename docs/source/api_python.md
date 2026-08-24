@@ -77,6 +77,7 @@ on the Python module. Callers write aliases (`A`, `ev`, `femtosecond`);
 `ingest_directory(..., units={...})`, and `set_units(traj_id, {...})`
 store canonical names (`angstrom`, `eV`, `fs`) in CON metadata. `append` / `extend` stamp the incoming numbers;
 `set_units` converts stored numbers so the new label is honest.
+`get_units(traj_id, frame_idx)` returns the stored JSON object.
 Mixed-force trajectories write a full `[T][N][3]` force dataset
 (zeros on frames without forces). Box `boundary` follows CON `pbc`
 (periodic when absent). Time is CON `header.time()`, or `i * timestep`,

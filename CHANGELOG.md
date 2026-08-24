@@ -8,8 +8,8 @@
   (no `lock.mdb`) after node-local ingest and refuses dest overwrite
 - Callers write units (`append_trajectory(..., units=)`,
   `extend_trajectory(..., units=)`, `set_units`, CLI `--units`,
-  C `rkrdb_append_trajectory_units` / `rkrdb_set_units` /
-  `rkrdb_h5md_times`, Fortran `db_append_units`);
+  C `rkrdb_append_trajectory_units` / `rkrdb_extend_trajectory_units` /
+  `rkrdb_set_units`, Fortran `db_append_units` / `db_extend_units`);
   aliases are canonicalized into CON metadata (`A` → `angstrom`).
   `set_units` converts stored numbers; append/extend stamp incoming
   values.
@@ -26,7 +26,8 @@
 - Python `export_h5md` writes H5MD 1.1 interchange via h5py (CON stays authority):
   `/h5md` author/creator, `position/value` `[T][N][3]`, `position/step` and
   `position/time` `[T]`, `box/edges/value` `[T][3][3]`, integer-Z species,
-  CON `pbc` on `box/boundary`. Mixed-force frames pad zeros.
+  CON `pbc` on `box/boundary`. Mixed-force frames pad zeros. CON
+  velocities write `particles/all/velocity` `[T][N][3]` dest Å/ps.
   `ConCorpus::collect_h5md` owns the arrays. `extend_trajectory` is on
   Rust, Python, C (`rkrdb_extend_trajectory_units`), C++, and Fortran.
 - MPI pack/Bcast helper takes the **caller communicator** (`include/readcon-db-mpi.h`,

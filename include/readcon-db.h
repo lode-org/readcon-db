@@ -167,6 +167,11 @@ public:
     return n;
   }
 
+  void frame_units(uint64_t traj_id, uint32_t frame_idx, char *buf, size_t buflen) {
+    if (rkrdb_frame_units(id_, traj_id, frame_idx, buf, buflen) != RKRDB_OK)
+      throw std::runtime_error("frame_units failed");
+  }
+
   int select_basic(int64_t traj_id, const char *symbol, uint32_t nmin, uint32_t nmax,
                    uint32_t limit) {
     return rkrdb_select_basic(id_, traj_id, symbol, nmin, nmax, limit);

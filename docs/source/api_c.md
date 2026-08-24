@@ -11,7 +11,11 @@ uint32_t n;
 rkrdb_append_trajectory(id, 1, "run.con", &n);
 rkrdb_append_trajectory_units(id, 1, "run.con",
     "{\"length\":\"A\",\"energy\":\"ev\"}", &n);
+rkrdb_extend_trajectory_units(id, 1, "more.con",
+    "{\"length\":\"A\",\"energy\":\"ev\"}", &n);
 rkrdb_set_units(id, 1, "{\"length\":\"nm\",\"energy\":\"eV\"}", &n);
+char ubuf[256];
+rkrdb_frame_units(id, 1, 0, ubuf, sizeof ubuf);
 double t[64]; uint32_t nt = 0;
 rkrdb_h5md_times(id, 1, t, 64, &nt);
 uint32_t nf = 0, na = 0;
@@ -42,7 +46,10 @@ C++ RAII:
 #include "readcon-db.h"
 readcon_db::Corpus db("/tmp/corpus");
 db.append_trajectory(1, "run.con", "{\"length\":\"A\",\"energy\":\"ev\"}");
+db.extend_trajectory(1, "more.con", "{\"length\":\"A\",\"energy\":\"ev\"}");
 db.set_units(1, "{\"length\":\"nm\",\"energy\":\"eV\"}");
+char ubuf[256];
+db.frame_units(1, 0, ubuf, sizeof ubuf);
 uint32_t nf = 0, na = 0;
 db.h5md_shape(1, &nf, &na);
 double xyz[4096];
