@@ -535,6 +535,14 @@ mod tests {
         assert!((decoded.positions[0][0] - 0.6394).abs() < 1e-4);
         assert!((from_rcso.positions[0] - 0.6394).abs() < 1e-4);
         assert_eq!(decoded.positions[0][0], from_con.positions[0]);
+        // tiny_multi_cuh2.con frame 1 first H: dest Å x = 8.8549
+        let i_h1 = from_rcso.natoms * 3 + 2 * 3;
+        assert!(
+            (from_rcso.positions[i_h1] - 8.8549).abs() < 1e-4,
+            "frame1 H x={}",
+            from_rcso.positions[i_h1]
+        );
+        assert!((from_con.positions[i_h1] - 8.8549).abs() < 1e-4);
     }
 
     #[test]
@@ -580,6 +588,11 @@ mod tests {
         let scale = uc("nm", "angstrom").unwrap();
         assert!((scale - 10.0).abs() < 1e-12);
         assert!((a.edges[0] - box0 * scale).abs() < 1e-9);
+        assert!(
+            (a.positions[0] - 0.6394 * scale).abs() < 1e-4,
+            "dest Å x0 from nm-labelled CON, got {}",
+            a.positions[0]
+        );
         assert_eq!(a.length_unit, "Angstrom");
     }
 
@@ -693,6 +706,13 @@ mod tests {
             "i=1 * 10 fs -> 0.01 ps, got {}",
             a.times[1]
         );
+        assert!((a.positions[0] - 0.6394).abs() < 1e-4);
+        let i_h1 = a.natoms * 3 + 2 * 3;
+        assert!(
+            (a.positions[i_h1] - 8.8549).abs() < 1e-4,
+            "frame1 H dest Å x={}",
+            a.positions[i_h1]
+        );
     }
 
     #[test]
@@ -804,7 +824,7 @@ mod tests {
     fn collect_h5md_after_cook_and_set_units() {
         let dir = tempfile::tempdir().unwrap();
         let db = ConCorpus::open(dir.path()).unwrap();
-        db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+        db.append_trajectory_path(1, fixture("tiny_cuh2_forces.con"))
             .unwrap();
         db.cook_frame(crate::keys::FrameKey {
             traj_id: 1,
@@ -832,6 +852,21 @@ mod tests {
             assert!(
                 (b - a).abs() < 1e-9,
                 "dest Å positions after cook+set_units[{i}]: {b} vs {a}"
+            );
+        }
+        let bf = before.forces.expect("dest forces");
+        let af = after.forces.expect("dest forces after set_units");
+        assert_eq!(bf.len(), af.len());
+        let factor = force_scale_to_engine("eV", "angstrom").unwrap();
+        assert!(
+            (bf[0] - 0.123456 * factor).abs() < 1e-6,
+            "dest force0={}",
+            bf[0]
+        );
+        for (i, (b, a)) in bf.iter().zip(af.iter()).enumerate() {
+            assert!(
+                (b - a).abs() < 1e-8,
+                "dest force after cook+set_units[{i}]: {b} vs {a}"
             );
         }
         assert_eq!(

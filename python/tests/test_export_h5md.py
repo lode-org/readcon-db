@@ -74,6 +74,8 @@ def test_export_h5md_tn3_and_units(tmp_path):
         assert _as_str(f["particles/all/position/value"].attrs["unit"]) == "Angstrom"
         assert _as_str(f["particles/all/position/time"].attrs["unit"]) == "ps"
         assert _as_str(f["particles/all/box/edges/value"].attrs["unit"]) == "Angstrom"
+        assert abs(float(pos[0][0][0]) - 0.6394) < 1e-4
+        assert abs(float(pos[1][2][0]) - 8.8549) < 1e-4
 
 
 def test_export_h5md_two_frame_distinct_boxl(tmp_path):
@@ -330,6 +332,8 @@ def test_export_h5md_mdanalysis_reader(tmp_path):
     assert reader.n_frames == n
     assert reader.n_atoms >= 1
     assert abs(float(reader.ts.positions[0, 0]) - 0.6394) < 1e-3
+    reader[1]
+    assert abs(float(reader.ts.positions[2, 0]) - 8.8549) < 1e-3
 
 
 def test_export_h5md_mdanalysis_reader_with_forces(tmp_path):

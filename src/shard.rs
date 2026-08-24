@@ -1022,6 +1022,21 @@ mod compaction_tests {
         let joined = dir.path().join("joined");
         let n = join_drained_roots(&[dest], &joined).unwrap();
         assert!(n >= 2, "joined frames={n}");
+        let db = ConCorpus::open(&joined).unwrap();
+        let p0 = db
+            .get_positions(crate::keys::FrameKey {
+                traj_id: 0,
+                frame_idx: 0,
+            })
+            .unwrap();
+        let p1 = db
+            .get_positions(crate::keys::FrameKey {
+                traj_id: 0,
+                frame_idx: 1,
+            })
+            .unwrap();
+        assert!((p0[0][0] - 0.6394).abs() < 1e-4);
+        assert!((p1[2][0] - 8.8549).abs() < 1e-4);
     }
 
     #[test]
@@ -1035,6 +1050,42 @@ mod compaction_tests {
         let dest = dir.path().join("out");
         let n = join_corpus_dirs(&[a], &dest).unwrap();
         assert!(n >= 2, "joined frames={n}");
+        let db = ConCorpus::open(&dest).unwrap();
+        let p0 = db
+            .get_positions(crate::keys::FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap();
+        let p1 = db
+            .get_positions(crate::keys::FrameKey {
+                traj_id: 1,
+                frame_idx: 1,
+            })
+            .unwrap();
+        assert!((p0[0][0] - 0.6394).abs() < 1e-4);
+        assert!((p1[2][0] - 8.8549).abs() < 1e-4);
+    }
+
+    #[test]
+    fn drain_to_n_shards_mismatch_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        let dest = dir.path().join("dest");
+        ShardedConCorpus::open(&src, 2).unwrap();
+        ShardedConCorpus::open(&dest, 4).unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        ShardedConCorpus::open_shard(&src, 0)
+            .unwrap()
+            .append_trajectory_str(0, &text, "a")
+            .unwrap();
+        let err = ShardedConCorpus::drain_to(&src, &dest).unwrap_err();
+        assert!(err.to_string().contains("n_shards"), "{err}");
+        let man: ShardManifest =
+            serde_json::from_str(&std::fs::read_to_string(dest.join("shards.json")).unwrap())
+                .unwrap();
+        assert_eq!(man.n_shards, 4);
+        assert!(!dest.join("shard_0000").join("data.mdb").is_file());
     }
 
     #[test]

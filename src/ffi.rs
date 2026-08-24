@@ -2,13 +2,13 @@
 //!
 //! Status codes mirror a small subset of readcon-core style (negative = error).
 
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 use std::ptr;
 use std::sync::{Arc, Mutex};
 
 use crate::corpus::ConCorpus;
-use crate::keys::{hash_frame_bytes, ContentHash, FrameKey};
+use crate::keys::{hash_frame_bytes, FrameKey};
 use crate::select::Select;
 
 pub const RKRDB_OK: c_int = 0;
@@ -1302,18 +1302,6 @@ pub unsafe extern "C" fn rkrdb_xxh3_128(data: *const u8, len: usize, out_hash16:
     let b = h.to_bytes();
     unsafe { ptr::copy_nonoverlapping(b.as_ptr(), out_hash16, 16) };
     RKRDB_OK
-}
-
-// silence unused CString in some builds
-#[allow(dead_code)]
-fn _cs(s: &str) -> Result<CString, c_int> {
-    CString::new(s).map_err(|_| RKRDB_ERR)
-}
-
-// ContentHash used in find path
-#[allow(dead_code)]
-fn _ch(b: [u8; 16]) -> ContentHash {
-    ContentHash(b)
 }
 
 #[cfg(test)]
