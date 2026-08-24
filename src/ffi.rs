@@ -1830,6 +1830,52 @@ mod tests {
                 times0[0],
                 times1[0]
             );
+            let mut timed = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+            let mut tlines: Vec<String> = timed.lines().map(str::to_string).collect();
+            tlines[1] = concat!(
+                r#"{"con_spec_version":3,"time":12.5,"#,
+                r#""units":{"length":"angstrom","energy":"eV","time":"fs"}}"#
+            )
+            .to_string();
+            timed = tlines.join("\n");
+            timed.push('\n');
+            let ttext = CString::new(timed).unwrap();
+            let tsrc = CString::new("memory").unwrap();
+            let mut ntimed = 0u32;
+            assert_eq!(
+                rkrdb_append_trajectory_str(
+                    id,
+                    2,
+                    ttext.as_ptr(),
+                    tsrc.as_ptr(),
+                    &mut ntimed
+                ),
+                RKRDB_OK
+            );
+            let mut t0 = [0.0f64; 8];
+            let mut nt0 = 0u32;
+            assert_eq!(
+                rkrdb_h5md_times(id, 2, t0.as_mut_ptr(), t0.len(), &mut nt0),
+                RKRDB_OK
+            );
+            assert!((t0[0] - 0.0125).abs() < 1e-12, "dest time fs->ps {}", t0[0]);
+            let tunits = CString::new(r#"{"length":"angstrom","energy":"eV","time":"ps"}"#).unwrap();
+            let mut nset2 = 0u32;
+            assert_eq!(
+                rkrdb_set_units(id, 2, tunits.as_ptr(), &mut nset2),
+                RKRDB_OK
+            );
+            let mut t1 = [0.0f64; 8];
+            let mut nt1t = 0u32;
+            assert_eq!(
+                rkrdb_h5md_times(id, 2, t1.as_mut_ptr(), t1.len(), &mut nt1t),
+                RKRDB_OK
+            );
+            assert!(
+                (t1[0] - 0.0125).abs() < 1e-12,
+                "dest time after set_units time {}",
+                t1[0]
+            );
             assert_eq!(rkrdb_close(id), RKRDB_OK);
         }
     }
