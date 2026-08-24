@@ -142,6 +142,10 @@ assert_unpacked() {
         | grep -q .; then
         die "$tarpath: must not ship cbindgen or cbindgen.toml"
     fi
+
+    if [[ ! -f "$root/bin/readcon-db" && ! -f "$root/bin/readcon-db.exe" ]]; then
+        die "$tarpath: missing bin/readcon-db (campaign CLI)"
+    fi
 }
 
 # --- fixture prefix so the unpack path runs without cargo ---
