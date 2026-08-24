@@ -28,7 +28,10 @@ raw = ConCorpus.xxh3_128(b"blob")
 ```
 
 Optional `select` kwargs: `exact_hash=` (16-byte LE xxh3-128), `energy_min` /
-`energy_max`, `require_forces`, `require_velocities`, `require_energy`, `limit`.
+`energy_max`, `fmax_min` / `fmax_max`, `mass_min` / `mass_max`,
+`volume_min` / `volume_max`, `frame_index_min` / `frame_index_max`,
+`charge_min` / `charge_max`, `element_exact`, `element_min`, `formula`,
+`require_forces`, `require_velocities`, `require_energy`, `limit`.
 
 ## MPI: pack on root, Bcast on the caller communicator
 
@@ -61,6 +64,8 @@ Cooked H5MD 1.1 interchange (h5py; fixed `natoms`; CON stays authority):
 ```python
 db.export_h5md(traj_id=1, path="traj.h5")
 ```
+
+Dest must not exist. `File` `"x"`; a write failure removes the dest.
 
 The file has `/h5md` version `[1,1]` with `author`/`creator`,
 `particles/all/position/value` of shape `[T][N][3]`,

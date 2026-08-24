@@ -57,6 +57,21 @@ def test_export_h5md_tn3_and_units(tmp_path):
         assert _as_str(f["particles/all/box/edges/value"].attrs["unit"]) == "Angstrom"
 
 
+def test_export_h5md_triclinic_edges_from_angles(tmp_path):
+    text = (FIXTURE / "tiny_cuh2.con").read_text()
+    lines = text.splitlines()
+    lines[3] = "60.000000\t90.000000\t70.000000"
+    p = tmp_path / "tri.con"
+    p.write_text("\n".join(lines) + "\n")
+    db = ConCorpus(str(tmp_path / "corpus"))
+    db.append_trajectory(1, str(p))
+    out = tmp_path / "tri.h5"
+    db.export_h5md(1, str(out))
+    with h5py.File(out, "r") as f:
+        edges = f["particles/all/box/edges/value"][0]
+        assert abs(float(edges[1, 0])) > 1e-6
+
+
 def test_export_h5md_refuses_existing_dest(tmp_path):
     db = ConCorpus(str(tmp_path / "corpus"))
     db.append_trajectory(1, str(FIXTURE / "tiny_cuh2.con"))

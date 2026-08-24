@@ -90,6 +90,68 @@ fn cook_missing_path_does_not_mint() {
 }
 
 #[test]
+fn compact_join_missing_src_does_not_mint() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("nope");
+    let dest = dir.path().join("joined");
+    let st = bin()
+        .args([
+            "compact-join",
+            src.to_str().unwrap(),
+            dest.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(!st.success());
+    assert!(!src.join("shards.json").exists());
+    assert!(!src.exists());
+    assert!(!dest.exists());
+}
+
+#[test]
+fn reindex_missing_path_does_not_mint() {
+    let dir = tempfile::tempdir().unwrap();
+    let corpus = dir.path().join("nope");
+    let st = bin()
+        .args(["reindex", corpus.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(!st.success());
+    assert!(!corpus.exists());
+}
+
+#[test]
+fn recook_all_missing_path_does_not_mint() {
+    let dir = tempfile::tempdir().unwrap();
+    let corpus = dir.path().join("nope");
+    let st = bin()
+        .args(["recook-all", corpus.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(!st.success());
+    assert!(!corpus.exists());
+}
+
+#[test]
+fn delete_cooked_missing_path_does_not_mint() {
+    let dir = tempfile::tempdir().unwrap();
+    let corpus = dir.path().join("nope");
+    let st = bin()
+        .args([
+            "delete-cooked",
+            corpus.to_str().unwrap(),
+            "--traj",
+            "1",
+            "--frame",
+            "0",
+        ])
+        .status()
+        .unwrap();
+    assert!(!st.success());
+    assert!(!corpus.exists());
+}
+
+#[test]
 fn positions_missing_path_does_not_mint() {
     let dir = tempfile::tempdir().unwrap();
     let corpus = dir.path().join("nope");

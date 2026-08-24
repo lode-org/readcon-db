@@ -548,9 +548,14 @@ impl ShardedConCorpus {
                 preview_traj(&mut preview, fk.traj_id, u64::from(sid))?;
             }
         }
-        let out = ConCorpus::open(dst)?;
-        let mut seen_traj = std::collections::BTreeSet::new();
-        append_sharded_into(self, &out, &mut seen_traj)
+        let n = (|| -> Result<u32> {
+            let out = ConCorpus::open(dst)?;
+            let mut seen_traj = std::collections::BTreeSet::new();
+            let n = append_sharded_into(self, &out, &mut seen_traj)?;
+            out.close();
+            Ok(n)
+        })();
+        rollback_new_dest(dst, n)
     }
 
     /// Join into a temp single-env, export extxyz, then remove the temp dest.
@@ -605,24 +610,27 @@ impl ShardedConCorpus {
                 dst_root.display()
             )));
         }
-        let mut sharded = ShardedConCorpus::open(dst_root, n_shards)?;
-        let keys = single.list_frame_keys()?;
-        let mut by_traj: std::collections::BTreeMap<u64, Vec<FrameKey>> =
-            std::collections::BTreeMap::new();
-        for fk in keys {
-            by_traj.entry(fk.traj_id).or_default().push(fk);
-        }
-        let mut n = 0u32;
-        for (tid, mut fks) in by_traj {
-            fks.sort();
-            let mut concat = String::new();
-            for fk in &fks {
-                concat.push_str(&single.get_frame_text(*fk)?);
+        let n = (|| -> Result<u32> {
+            let mut sharded = ShardedConCorpus::open(dst_root, n_shards)?;
+            let keys = single.list_frame_keys()?;
+            let mut by_traj: std::collections::BTreeMap<u64, Vec<FrameKey>> =
+                std::collections::BTreeMap::new();
+            for fk in keys {
+                by_traj.entry(fk.traj_id).or_default().push(fk);
             }
-            let nf = sharded.append_trajectory_str(tid, &concat, "split-from-single")?;
-            n += nf;
-        }
-        Ok(n)
+            let mut n = 0u32;
+            for (tid, mut fks) in by_traj {
+                fks.sort();
+                let mut concat = String::new();
+                for fk in &fks {
+                    concat.push_str(&single.get_frame_text(*fk)?);
+                }
+                let nf = sharded.append_trajectory_str(tid, &concat, "split-from-single")?;
+                n += nf;
+            }
+            Ok(n)
+        })();
+        rollback_new_dest(dst_root, n)
     }
 }
 
@@ -697,14 +705,18 @@ pub fn join_drained_roots(sources: &[PathBuf], dst: impl AsRef<Path>) -> Result<
             }
         }
     }
-    let out = ConCorpus::open(dst)?;
-    let mut n = 0u32;
-    let mut seen = std::collections::BTreeSet::new();
-    for src in sources {
-        let mut sh = ShardedConCorpus::open_existing(src)?;
-        n += append_sharded_into(&mut sh, &out, &mut seen)?;
-    }
-    Ok(n)
+    let n = (|| -> Result<u32> {
+        let out = ConCorpus::open(dst)?;
+        let mut n = 0u32;
+        let mut seen = std::collections::BTreeSet::new();
+        for src in sources {
+            let mut sh = ShardedConCorpus::open_existing(src)?;
+            n += append_sharded_into(&mut sh, &out, &mut seen)?;
+        }
+        out.close();
+        Ok(n)
+    })();
+    rollback_new_dest(dst, n)
 }
 
 /// Join any set of **single-env** corpus directories into one destination (traj_id must be unique).
@@ -734,32 +746,44 @@ pub fn join_corpus_dirs(sources: &[PathBuf], dst: impl AsRef<Path>) -> Result<u3
             c.close();
         }
     }
-    let out = ConCorpus::open(dst)?;
-    let mut n = 0u32;
-    let mut seen = std::collections::BTreeSet::new();
-    for src in sources {
-        let c = ConCorpus::open(src)?;
-        let keys = c.list_frame_keys()?;
-        let mut by_traj: std::collections::BTreeMap<u64, Vec<FrameKey>> =
-            std::collections::BTreeMap::new();
-        for fk in keys {
-            by_traj.entry(fk.traj_id).or_default().push(fk);
-        }
-        for (tid, mut fks) in by_traj {
-            if !seen.insert(tid) {
-                return Err(Error::Message(format!(
-                    "duplicate traj_id {tid} across join sources"
-                )));
+    let n = (|| -> Result<u32> {
+        let out = ConCorpus::open(dst)?;
+        let mut n = 0u32;
+        let mut seen = std::collections::BTreeSet::new();
+        for src in sources {
+            let c = ConCorpus::open_readonly(src)?;
+            let keys = c.list_frame_keys()?;
+            let mut by_traj: std::collections::BTreeMap<u64, Vec<FrameKey>> =
+                std::collections::BTreeMap::new();
+            for fk in keys {
+                by_traj.entry(fk.traj_id).or_default().push(fk);
             }
-            fks.sort();
-            let mut concat = String::new();
-            for fk in &fks {
-                concat.push_str(&c.get_frame_text(*fk)?);
+            for (tid, mut fks) in by_traj {
+                if !seen.insert(tid) {
+                    return Err(Error::Message(format!(
+                        "duplicate traj_id {tid} across join sources"
+                    )));
+                }
+                fks.sort();
+                let mut concat = String::new();
+                for fk in &fks {
+                    concat.push_str(&c.get_frame_text(*fk)?);
+                }
+                n += out.append_trajectory_str(tid, &concat, src.display().to_string())?;
             }
-            n += out.append_trajectory_str(tid, &concat, src.display().to_string())?;
+            c.close();
         }
+        out.close();
+        Ok(n)
+    })();
+    rollback_new_dest(dst, n)
+}
+
+fn rollback_new_dest<T>(dst: &Path, r: Result<T>) -> Result<T> {
+    if r.is_err() {
+        let _ = std::fs::remove_dir_all(dst);
     }
-    Ok(n)
+    r
 }
 
 /// Record `traj_id` under `owner`. Extra frames of the same traj on the
@@ -1013,6 +1037,17 @@ mod compaction_tests {
         std::fs::write(dest.join("shard_0001"), b"not-a-dir").unwrap();
         assert!(ShardedConCorpus::drain_to(&src, &dest).is_err());
         assert!(!dest.join("shard_0000").exists());
+    }
+
+    #[test]
+    fn rollback_new_dest_removes_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("x"), b"y").unwrap();
+        let err = rollback_new_dest::<u32>(&dest, Err(Error::Message("boom".into()))).unwrap_err();
+        assert!(err.to_string().contains("boom"), "{err}");
+        assert!(!dest.exists());
     }
 
     #[test]

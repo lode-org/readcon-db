@@ -52,6 +52,8 @@ db = ConCorpus("/lustre/orion/proj/campaign_single")
 db.export_h5md(traj_id=1, path="traj.h5")
 ```
 
+Dest must not exist (`File` `"x"`). A write failure removes the dest.
+
 Time on the file is dest `ps`: CON `header.time()`, or `i * timestep`,
 else the frame index. Missing `units.time` is CON `fs`. Optional force
 and velocity groups are dest `kJ mol-1 Angstrom-1` and `Angstrom ps-1`.

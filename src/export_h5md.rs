@@ -387,6 +387,31 @@ mod tests {
     }
 
     #[test]
+    fn collect_h5md_mixed_pbc_f_t_f() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let mut frames = Vec::new();
+        for item in readcon_core::iterators::ConFrameIterator::new(&text) {
+            frames.push(item.unwrap());
+        }
+        frames[0]
+            .header
+            .metadata
+            .insert("pbc".into(), serde_json::json!([false, true, false]));
+        db.append_trajectory_frames(1, &frames, "t").unwrap();
+        let a = db.collect_h5md(1).unwrap();
+        assert_eq!(
+            a.boundary,
+            [
+                "none".to_string(),
+                "periodic".to_string(),
+                "none".to_string()
+            ]
+        );
+    }
+
+    #[test]
     fn collect_h5md_boundary_none_from_pbc_false() {
         let dir = tempfile::tempdir().unwrap();
         let db = ConCorpus::open(dir.path()).unwrap();

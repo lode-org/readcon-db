@@ -90,6 +90,7 @@ Foreign trajectories: **`readcon.read_chemfiles("traj.xyz")` → frames → inge
   units on ingest; missing `units.time` is CON `fs`.
 - **Node-local drain/join** — `shard-ingest` then `drain` to a unique
   dest (`data.mdb` only, refuse overwrite), then `join-drained`.
+  `compact-join` joins one sharded root (`open_existing`).
 
 Full ABI table, logo, Sphinx docs, and site: see `docs/`, `website/`, `assets/logo/`, `CHANGELOG.md`. Fortran module notes: `fortran/ReadConDb/`.
 
