@@ -5,13 +5,13 @@
 - [cocogitto](https://github.com/cocogitto/cocogitto) (`cog`) — conventional commits and `CHANGELOG.md`
 - [prek](https://prek.j178.dev) — git hooks (`prek.toml`)
 - [lychee](https://github.com/lycheeverse/lychee) — link check on built Sphinx HTML
-- Sphinx (`docs/requirements.txt`) — `sphinx-build -b html docs/source docs/_build/html`
+- Sphinx (`docs/requirements.lock.txt`, from `docs/requirements.txt`) — `sphinx-build -b html docs/source docs/_build/html`
 
 ```bash
 prek install
 prek run -a
 cog check
-pip install -r docs/requirements.txt
+pip install --require-hashes -r docs/requirements.lock.txt
 sphinx-build -b html docs/source docs/_build/html
 lychee --config lychee.toml 'docs/_build/html/**/*.html'
 ```

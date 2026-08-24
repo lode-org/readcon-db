@@ -11,7 +11,8 @@ exclude = """(?x)(
     ^resources/test/|
     ^examples/benchmarks/|
     ^.*\\.svg$|
-    ^.*\\.lock$
+    ^.*\\.lock$|
+    ^.*\\.lock\\.txt$
 )"""
 
 [[repos]]

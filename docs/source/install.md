@@ -89,9 +89,8 @@ Fortran: `fortran/ReadConDb` (`bind(C)` against the C ABI).
 - Design notes: [`docs/design.md`](https://github.com/lode-org/readcon-db/blob/main/docs/design.md) in the repository
 
 ```bash
-cd docs
-pip install -r requirements.txt
-sphinx-build -b html source _build/html
+pip install --require-hashes -r docs/requirements.lock.txt
+sphinx-build -b html docs/source docs/_build/html
 ```
 
 ## Static marketing page

@@ -1,3 +1,8 @@
+# Abstract docs toolchain. Pages/CI install the hashed lock:
+#   pip install --require-hashes -r docs/requirements.lock.txt
+# Refresh (CPython 3.12, linux x86_64):
+#   uv pip compile --python-version 3.12 --python-platform x86_64-unknown-linux-gnu \
+#     --generate-hashes -o docs/requirements.lock.txt docs/requirements.txt
 sphinx>=7
 furo>=2024.1
 myst-parser>=2
