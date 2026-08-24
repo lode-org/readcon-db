@@ -2407,4 +2407,50 @@ mod tests {
         assert_eq!(db.frame_hash(key).unwrap().to_bytes(), h.to_bytes());
         assert_eq!(db.get_positions(key).unwrap(), expect_pos);
     }
+
+    /// Positions, forces, and velocities: CON parse and cooked extract must match.
+    #[test]
+    fn numeric_extract_velocities_match_con() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let key = FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        db.append_trajectory_path(1, fixture("tiny_cuh2_vel_forces.con"))
+            .unwrap();
+        assert!(!db.has_valid_cooked_soa(key).unwrap());
+        let fr = db.get_frame(key).unwrap();
+        let expect_pos: Vec<_> = fr.atom_data.iter().map(|a| [a.x, a.y, a.z]).collect();
+        let expect_f: Vec<_> = fr
+            .atom_data
+            .iter()
+            .map(|a| a.force.unwrap_or([0.0; 3]))
+            .collect();
+        let expect_v: Vec<_> = fr
+            .atom_data
+            .iter()
+            .map(|a| a.velocity.unwrap_or([0.0; 3]))
+            .collect();
+        assert_eq!(db.get_positions(key).unwrap(), expect_pos);
+        assert_eq!(db.get_forces(key).unwrap().unwrap(), expect_f);
+        assert_eq!(db.get_velocities(key).unwrap().unwrap(), expect_v);
+        assert!((expect_v[0][0] - 0.001234).abs() < 1e-12);
+        let text = db.get_frame_text(key).unwrap();
+        let h = db.frame_hash(key).unwrap();
+        db.cook_frame(key).unwrap();
+        assert!(db.has_valid_cooked_soa(key).unwrap());
+        assert_eq!(db.get_positions(key).unwrap(), expect_pos);
+        assert_eq!(db.get_forces(key).unwrap().unwrap(), expect_f);
+        assert_eq!(db.get_velocities(key).unwrap().unwrap(), expect_v);
+        assert_eq!(db.get_frame_text(key).unwrap(), text);
+        assert_eq!(db.frame_hash(key).unwrap().to_bytes(), h.to_bytes());
+        assert_eq!(db.find_by_hash(h).unwrap(), Some(key));
+        db.delete_cooked_soa(key).unwrap();
+        assert!(!db.has_valid_cooked_soa(key).unwrap());
+        assert_eq!(db.get_positions(key).unwrap(), expect_pos);
+        assert_eq!(db.get_forces(key).unwrap().unwrap(), expect_f);
+        assert_eq!(db.get_velocities(key).unwrap().unwrap(), expect_v);
+        assert_eq!(db.get_frame_text(key).unwrap(), text);
+    }
 }

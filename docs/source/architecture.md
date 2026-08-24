@@ -41,7 +41,7 @@ authority. Dest units are Å / ps / kJ mol^{-1} Å^{-1}; velocity dest is
 `data.mdb` (refuse overwrite), then `join-drained`. `compact-join` is
 the single-root join (`open_existing`).
 
-**Cooked SoA tier:** optional RCSO in `frames_soa` accelerates `get_positions` / `get_forces` / `get_velocities` without CON parse when valid; CON text in `frames` remains sole authority for hash/dedup/join/reindex. RCSO is not fully equivalent (no symbols/metadata/exact bytes). See `docs/orgmode/cooked-soa.org`.
+**Cooked SoA tier:** optional RCSO in `frames_soa` accelerates `get_positions` / `get_forces` / `get_velocities` without CON parse when valid. RCSO is non-authoritative: CON text in `frames` remains sole authority for hash/dedup/join/reindex. RCSO is not fully equivalent (no symbols/metadata/exact bytes). See `docs/orgmode/cooked-soa.org`.
 
 
 `FrameKey` is 12 bytes: `traj_id` (BE u64) + `frame_idx` (BE u32) so lexicographic order matches numeric order.
