@@ -67,6 +67,9 @@ lychee --config lychee.toml 'docs/_build/html/**/*.html'
 echo "==> C/C++ distribution gate (no cbindgen required)"
 scripts/check-cxx-dist.sh
 
+echo "==> CPC appendix freeze (fair campaign JSON)"
+scripts/check-cpc-freeze.sh
+
 echo "==> stage release files"
 git add Cargo.toml Cargo.lock meson.build python/pyproject.toml \
   docs/source/conf.py CHANGELOG.md \

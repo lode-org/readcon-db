@@ -10,6 +10,7 @@ Usage:
   python fair_campaign.py [--fixture PATH] [--ladder 10,50,100,200,500] [--out DIR] [--run-id 1]
 
 Emits JSON + select-parity block. Methodology is measurement-only; ASE is not the product store.
+The CPC appendix freeze is examples/benchmarks/ase_fair_campaign_1.json (default fixture + ladder).
 """
 from __future__ import annotations
 
@@ -33,6 +34,7 @@ REPO_DB = Path(__file__).resolve().parents[2]
 _VENDORED = REPO_DB / "resources" / "test" / "tiny_cuh2.con"
 _CORE = REPO_DB.parent / "readcon-core" / "resources" / "test" / "tiny_cuh2.con"
 DEFAULT_FIXTURE = _VENDORED if _VENDORED.is_file() else _CORE
+# CPC appendix freeze (paper/cpc/). Do not invent a cheaper ladder.
 DEFAULT_LADDER = (10, 50, 100, 200, 500)
 
 

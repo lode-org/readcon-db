@@ -26,6 +26,9 @@ jobs:
           locked: true
           environments: docs
 
+      - name: CPC appendix freeze
+        run: python3 paper/cpc/scripts/gen_appendix.py --check
+
       - name: Sphinx HTML
         run: pixi r -e docs docbld
 

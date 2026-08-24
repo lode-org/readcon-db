@@ -9,7 +9,8 @@
     500
   ],
   "fair": true,
-  "note": "Shared CON ladder; ASE Atoms from readcon geometry (not legacy Cu2 stand-in)",
+  "cpc_appendix_freeze": true,
+  "note": "Shared CON ladder; ASE Atoms from readcon geometry (not legacy Cu2 stand-in). CPC appendix freeze: do not invent a cheaper ladder.",
   "readcon_db": [
     {
       "backend": "readcon-db",

@@ -1,0 +1,53 @@
+#+TITLE: CPC companion (readcon-db)
+#+OPTIONS: toc:2
+
+readcon-db is the *companion campaign store* for the Computer Physics
+Communications manuscript whose *main claim* is
+[[https://github.com/lode-org/readcon-core][readcon-core]]
+(CON spec v2/v3 and interchange). Do not write a second paper for
+this crate alone. Deposit the core and readcon-db freeze tags
+together.
+
+The core tree already prints the two-atom NEB band
+(=scripts/run_cpc_vignette.sh= + =resources/examples/neb_band.tsv=)
+and, when =readcon-db= is on =PATH=, ingests that file and selects
+=neb_bead= 0--3. This repository does not duplicate that vignette.
+
+* Appendix freeze
+
+If the CPC paper uses an ASE.=.db= timing table, use *this* freeze
+only:
+
+| Item | Path |
+|------+------|
+| Source JSON | [[file:../../examples/benchmarks/ase_fair_campaign_1.json][examples/benchmarks/ase_fair_campaign_1.json]] |
+| Markdown | [[file:../../examples/benchmarks/fair_db_vs_ase_table.md][examples/benchmarks/fair_db_vs_ase_table.md]] |
+| TeX | [[file:src/figures/generated/fair_campaign_table.tex][src/figures/generated/fair_campaign_table.tex]] |
+| Driver | [[file:../../examples/benchmarks/fair_campaign.py][examples/benchmarks/fair_campaign.py]] |
+
+Frozen settings (do not invent a cheaper ladder or a Cu2 stand-in):
+
+- fixture: =resources/test/tiny_cuh2.con=
+- ladder: =[10, 50, 100, 200, 500]=
+- same CON frames on both stores; ASE =Atoms= from readcon geometry
+- include file for the paper: =\input{.../fair_campaign_table}=
+  (=tab:fair-campaign=)
+
+Legacy =examples/benchmarks/bench_ase_db.py= / =db_vs_ase_table.md=
+remain unequal-workload CSE artifacts. They are not the appendix.
+
+#+begin_src bash
+python3 paper/cpc/scripts/gen_appendix.py        # rewrite TeX from JSON
+python3 paper/cpc/scripts/gen_appendix.py --check
+scripts/check-cpc-freeze.sh
+#+end_src
+
+=gen_appendix.py= never runs the bench. Numbers are typed only in the
+committed JSON.
+
+* Companion paragraph
+
+=src/companion_paragraph.tex= is paste-ready for the CPC Applications
+or appendix section. Core already names this crate as the companion
+store; keep that wording (campaign index + RCSO cache; text CON
+authority).
