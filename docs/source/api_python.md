@@ -83,9 +83,7 @@ store canonical names (`angstrom`, `eV`, `fs`) in CON metadata. `append` / `exte
 Mixed-force trajectories write a full `[T][N][3]` force dataset
 (zeros on frames without forces). Mixed-velocity trajectories write a
 full `[T][N][3]` velocity dataset the same way. Box `boundary` follows CON `pbc`
-(periodic when absent). Time is CON `header.time()`, or `i * timestep`,
-else the frame index. Missing `units.time` is CON default `fs` (then
-converted to dest `ps`). `author`/`creator`/`boundary` attrs are
+(periodic when absent). `author`/`creator`/`boundary` attrs are
 fixed-length ASCII. Physical `unit` attrs are short H5MD strings
 (MDAnalysis 2.10 indexes them as dict keys).
 

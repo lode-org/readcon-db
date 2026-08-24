@@ -1439,7 +1439,29 @@ mod tests {
                 RKRDB_OK
             );
             assert!(nitem1 >= 1);
-            assert!(item1.iter().any(|&x| x != 0.0));
+            let mut native1 = vec![0.0f64; 32];
+            let mut nn1 = 0u32;
+            assert_eq!(
+                rkrdb_get_positions(id, 3, 1, native1.as_mut_ptr(), 8, &mut nn1),
+                RKRDB_OK
+            );
+            assert_eq!(nitem1, nn1);
+            assert!(
+                (item1[0] - native1[0]).abs() < 1e-9,
+                "item1 x0={} native={}",
+                item1[0],
+                native1[0]
+            );
+            assert!((item1[6] - 8.8549).abs() < 1e-4, "frame1 H x={}", item1[6]);
+            let mut times3 = [0.0f64; 8];
+            let mut nt3 = 0u32;
+            assert_eq!(
+                rkrdb_h5md_times(id, 3, times3.as_mut_ptr(), times3.len(), &mut nt3),
+                RKRDB_OK
+            );
+            assert!(nt3 >= 2);
+            assert!((times3[0] - 0.0).abs() < 1e-12);
+            assert!((times3[1] - 1.0).abs() < 1e-12);
             let mut nf = 0u32;
             let mut na = 0u32;
             assert_eq!(rkrdb_h5md_shape(id, 1, &mut nf, &mut na), RKRDB_OK);

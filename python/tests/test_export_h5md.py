@@ -287,7 +287,10 @@ def test_pack_frames_unpack_batch(tmp_path):
     frames = ConCorpus.unpack_batch(blob)
     assert len(frames) == n
     pos0 = db.get_positions(1, 0)
+    pos1 = db.get_positions(1, 1)
     np.testing.assert_allclose(np.asarray(frames[0]), np.asarray(pos0))
+    np.testing.assert_allclose(np.asarray(frames[1]), np.asarray(pos1))
+    assert abs(float(pos1[2][0]) - 8.8549) < 1e-4
 
 
 def test_export_h5md_mdanalysis_reader_with_velocity(tmp_path):
@@ -326,6 +329,7 @@ def test_export_h5md_mdanalysis_reader(tmp_path):
     reader = H5MDReader(str(out), convert_units=True)
     assert reader.n_frames == n
     assert reader.n_atoms >= 1
+    assert abs(float(reader.ts.positions[0, 0]) - 0.6394) < 1e-3
 
 
 def test_export_h5md_mdanalysis_reader_with_forces(tmp_path):

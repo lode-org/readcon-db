@@ -206,8 +206,7 @@ authority. Dest units are Å / ps / kJ mol^{-1} Å^{-1} / Å ps^{-1}
 uploads use **independent envs per shard** (MDHIM-style local backends / industry
 sharded-LMDB practice). Full rationale, citations (LMDB docs, MDHIM HotStorage’15,
 PapyrusKV, RocksDB contrast, HDF5/Zarr/ADIOS2/DAOS contrast), risks, and falsifiers:
-see decision artifact from the storage-model review (session SCRATCH
-`lmdb-model-decision.md`) or regenerate from team notes. Do **not** interpret
+see the architecture note on sharded LMDB. Do **not** interpret
 “one write_txn per env” as “LMDB cannot do multi-process writes”—only that
 **partitioning is mandatory** for concurrent commits.
 

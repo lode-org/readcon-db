@@ -532,6 +532,9 @@ mod tests {
         let blob = db.get_cooked_soa_bytes(key).unwrap().expect("stored RCSO");
         let decoded = crate::cooked_soa::CookedSoa::decode(&blob).unwrap();
         assert_eq!(decoded.positions.len(), from_rcso.natoms);
+        assert!((decoded.positions[0][0] - 0.6394).abs() < 1e-4);
+        assert!((from_rcso.positions[0] - 0.6394).abs() < 1e-4);
+        assert_eq!(decoded.positions[0][0], from_con.positions[0]);
     }
 
     #[test]

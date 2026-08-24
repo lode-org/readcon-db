@@ -45,10 +45,10 @@ call db_unpack_positions(buf, int(nbytes, c_size_t), xyz, cap, natoms, status)
 C helpers from Fortran INTEGER: `rkrdb_bcast_packed_frame_f` and
 `rkrdb_bcast_packed_frames_f` in `include/readcon-db-mpi.h`
 (`MPI_Comm_f2c`). Batched helper packs an RCSB envelope on root and
-`MPI_Bcast`s it on `comm`. Module `db_pack_frame` and `db_pack_frames` are the same envelope
-without the helper (`buflen=0` size-queries). Unpack with
-`db_unpack_batch_nframes` and `db_unpack_batch_item`. Standalone:
-`examples/mpi_bcast_frame.f90` (single `db_pack_frame` then `db_pack_frames`).
+`MPI_Bcast`s it on `comm`. Module `db_pack_frame` packs one RCSO blob (`buflen=0` size-queries).
+`db_pack_frames` packs an RCSB envelope of many frames (`buflen=0`
+size-queries). Unpack with `db_unpack_batch_nframes` and
+`db_unpack_batch_item`. Standalone: `examples/mpi_bcast_frame.f90`.
 
 H5MD interchange and caller units: `db_append_units`, `db_set_units`,
 `db_h5md_times`, `db_h5md_shape`, `db_h5md_positions` (dest `ps` / Å).

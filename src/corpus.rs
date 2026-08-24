@@ -1724,9 +1724,13 @@ mod tests {
             traj_id: 1,
             frame_idx: 0,
         };
+        let key1 = FrameKey {
+            traj_id: 1,
+            frame_idx: 1,
+        };
         let packed = {
             let db = ConCorpus::open(dir.path()).unwrap();
-            db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            db.append_trajectory_path(1, fixture("tiny_multi_cuh2.con"))
                 .unwrap();
             let packed = db.pack_frame(key).unwrap();
             db.close();
@@ -1738,10 +1742,12 @@ mod tests {
         let ro = ConCorpus::open_readonly(dir.path()).unwrap();
         let packed2 = ro.pack_frame(key).unwrap();
         assert_eq!(packed, packed2);
-        let batch = ro.pack_frames(&[key, key]).unwrap();
+        let batch = ro.pack_frames(&[key, key1]).unwrap();
         let parts = crate::cooked_soa::decode_batch(&batch).unwrap();
         assert_eq!(parts.len(), 2);
         assert_eq!(parts[0], packed);
+        let d1 = crate::cooked_soa::CookedSoa::decode(&parts[1]).unwrap();
+        assert!((d1.positions[2][0] - 8.8549).abs() < 1e-4);
         assert!(ConCorpus::open_readonly("/no/such/corpus-dir-readonly").is_err());
         assert!(ro
             .append_trajectory_path(9, fixture("tiny_cuh2.con"))
@@ -2377,9 +2383,6 @@ mod tests {
             traj_id: 1,
             frame_idx: 0,
         };
-        for _ in 0..2 {
-            // fresh corpus each half would be overkill; exercise cook + dual path twice
-        }
         db.append_trajectory_path(1, fixture("tiny_cuh2_forces.con"))
             .unwrap();
         let fr = db.get_frame(key).unwrap();

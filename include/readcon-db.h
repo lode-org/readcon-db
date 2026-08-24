@@ -266,6 +266,7 @@ public:
     return rkrdb_pack_frame(id_, traj_id, frame_idx, buf, buflen);
   }
 
+  /// `buf == NULL` returns the required size.
   int pack_frames(const uint64_t *traj_ids, const uint32_t *frame_idxs, uint32_t nkeys,
                   uint8_t *buf, size_t buflen) {
     return rkrdb_pack_frames(id_, traj_ids, frame_idxs, nkeys, buf, buflen);

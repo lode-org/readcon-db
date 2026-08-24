@@ -296,10 +296,10 @@ impl ShardedConCorpus {
                     continue;
                 }
                 let to = dst.join(&name);
+                created.push(to.clone());
                 let ro = ConCorpus::open_readonly(&from)?;
                 ro.snapshot_to(&to)?;
                 ro.close();
-                created.push(to);
                 n += 1;
             }
             Ok(n)
@@ -1083,6 +1083,20 @@ mod compaction_tests {
         let keys = db.select(&Select::new()).unwrap();
         assert!(keys.len() >= 2);
         assert!(keys.iter().all(|k| k.traj_id == 0));
+        let p0 = db
+            .get_positions(crate::keys::FrameKey {
+                traj_id: 0,
+                frame_idx: 0,
+            })
+            .unwrap();
+        let p1 = db
+            .get_positions(crate::keys::FrameKey {
+                traj_id: 0,
+                frame_idx: 1,
+            })
+            .unwrap();
+        assert!((p0[0][0] - 0.6394).abs() < 1e-4);
+        assert!((p1[2][0] - 8.8549).abs() < 1e-4);
     }
 
     #[test]
