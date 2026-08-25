@@ -80,19 +80,9 @@ html_theme_options = {
                     "summary": "CON parse, write, hourglass ABI",
                 },
                 {
-                    "title": "readcon-core source",
-                    "url": "https://github.com/lode-org/readcon-core",
-                    "summary": "Spec and multi-language interchange",
-                },
-                {
                     "title": "eOn",
                     "url": "https://eondocs.org",
                     "summary": "Saddle-point search on PESs",
-                },
-                {
-                    "title": "LODE org",
-                    "url": "https://github.com/lode-org",
-                    "summary": "Long-timescale dynamics ecosystem",
                 },
             ],
         },
