@@ -79,15 +79,9 @@ html_theme_options = {
                     "url": "https://lode-org.github.io/readcon-core/",
                     "summary": "CON parse, write, hourglass ABI",
                 },
-                {
-                    "title": "eOn",
-                    "url": "https://eondocs.org",
-                    "summary": "Saddle-point search on PESs",
-                },
             ],
         },
         {"title": "Architecture", "url": "architecture"},
-        {"title": "GitHub", "url": "https://github.com/lode-org/readcon-db"},
     ],
 }
 
