@@ -79,6 +79,26 @@ html_theme_options = {
                     "url": "https://lode-org.github.io/readcon-core/",
                     "summary": "CON parse, write, hourglass ABI",
                 },
+                {
+                    "title": "eOn",
+                    "url": "https://eondocs.org",
+                    "summary": "Saddle-point search on PESs",
+                },
+                {
+                    "title": "rgpot",
+                    "url": "https://omnipotentrpc.github.io/rgpot/",
+                    "summary": "Potential evaluation toolkit",
+                },
+                {
+                    "title": "chemparseplot",
+                    "url": "https://chemparseplot.rgoswami.me",
+                    "summary": "Parsing and plotting for computational chemistry",
+                },
+                {
+                    "title": "rgpycrumbs",
+                    "url": "https://rgpycrumbs.rgoswami.me",
+                    "summary": "CLI helpers for LODE / eOn workflows",
+                },
             ],
         },
         {"title": "Architecture", "url": "architecture"},
