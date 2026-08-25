@@ -24,8 +24,8 @@ table is a *freeze* of one committed run:
 | Inclusion fragment | =src/appendix-fair-campaign.org= |
 
 Fixture: =resources/test/tiny_cuh2.con=. Ladder: 10, 50, 100, 200,
-500. Measurement refresh: tree =4bef664=. The JSON does not record
-host or clock; do not invent them.
+500. Measurement refresh: host =rgam5terra=, date =2026-08-25T00:30Z=,
+tree =b76b891= (signed =v0.1.5=).
 
 Legacy =examples/benchmarks/bench_ase_db.py= (Cu2 stand-ins) is an
 unequal-workload artifact. It is *not* this freeze.

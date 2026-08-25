@@ -25,7 +25,6 @@ HEADER = (
 )
 
 EXPECTED_LADDER = [10, 50, 100, 200, 500]
-SOURCE_TREE = "4bef664"
 
 
 def _load(path: Path) -> dict:
@@ -52,6 +51,9 @@ def validate(payload: dict) -> list[str]:
         errors.append(f"ladder {payload.get('ladder')!r} != {EXPECTED_LADDER}")
     if payload.get("all_competitive_selects_agree") is not True:
         errors.append("all_competitive_selects_agree is not true")
+    for key in ("host", "date_utc", "commit"):
+        if not payload.get(key):
+            errors.append(f"freeze JSON missing {key}")
     fixture = str(payload.get("fixture", ""))
     if "tiny_cuh2.con" not in fixture:
         errors.append(f"fixture is not tiny_cuh2.con: {fixture!r}")
@@ -95,18 +97,20 @@ def gen_table(payload: dict) -> str:
             )
         )
     body = "\n".join(rows)
+    host = payload["host"]
+    date_utc = payload["date_utc"]
+    commit = payload["commit"]
     return rf"""\begin{{table}}[ht]
 \centering
 \caption{{Fair campaign-store comparison on a concatenated
 \texttt{{tiny\_cuh2.con}} ladder
 (\texttt{{paper/cpc/freeze/ase\_fair\_campaign\_1.json}},
-measurement refresh \texttt{{{SOURCE_TREE}}}).
+{date_utc}, host \texttt{{{host}}}, tree \texttt{{{commit}}}).
 The same CON frames enter both stores. Insert and extract are
 frames per second; Cu select and eight-reader extract are wall
 seconds. Hit counts agree on symbol, natoms, mass, and volume.
 This table is companion appendix material. It is not a main-claim
-parse timing and not the legacy Cu2 unequal-workload bench.
-The committed JSON does not record host or clock.}}
+parse timing and not the legacy Cu2 unequal-workload bench.}}
 \label{{tab:fair-campaign}}
 \scriptsize
 \begin{{tabular}}{{@{{}}r *{{8}}{{r}} l@{{}}}}
