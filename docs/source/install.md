@@ -55,7 +55,7 @@ CMake:
 include(FetchContent)
 FetchContent_Declare(
   readcon-db
-  URL https://github.com/lode-org/readcon-db/releases/download/v0.1.4/readcon-db-cxx-0.1.4.tar.gz
+  URL https://github.com/lode-org/readcon-db/releases/download/v0.1.5/readcon-db-cxx-0.1.5.tar.gz
   URL_HASH SHA256=<sha256 from the .sha256 sidecar on the GitHub Release>
 )
 FetchContent_MakeAvailable(readcon-db)
@@ -88,7 +88,7 @@ assets to an already-published tag with Actions → **C ABI library
 tarball** → `tag=vX.Y.Z`.
 
 ```bash
-VER=0.1.4
+VER=0.1.5
 TARGET=x86_64-unknown-linux-gnu
 curl -fsSL -O "https://github.com/lode-org/readcon-db/releases/download/v${VER}/readcon-db-clib-${VER}-${TARGET}.tar.gz"
 tar -xzf "readcon-db-clib-${VER}-${TARGET}.tar.gz"
