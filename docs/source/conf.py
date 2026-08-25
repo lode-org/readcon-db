@@ -1,8 +1,8 @@
 project = "readcon-db"
 copyright = "2026, Rohit Goswami"
 author = "Rohit Goswami"
-release = "0.1.4"
-version = "0.1.4"
+release = "0.1.5"
+version = "0.1.5"
 
 extensions = [
     "sphinx.ext.autodoc",

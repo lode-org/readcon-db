@@ -34,6 +34,7 @@ sed -i "s/^    version: '.*'/    version: '${VER}'/" meson.build
 sed -i "0,/^version = /{s/^version = \".*\"/version = \"${VER}\"/}" python/pyproject.toml
 sed -i "s/^release = \".*\"/release = \"${VER}\"/" docs/source/conf.py
 sed -i "s/^version = \".*\"/version = \"${VER}\"/" docs/source/conf.py
+sed -i "0,/^version = /{s/^version = \".*\"/version = \"${VER}\"/}" pixi.toml
 sed -i "s/^version = \".*\"/version = \"${VER}\"/" fortran/ReadConDb/fpm.toml
 sed -i "s/^version: .*/version: ${VER}/" CITATION.cff
 
@@ -45,11 +46,19 @@ else
 fi
 
 echo "==> CHANGELOG via cog"
+prev="$(git describe --tags --abbrev=0)"
 {
   sed -n '1,3p' CHANGELOG.md
-  cog changelog
+  cog changelog "${prev}.." \
+    | sed "s/^## Unreleased.*/## v${VER} - $(date +%F)/"
+  echo
+  awk '/^## v/{found=1} found' CHANGELOG.md
 } > /tmp/CHANGELOG.md
 mv /tmp/CHANGELOG.md CHANGELOG.md
+if grep -q '^## Unreleased' CHANGELOG.md; then
+  echo "CHANGELOG.md still has Unreleased; shipped tags must not dump it" >&2
+  exit 1
+fi
 
 echo "==> version lockstep"
 scripts/check_version_lockstep.sh

@@ -30,10 +30,10 @@ check_contains "fortran/ReadConDb/fpm.toml" "^version = \"${cargo_ver}\""
 check_contains "CITATION.cff" "^version: ${cargo_ver}$"
 check_contains "docs/source/conf.py" "release = \"${cargo_ver}\""
 
-if grep -qE '^readcon-core = "=0\.14\.7"$' "$ROOT/Cargo.toml"; then
-  ok "Cargo.toml pins readcon-core =0.14.7"
+if grep -qE '^readcon-core = "=0\.14\.8"$' "$ROOT/Cargo.toml"; then
+  ok "Cargo.toml pins readcon-core =0.14.8"
 else
-  die "Cargo.toml must pin readcon-core = \"=0.14.7\""
+  die "Cargo.toml must pin readcon-core = \"=0.14.8\""
 fi
 
 if [[ "$fail" -ne 0 ]]; then

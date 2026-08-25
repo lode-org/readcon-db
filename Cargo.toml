@@ -1,13 +1,13 @@
 [package]
 name = "readcon-db"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "Mmap-backed CON frame corpus (Heed/LMDB), xxHash exact match, multi-language FFI"
 license = "MIT"
 repository = "https://github.com/lode-org/readcon-db"
 homepage = "https://lode-org.github.io/readcon-db/"
 documentation = "https://docs.rs/readcon-db"
-rust-version = "1.75"
+rust-version = "1.88"
 readme = "README.md"
 keywords = ["con", "trajectory", "lmdb", "mmap", "molecular-dynamics"]
 categories = ["database", "science", "api-bindings"]
@@ -25,7 +25,7 @@ capi = []
 heed = "0.21"
 # Registry dep so CI and `cargo publish` work without a sibling checkout.
 # For LODE side-by-side edits of core, add a local patch (see README).
-readcon-core = "=0.14.7"
+readcon-core = "=0.14.8"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
