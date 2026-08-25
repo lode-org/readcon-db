@@ -25,11 +25,12 @@ campaign** in `paper/cpc/freeze/`:
 | Ladder | 10, 50, 100, 200, 500 |
 | JSON | `paper/cpc/freeze/ase_fair_campaign_1.json` |
 | Table | `paper/cpc/src/figures/generated/fair_campaign_table.tex` |
-| Refresh tree | `4bef664` |
+| Refresh tree | `b76b891` (v0.1.5) |
 
 Both stores see the same CON frames (readcon geometry → ASE `Atoms`).
 Select hit counts agree on symbol, natoms, mass, and volume. The
-committed JSON does not record host or clock.
+committed JSON records host `rgam5terra`, date `2026-08-25T00:30Z`,
+and commit `b76b891`.
 
 Legacy `examples/benchmarks/bench_ase_db.py` Cu2 stand-ins are
 **unequal-workload** artifacts. They are not the appendix freeze.

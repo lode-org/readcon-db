@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -380,14 +381,17 @@ def run_campaign(fixture: Path, ladder: list[int], out_dir: Path, run_id: int) -
         and r["volume_agree"]
         for r in parity_rows
     )
-    try:
-        commit = subprocess.check_output(
-            ["git", "rev-parse", "--short=8", "HEAD"],
-            cwd=REPO_DB,
-            text=True,
-        ).strip()
-    except (OSError, subprocess.CalledProcessError):
-        commit = "unknown"
+    commit = os.environ.get("READCON_FAIR_COMMIT", "").strip()
+    if not commit:
+        try:
+            commit = subprocess.check_output(
+                ["git", "rev-parse", "--short=8", "HEAD"],
+                cwd=REPO_DB,
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        except (OSError, subprocess.CalledProcessError):
+            commit = "unknown"
     payload = {
         "run_id": run_id,
         "fixture": str(fixture),
