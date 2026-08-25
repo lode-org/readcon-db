@@ -1,55 +1,118 @@
 project = "readcon-db"
-copyright = "2026, Rohit Goswami"
-author = "Rohit Goswami"
+copyright = "2026, LODE developers"
+author = "LODE developers"
 release = "0.1.5"
 version = "0.1.5"
 
 extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.napoleon",
-    "sphinx.ext.viewcode",
     "sphinx.ext.intersphinx",
+    "sphinx_copybutton",
+    "sphinx_design",
     "myst_parser",
 ]
 
 templates_path = ["_templates"]
 exclude_patterns = []
 
-html_theme = "furo"
-html_static_path = ["_static"]
-html_title = "readcon-db"
-html_logo = "_static/logo.svg"
-html_favicon = "_static/logo.svg"
-html_theme_options = {
-    "light_css_variables": {
-        "color-brand-primary": "#004D40",
-        "color-brand-content": "#00695C",
-    },
-    "dark_css_variables": {
-        "color-brand-primary": "#B2DFDB",
-        "color-brand-content": "#E0F2F1",
-    },
-    "sidebar_hide_name": False,
-    "footer_icons": [
-        {
-            "name": "GitHub",
-            "url": "https://github.com/lode-org/readcon-db",
-            "html": """
-                <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 16 16">
-                    <path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path>
-                </svg>
-            """,
-            "class": "",
-        },
-    ],
-}
-
 myst_enable_extensions = ["colon_fence", "deflist"]
 source_suffix = {".rst": "restructuredtext", ".md": "markdown"}
 master_doc = "index"
 
+html_theme = "shibuya"
+html_static_path = ["_static"]
+html_favicon = "_static/favicon.svg"
+html_title = "readcon-db documentation"
+html_baseurl = "https://lode-org.github.io/readcon-db/"
+
+html_context = {
+    "source_type": "github",
+    "source_user": "lode-org",
+    "source_repo": "readcon-db",
+    "source_version": "main",
+    "source_docs_path": "/docs/source/",
+}
+
+html_sidebars = {
+    "**": [
+        "sidebars/localtoc.html",
+        "sidebars/repo-stats.html",
+        "sidebars/edit-this-page.html",
+    ],
+}
+
+html_theme_options = {
+    "github_url": "https://github.com/lode-org/readcon-db",
+    "accent_color": "teal",
+    "dark_code": True,
+    "globaltoc_expand_depth": 1,
+    "light_logo": "_static/logo-nav-light.svg",
+    "dark_logo": "_static/logo-nav-dark.svg",
+    "nav_links": [
+        {"title": "Start", "url": "getting-started"},
+        {
+            "title": "Learn",
+            "children": [
+                {
+                    "title": "Tutorial — first corpus",
+                    "url": "tutorial",
+                    "summary": "Open, ingest a fixture, select, hash",
+                },
+                {
+                    "title": "How-to by language",
+                    "url": "howto",
+                    "summary": "Rust, Python, C, Fortran recipes",
+                },
+                {
+                    "title": "Campaign ops",
+                    "url": "campaign",
+                    "summary": "Shards, drain, join, compact",
+                },
+            ],
+        },
+        {
+            "title": "Ecosystem",
+            "children": [
+                {
+                    "title": "readcon-core",
+                    "url": "https://lode-org.github.io/readcon-core/",
+                    "summary": "CON parse, write, hourglass ABI",
+                },
+                {
+                    "title": "readcon-core source",
+                    "url": "https://github.com/lode-org/readcon-core",
+                    "summary": "Spec and multi-language interchange",
+                },
+                {
+                    "title": "eOn",
+                    "url": "https://eondocs.org",
+                    "summary": "Saddle-point search on PESs",
+                },
+                {
+                    "title": "LODE org",
+                    "url": "https://github.com/lode-org",
+                    "summary": "Long-timescale dynamics ecosystem",
+                },
+            ],
+        },
+        {"title": "Architecture", "url": "architecture"},
+        {"title": "GitHub", "url": "https://github.com/lode-org/readcon-db"},
+    ],
+}
+
+copybutton_prompt_text = r">>> |\.\.\. |\$ |In \[\d*\]: | {2,5}\.\.\.: | {5,8}: "
+copybutton_prompt_is_regexp = True
+copybutton_exclude = ".linenos, .gp, .go"
+copybutton_line_continuation_character = "\\"
+copybutton_here_doc_delimiter = "EOF"
+
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
-    # Peer interchange library; objects.inv may be offline in CI.
     "readcon-core": ("https://lode-org.github.io/readcon-core/", None),
 }
+intersphinx_timeout = 5
+
+
+def setup(app):
+    app.add_css_file("custom.css")

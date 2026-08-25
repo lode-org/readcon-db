@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="196" height="36" viewBox="0 0 196 36" fill="none" role="img" aria-labelledby="navTitleL">
+  <title id="navTitleL">readcon-db</title>
+  <rect x="0" y="0" width="36" height="36" rx="9" fill="#004D40"/>
+  <rect x="10" y="6" width="18" height="18" rx="3" fill="none" stroke="#80CBC4" stroke-width="1.1" opacity="0.55"/>
+  <rect x="6" y="10" width="20" height="20" rx="3.5" fill="none" stroke="#B2DFDB" stroke-width="1.4"/>
+  <rect x="8.2" y="12.2" width="15.6" height="2" rx="0.6" fill="#C9A227"/>
+  <circle cx="11" cy="20" r="1.85" fill="#80CBC4"/>
+  <circle cx="16" cy="23.8" r="1.85" fill="#4DB6AC"/>
+  <circle cx="21" cy="27.6" r="1.85" fill="#26A69A"/>
+  <text x="44" y="24" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
+        font-size="18" font-weight="700" letter-spacing="-0.04em" fill="#004D40">readcon-db</text>
+</svg>

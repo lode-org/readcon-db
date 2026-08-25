@@ -4,9 +4,9 @@
 
 - [cocogitto](https://github.com/cocogitto/cocogitto) (`cog`) — conventional commits and `CHANGELOG.md`
 - [prek](https://prek.j178.dev) — git hooks (`prek.toml`)
-- [lychee](https://github.com/lycheeverse/lychee) — link check on the assembled Pages tree (landing + Sphinx)
-- Landing page source is `website/index.org`; export with `scripts/export-landing.sh` (ox-html)
-- Sphinx (`pixi.toml` `[feature.docs]`, locked by `pixi.lock`) — `pixi r -e docs docbld`
+- [lychee](https://github.com/lycheeverse/lychee) — link check on the assembled Pages tree
+- Sphinx + **Shibuya** (`pixi.toml` `[feature.docs]`, locked by `pixi.lock`) — `pixi r -e docs docbld`
+- Pages serves that tree at `/` and `/docs/` (same HTML). `website/` is the old ox-html marketing page and is not deployed.
 
 ```bash
 prek install

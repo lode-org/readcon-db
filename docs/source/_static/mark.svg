@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="readcon-db">
+  <defs>
+    <linearGradient id="rcdb-tile" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00695C"/>
+      <stop offset="100%" stop-color="#004D40"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="224" height="224" rx="48" fill="url(#rcdb-tile)"/>
+  <!-- stacked frames: same CON glyph as readcon-core, corpus depth -->
+  <rect x="88" y="40" width="120" height="120" rx="20" fill="none" stroke="#4DB6AC" stroke-width="7"/>
+  <rect x="68" y="60" width="120" height="120" rx="20" fill="none" stroke="#80CBC4" stroke-width="7"/>
+  <rect x="48" y="80" width="120" height="120" rx="20" fill="#004D40" stroke="#E0F2F1" stroke-width="7"/>
+  <rect x="64" y="96" width="88" height="14" rx="4" fill="#C9A227"/>
+  <circle cx="78" cy="140" r="13" fill="#B2DFDB"/>
+  <circle cx="108" cy="162" r="13" fill="#80CBC4"/>
+  <circle cx="138" cy="184" r="13" fill="#4DB6AC"/>
+</svg>

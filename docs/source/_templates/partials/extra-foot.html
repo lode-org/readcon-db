@@ -1,0 +1,75 @@
+<script>
+(function () {
+  /* Skip link — WCAG 2.4.1 Bypass Blocks */
+  if (!document.getElementById("rc-skip-link")) {
+    var a = document.createElement("a");
+    a.id = "rc-skip-link";
+    a.className = "rc-skip-link";
+    a.href = "#rc-main-content";
+    a.textContent = "Skip to main content";
+    document.body.insertBefore(a, document.body.firstChild);
+  }
+  var main =
+    document.querySelector("main") ||
+    document.querySelector("article.yue") ||
+    document.querySelector("article") ||
+    document.querySelector(".sy-main") ||
+    document.querySelector(".yue");
+  if (main && !document.getElementById("rc-main-content")) {
+    main.id = "rc-main-content";
+    if (!main.hasAttribute("tabindex")) main.setAttribute("tabindex", "-1");
+    if (!main.getAttribute("role")) main.setAttribute("role", "main");
+  }
+  /* Landmark labels for assistive tech where Shibuya omits them */
+  var nav = document.querySelector(".sy-lside nav, .globaltoc, aside.sy-lside");
+  if (nav && !nav.getAttribute("aria-label")) {
+    nav.setAttribute("aria-label", "Documentation");
+  }
+  var rside = document.querySelector(".sy-rside, aside.sy-rside");
+  if (rside && !rside.getAttribute("aria-label")) {
+    rside.setAttribute("aria-label", "On this page");
+  }
+  var search = document.querySelector('form[role="search"], .sy-head form, input[type="search"]');
+  if (search && search.closest("form") && !search.closest("form").getAttribute("aria-label")) {
+    var f = search.tagName === "FORM" ? search : search.closest("form");
+    if (f) f.setAttribute("aria-label", "Search documentation");
+  }
+  /* Code fence whitespace (R/Python looked broken on rsx docs):
+     1) Unwrap <span data-line> (theme may force display:block → double \n).
+     2) Force every Pygments token <span> to display:inline (CSS alone loses
+        to theme layers in some builds).
+     3) pre uses white-space:pre so only real newlines break lines. */
+  document.querySelectorAll("pre [data-line]").forEach(function (span) {
+    var parent = span.parentNode;
+    if (!parent) return;
+    while (span.firstChild) {
+      parent.insertBefore(span.firstChild, span);
+    }
+    parent.removeChild(span);
+  });
+  document.querySelectorAll(
+    ".highlight pre, div[class*='highlight-'] pre, pre.literal-block"
+  ).forEach(function (pre) {
+    /* Shibuya (or theme) sets pre { display: grid }, which blockifies every
+       Pygments <span> into its own row — R looks like one token per line.
+       Restore normal pre flow; keep white-space:pre for real newlines. */
+    pre.style.setProperty("display", "block", "important");
+    pre.style.setProperty("white-space", "pre", "important");
+    pre.querySelectorAll("span").forEach(function (s) {
+      s.style.setProperty("display", "inline", "important");
+      s.style.setProperty("margin", "0", "important");
+      s.style.setProperty("padding", "0", "important");
+      s.style.setProperty("border", "none", "important");
+      s.style.setProperty("line-height", "inherit", "important");
+    });
+  });
+  /* Code blocks: ensure pre is keyboard-scrollable and labelled */
+  document.querySelectorAll(".sy-page pre, .highlight pre, pre.literal-block").forEach(function (pre, i) {
+    if (!pre.hasAttribute("tabindex")) pre.setAttribute("tabindex", "0");
+    if (!pre.getAttribute("role")) pre.setAttribute("role", "region");
+    if (!pre.getAttribute("aria-label")) {
+      pre.setAttribute("aria-label", "Code block " + (i + 1));
+    }
+  });
+})();
+</script>
