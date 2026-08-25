@@ -21,7 +21,4 @@ exclude = [
   '^https://github\.com/lode-org/readcon-db/releases/download/.*/readcon-db-clib-',
 ]
 
-exclude_path = [
-  "_site/docs/_static/.*",
-  "_site/docs/searchindex.js",
-]
+exclude_path = ["_site/docs/_static/.*", "_site/docs/searchindex.js"]
