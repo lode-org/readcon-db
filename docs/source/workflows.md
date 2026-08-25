@@ -95,14 +95,12 @@ a write failure removes the dest). `Lattice` is the same triclinic
 
 ## ASE `.db` comparison (measurement only)
 
-The CPC manuscript is the readcon-core paper. This crate is the companion
-campaign store. A store-comparison appendix, if used, is the frozen **fair**
-campaign in `paper/cpc/freeze/` ([CPC companion](cpc.md)), not a product path
-and not “store `Atoms` in ASE.db”.
+This is a measurement recipe, not a product path. Do not store
+`Atoms` in ASE `.db` as the interchange.
 
-Legacy `examples/benchmarks/bench_ase_db.py` Cu2 stand-ins are **unequal
-workloads** (lightweight ASE rows vs full CON parse+index). Keep them as
-artifacts only; do not promote them into the paper table.
+Legacy `examples/benchmarks/bench_ase_db.py` Cu2 stand-ins are unequal
+workloads (lightweight ASE rows vs full CON parse+index). Do not use
+those numbers.
 
 ## Fair ASE.db vs readcon-db campaign
 
@@ -110,8 +108,7 @@ Use **`examples/benchmarks/fair_campaign.py`**: builds a multi-frame CON ladder 
 loads **the same frames** into ASE `.db` (via readcon geometry → `Atoms`) and **readcon-db**,
 records insert/extract/competitive select/8-reader timings, and checks **hit-count agreement**
 for symbol `Cu` and `natoms` range. Live results: JSON `ase_fair_campaign_{run}.json` and
-markdown table. The paper freeze is a copy under `paper/cpc/freeze/`; re-running this
-script does not move that freeze.
+markdown table.
 
 ```bash
 # venv with ase + maturin-developed readcon / readcon_db

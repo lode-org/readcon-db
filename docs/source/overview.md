@@ -19,4 +19,4 @@ trajectory (CON stays authority). **Drain/join:** node-local `shard-ingest`,
 is the single-root join. Ops: [campaign](campaign.md).
 
 
-**Benchmarks:** fair ASE comparison → `examples/benchmarks/fair_campaign.py` (same CON ladder; not Cu2 stand-ins). Paper appendix freeze: `paper/cpc/freeze/` ([CPC companion](cpc.md)).
+**Benchmarks:** same-frame ASE comparison is `examples/benchmarks/fair_campaign.py`. See {doc}`workflows`.

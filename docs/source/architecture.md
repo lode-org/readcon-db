@@ -95,8 +95,6 @@ select avoids decode.
    Rust ConCorpus (Heed + readcon-core)
 ```
 
-Fortran uses `bind(C)` wrappers under `fortran/ReadConDb/` (docs-level snippet;
-not a long CPC listing). Prebuilt `libreadcon_db` is
-`readcon-db-clib-$VERSION-$target.tar.gz` on the GitHub Release
-([install](install.md)). The CPC manuscript is the readcon-core paper; this
-crate is the companion campaign store ([CPC companion](cpc.md)).
+Fortran uses `bind(C)` wrappers under `fortran/ReadConDb/`. Prebuilt
+`libreadcon_db` is `readcon-db-clib-$VERSION-$target.tar.gz` on the
+GitHub Release ([install](install.md)).

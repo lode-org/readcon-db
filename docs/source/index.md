@@ -94,7 +94,6 @@ workflows
 faq
 overview
 architecture
-cpc
 ```
 
 ```{toctree}
