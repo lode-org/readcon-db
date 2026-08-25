@@ -7,9 +7,9 @@ Part of the **readcon ecosystem** with [`readcon-core`](https://github.com/lode-
 | Crate / package | Role | Docs |
 |-----------------|------|------|
 | **[readcon-core](https://github.com/lode-org/readcon-core)** / **`readcon`** | CON interchange (parse/write/spec v2–v3). **XYZ/PDB/GRO → `ConFrame` via chemfiles** (`read_chemfiles*`), not ASE. Optional `to_ase` only for calculators. | Core README, `docs/orgmode/` |
-| **readcon-db** / **`readcon_db`** (this repo) | **Companion campaign store** (not a second CPC paper): mmap, indexes (natoms, symbols, **energy range**, **forces/velocities/energy flags**), multi-reader, dedup. Blobs are **CON text** decoded with readcon-core. | [`docs/design.md`](docs/design.md), Sphinx `docs/source/`, [`docs/source/cpc.md`](docs/source/cpc.md), `website/` |
+| **readcon-db** / **`readcon_db`** (this repo) | mmap CON corpus: indexes (natoms, symbols, **energy range**, **forces/velocities/energy flags**), multi-reader, dedup. Blobs are **CON text** decoded with readcon-core. | [docs](https://lode-org.github.io/readcon-db/docs/), [`docs/design.md`](docs/design.md) |
 
-ASE is **not** on the critical path for reading CON or XYZ in this stack. ASE `.db` may appear in a CPC **appendix** timing table; it is not the recommended store. The CPC manuscript is the [readcon-core](https://github.com/lode-org/readcon-core) article. This crate is the companion campaign store, not a second CPC claim. If that paper includes a store-comparison appendix, the numbers are the frozen fair campaign in [`paper/cpc/freeze/`](paper/cpc/freeze/) (same CON ladder; not the legacy Cu2 unequal-workload bench).
+ASE is not on the CON or XYZ read path. Optional `to_ase` is calculator hand-off only.
 
 ## Install
 

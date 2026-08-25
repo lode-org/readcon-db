@@ -34,7 +34,7 @@
 
 *core* parses and writes one stream or file. *db* keeps thousands of
 those frames, indexes them, and lets many readers mmap the same tree.
-CON text stays authoritative. This crate is not a second paper.
+CON text stays authoritative.
 
 * Open, ingest, select
 

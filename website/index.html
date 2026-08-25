@@ -35,13 +35,13 @@
 <p>
 <strong>core</strong> parses and writes one stream or file. <strong>db</strong> keeps thousands of
 those frames, indexes them, and lets many readers mmap the same tree.
-CON text stays authoritative. This crate is not a second paper.
+CON text stays authoritative.
 </p>
 </div>
 </section>
-<section id="outline-container-org29c7728" class="outline-2">
-<h2 id="org29c7728">Open, ingest, select</h2>
-<div class="outline-text-2" id="text-org29c7728">
+<section id="outline-container-org86dccf3" class="outline-2">
+<h2 id="org86dccf3">Open, ingest, select</h2>
+<div class="outline-text-2" id="text-org86dccf3">
 <div class="org-src-container">
 <pre class="src src-rust">use readcon_db::{ConCorpus, Select};
 
@@ -53,9 +53,9 @@ let h = db.frame_hash(keys[0])?;
 </div>
 </div>
 </section>
-<section id="outline-container-org2574f2d" class="outline-2">
-<h2 id="org2574f2d">C, Python, Fortran</h2>
-<div class="outline-text-2" id="text-org2574f2d">
+<section id="outline-container-org8953c09" class="outline-2">
+<h2 id="org8953c09">C, Python, Fortran</h2>
+<div class="outline-text-2" id="text-org8953c09">
 <dl class="org-dl">
 <dt><strong>C / C++</strong></dt><dd><code>include/readcon-db.h</code> &#x2013; <code>rkrdb_*</code> and RAII
 <code>readcon_db::Corpus</code>. MPI: <code>readcon-db-mpi.h</code> takes the caller
