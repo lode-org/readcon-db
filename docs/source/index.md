@@ -9,8 +9,7 @@
     </div>
   </div>
   <p class="rc-hero-tagline">LMDB via Heed. Indexes, xxHash3 exact match, and bindings for Rust, C, C++, Python, and Fortran.</p>
-  <pre class="rc-hero-conline" aria-hidden="true">ConCorpus::open("/tmp/corpus")
-Select::new().require_symbol("Cu")</pre>
+  <pre class="rc-hero-conline" aria-hidden="true">ConCorpus::open("/tmp/corpus")&#10;Select::new().require_symbol("Cu")</pre>
 </div>
 ```
 
