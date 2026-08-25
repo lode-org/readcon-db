@@ -126,8 +126,8 @@ clib tarball when the Release build produced it). See
 
 ## Documentation
 
-- User site: <https://lode-org.github.io/readcon-db/>
-- Rust API: <https://docs.rs/readcon-db>
+- Landing page: <https://lode-org.github.io/readcon-db/>
+- Full docs: <https://lode-org.github.io/readcon-db/docs/>
 - Design notes: [`docs/design.md`](https://github.com/lode-org/readcon-db/blob/main/docs/design.md) in the repository
 
 ```bash

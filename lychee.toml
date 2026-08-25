@@ -1,6 +1,6 @@
-# Link checker for built Sphinx HTML.
-# Run: lychee --config lychee.toml 'docs/_build/html/**/*.html'
-# CI: after sphinx-build -b html docs/source docs/_build/html
+# Link checker for the assembled Pages tree (landing + Sphinx).
+# Run: scripts/assemble-site.sh && lychee --config lychee.toml '_site/**/*.html'
+# CI: after pixi r -e docs docbld && scripts/assemble-site.sh
 
 verbose = "info"
 no_progress = true
@@ -12,7 +12,7 @@ accept = ["100..=103", "200..=299", "403", "429"]
 exclude = [
   '^https?://fonts\.gstatic\.com/',
   '^https?://fonts\.googleapis\.com/',
-  # Live Pages lag behind main until deploy; CI checks the local artifact.
+  # Live Pages lag behind main until deploy; CI checks the local _site artifact.
   '^https://lode-org\.github\.io/readcon-db/',
   '^https://lode-org\.github\.io/readcon-core/',
   # Edit-this-page targets main; CI/PR runs before merge so blobs 404.
@@ -22,6 +22,6 @@ exclude = [
 ]
 
 exclude_path = [
-  "docs/_build/html/_static/.*",
-  "docs/_build/html/searchindex.js",
+  "_site/docs/_static/.*",
+  "_site/docs/searchindex.js",
 ]

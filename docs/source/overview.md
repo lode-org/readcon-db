@@ -2,7 +2,7 @@
 
 Long-timescale and NEB campaigns produce **corpora**: many trajectories × many frames. Loading every frame as a heap `ConFrame` exhausts RAM; scanning every text file for “Cu and \(N < 200\)” wastes I/O.
 
-**readcon-db** is the **campaign store** in the [readcon ecosystem](https://github.com/lode-org/readcon-core) (interchange = [readcon-core](https://github.com/lode-org/readcon-core) / Python `readcon`). It treats the corpus as an **embedded key-value database**:
+**readcon-db** is the **corpus store** in the [readcon ecosystem](https://github.com/lode-org/readcon-core) (interchange = [readcon-core](https://github.com/lode-org/readcon-core) / Python `readcon`). It treats the corpus as an **embedded key-value database**:
 
 1. **mmap** the LMDB environment — hot pages live in the OS page cache (“disk data in RAM” without a second buffer pool).
 2. **Many readers, one writer** — analysis threads open read transactions; ingest is serialized.

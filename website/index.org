@@ -1,0 +1,62 @@
+#+title: readcon-db
+#+options: toc:nil num:nil html-style:nil html-scripts:nil title:nil ^:nil
+#+language: en
+#+html_doctype: html5
+#+html_head: <meta name="viewport" content="width=device-width, initial-scale=1" />
+#+html_head: <meta name="description" content="Mmap-backed CON and convel corpus. LMDB via Heed, xxHash3 match, Rust C C++ Python Fortran." />
+#+html_head: <link rel="icon" href="assets/logo.svg" type="image/svg+xml" />
+#+html_head: <link rel="stylesheet" href="css/site.css" />
+#+html_head: <link rel="preconnect" href="https://fonts.googleapis.com" />
+#+html_head: <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
+
+#+begin_export html
+<a class="skip" href="#main">Skip to content</a>
+<div class="rule" aria-hidden="true"></div>
+<p class="kicker">CON corpus</p>
+<div class="mast">
+  <img class="logo" src="assets/logo.svg" width="72" height="72" alt="" />
+  <div>
+    <h1 class="wordmark"><span class="read">read</span><span class="con">con</span><span class="db">-db</span></h1>
+    <p class="lede">Mmap-backed CON and convel. LMDB via Heed. Indexes, xxHash3 exact match, and bindings for Rust, C, C++, Python, and Fortran.</p>
+  </div>
+</div>
+<p class="cta">
+  <a href="docs/">Docs</a>
+  <a href="https://github.com/lode-org/readcon-db">Source</a>
+  <a href="https://github.com/lode-org/readcon-core">readcon-core</a>
+</p>
+#+end_export
+
+* With readcon-core
+:PROPERTIES:
+:CUSTOM_ID: main
+:END:
+
+*core* parses and writes one stream or file. *db* keeps thousands of
+those frames, indexes them, and lets many readers mmap the same tree.
+CON text stays authoritative. This crate is not a second paper.
+
+* Open, ingest, select
+
+#+begin_src rust
+use readcon_db::{ConCorpus, Select};
+
+let db = ConCorpus::open("/tmp/corpus")?;
+db.append_trajectory_path(1, "run.con")?;
+let keys = db.select(&Select::new().require_symbol("Cu"))?;
+let h = db.frame_hash(keys[0])?;
+#+end_src
+
+* C, Python, Fortran
+
+- *C / C++* :: =include/readcon-db.h= -- =rkrdb_*= and RAII
+  =readcon_db::Corpus=. MPI: =readcon-db-mpi.h= takes the caller
+  communicator.
+- *Python* :: =maturin develop --features python= → =readcon_db.ConCorpus=.
+- *Fortran* :: =fortran/ReadConDb= with =bind(C)= helpers.
+
+#+begin_export html
+<footer>
+  <p>MIT. Companion to readcon-core. Logo and site assets under <code>assets/logo</code> and <code>website/</code>.</p>
+</footer>
+#+end_export

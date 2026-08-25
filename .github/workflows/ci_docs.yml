@@ -32,10 +32,13 @@ jobs:
       - name: CPC fair-campaign freeze
         run: scripts/check-cpc-freeze.sh
 
+      - name: Assemble Pages tree
+        run: scripts/assemble-site.sh
+
       - name: Install lychee
         uses: taiki-e/install-action@v2
         with:
           tool: lychee@0.24.2
 
       - name: Link check (lychee)
-        run: lychee --config lychee.toml 'docs/_build/html/**/*.html'
+        run: lychee --config lychee.toml '_site/**/*.html'

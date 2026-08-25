@@ -4,7 +4,8 @@
 
 - [cocogitto](https://github.com/cocogitto/cocogitto) (`cog`) — conventional commits and `CHANGELOG.md`
 - [prek](https://prek.j178.dev) — git hooks (`prek.toml`)
-- [lychee](https://github.com/lycheeverse/lychee) — link check on built Sphinx HTML
+- [lychee](https://github.com/lycheeverse/lychee) — link check on the assembled Pages tree (landing + Sphinx)
+- Landing page source is `website/index.org`; export with `scripts/export-landing.sh` (ox-html)
 - Sphinx (`pixi.toml` `[feature.docs]`, locked by `pixi.lock`) — `pixi r -e docs docbld`
 
 ```bash
@@ -12,7 +13,9 @@ prek install
 prek run -a
 cog check
 pixi r -e docs docbld
-lychee --config lychee.toml 'docs/_build/html/**/*.html'
+scripts/export-landing.sh
+scripts/assemble-site.sh
+lychee --config lychee.toml '_site/**/*.html'
 ```
 
 Refresh the documentation lock after changing `pixi.toml` `[feature.docs]` or `docs/requirements.txt`:
@@ -26,7 +29,7 @@ pixi lock
 | Workflow | File | Trigger | Purpose |
 |----------|------|---------|---------|
 | Prek | `ci_prek.yml` | push, PR | `prek run -a` |
-| Documentation | `ci_docs.yml` | push, PR | Locked Sphinx HTML (`pixi.lock`) + lychee |
+| Documentation | `ci_docs.yml` | push, PR | Locked Sphinx HTML (`pixi.lock`) + assembled site + lychee |
 | Pages | `pages.yml` | push to main | Deploy site + locked Sphinx docs |
 | Lint | `lint.yml` | PR | Conventional commits + large-file audit |
 | Version lockstep | `scripts/check_version_lockstep.sh` | `cargo test` | Cargo, Python, meson, pixi, Fortran, CITATION, Sphinx, core pin |
@@ -58,7 +61,9 @@ tarball** → `tag=vX.Y.Z` on a branch that has `scripts/package-clib.sh`.
 ```bash
 prek run -a
 pixi r -e docs docbld
-lychee --config lychee.toml 'docs/_build/html/**/*.html'
+scripts/export-landing.sh
+scripts/assemble-site.sh
+lychee --config lychee.toml '_site/**/*.html'
 scripts/release-prep.sh X.Y.Z
 git commit -m "maint: bump to vX.Y.Z"
 # open PR, merge, then:

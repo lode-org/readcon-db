@@ -22,21 +22,14 @@ jobs:
           environments: docs
       - name: Sphinx HTML
         run: pixi r -e docs docbld
+      - name: Assemble site
+        run: scripts/assemble-site.sh
       - name: Install lychee
         uses: taiki-e/install-action@v2
         with:
           tool: lychee@0.24.2
       - name: Link check (lychee)
-        run: lychee --config lychee.toml 'docs/_build/html/**/*.html'
-      - name: Assemble site
-        run: |
-          mkdir -p _site
-          cp -a website/. _site/
-          mkdir -p _site/docs
-          cp -a docs/_build/html/. _site/docs/
-          cp -a assets _site/assets
-          # Site-root objects.inv matches readcon-core intersphinx_mapping.
-          cp docs/_build/html/objects.inv _site/objects.inv
+        run: lychee --config lychee.toml '_site/**/*.html'
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site

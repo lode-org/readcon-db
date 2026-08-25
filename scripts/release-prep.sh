@@ -66,7 +66,7 @@ scripts/check_version_lockstep.sh
 echo "==> prek"
 prek run -a
 
-echo "==> docs (sphinx) and lychee"
+echo "==> docs (sphinx), assemble site, and lychee"
 if command -v pixi >/dev/null 2>&1 && [[ -f pixi.lock ]]; then
   pixi r -e docs docbld
 elif command -v sphinx-build >/dev/null 2>&1; then
@@ -74,7 +74,8 @@ elif command -v sphinx-build >/dev/null 2>&1; then
 else
   python3 -m sphinx -b html docs/source docs/_build/html
 fi
-lychee --config lychee.toml 'docs/_build/html/**/*.html'
+scripts/assemble-site.sh
+lychee --config lychee.toml '_site/**/*.html'
 
 echo "==> CPC fair-campaign freeze"
 scripts/check-cpc-freeze.sh

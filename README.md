@@ -22,7 +22,7 @@ pip install readcon-db             # module readcon_db (PyPI)
 # Prebuilt C ABI (no cargo): readcon-db-clib-$VER-$target.tar.gz on the GitHub Release
 ```
 
-Docs: <https://lode-org.github.io/readcon-db/> · API: <https://docs.rs/readcon-db> · crate: <https://crates.io/crates/readcon-db>
+Site: <https://lode-org.github.io/readcon-db/> · Docs: <https://lode-org.github.io/readcon-db/docs/> · crate: <https://crates.io/crates/readcon-db>
 
 ## Quick start (from source)
 
