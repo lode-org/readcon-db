@@ -17,9 +17,12 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import socket
+import subprocess
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -377,12 +380,23 @@ def run_campaign(fixture: Path, ladder: list[int], out_dir: Path, run_id: int) -
         and r["volume_agree"]
         for r in parity_rows
     )
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--short=8", "HEAD"],
+            cwd=REPO_DB,
+            text=True,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        commit = "unknown"
     payload = {
         "run_id": run_id,
         "fixture": str(fixture),
         "ladder": ladder,
         "fair": True,
         "note": "Shared CON ladder; ASE Atoms from readcon geometry (not legacy Cu2 stand-in)",
+        "host": socket.gethostname(),
+        "date_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ"),
+        "commit": commit,
         "readcon_db": rdb_results,
         "ase_db": ase_results,
         "select_parity": parity_rows,
