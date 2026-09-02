@@ -19,14 +19,16 @@
 //! readcon-db dedup-export <corpus_dir> [filters...] -o train.xyz
 //! readcon-db reindex <corpus_dir>
 //! readcon-db hash-file <file.con>
+//! readcon-db annotate-topology <corpus_dir> --cutoff A [--graph G] [--hops N] [--seams PATH]
+//! readcon-db find-by-topology <corpus_dir> <file.con>
 //! ```
 
 use std::env;
 use std::process::ExitCode;
 
 use readcon_db::{
-    join_drained_roots, open_single_env_for_export, ConCorpus, FrameKey, Select, ShardedConCorpus,
-    DEFAULT_N_SHARDS,
+    join_drained_roots, open_single_env_for_export, AnnotateTopologyOpts, ConCorpus, FrameKey,
+    Select, ShardedConCorpus, DEFAULT_N_SHARDS,
 };
 
 fn usage() -> ExitCode {
@@ -43,9 +45,11 @@ fn usage() -> ExitCode {
                      [--neb-bead-min N] [--neb-bead-max N] [--neb-band-min B] [--neb-band-max B]
                      [--charge-min C] [--charge-max C] [--magmom-min M] [--magmom-max M]
                      [--require-forces] [--require-velocities] [--require-energy]
-                     [--export out.xyz]
+                     [--topo-key HEX] [--export out.xyz]
   readcon-db dedup-export <corpus_dir> [same filters as select] -o out.xyz
   readcon-db reindex <corpus_dir>
+  readcon-db annotate-topology <corpus_dir> --cutoff A [--graph G] [--hops N] [--seams PATH]
+  readcon-db find-by-topology <corpus_dir> <file.con>
   readcon-db shard-init <root> [--shards N]
   readcon-db shard-ingest <root> --shard S --start-id T [--units JSON] <file.con>...
   readcon-db shard-select <root> [--symbol S] ...
@@ -59,6 +63,8 @@ fn usage() -> ExitCode {
   readcon-db delete-cooked <corpus_dir> --traj T --frame F
   readcon-db positions <corpus_dir> --traj T --frame F
   readcon-db hash-file <file.con>
+  readcon-db annotate-topology <corpus_dir> --cutoff A [--graph G] [--hops N] [--seams PATH]
+  readcon-db find-by-topology <corpus_dir> <file.con>
   (RCSO cooked tier is opt-in; CON text in frames remains authority — docs/orgmode/cooked-soa.org)
 "
     );
@@ -169,6 +175,7 @@ fn main() -> ExitCode {
                 let mut req_forces = false;
                 let mut req_vels = false;
                 let mut req_energy = false;
+                let mut topo_key = None;
                 let mut export = None;
                 let mut i = 1;
                 while i < args.len() {
@@ -318,6 +325,10 @@ fn main() -> ExitCode {
                             req_energy = true;
                             i += 1;
                         }
+                        "--topo-key" => {
+                            topo_key = Some(args.get(i + 1).ok_or("hex")?.clone());
+                            i += 2;
+                        }
                         "--export" | "-o" => {
                             export = Some(args.get(i + 1).ok_or("path")?.clone());
                             i += 2;
@@ -417,6 +428,9 @@ fn main() -> ExitCode {
                 }
                 if req_energy {
                     sel = sel.require_energy();
+                }
+                if let Some(hex) = topo_key {
+                    sel = sel.topo_key(hex);
                 }
                 let keys = if cmd == "dedup-export" {
                     db.unique_frame_keys(&sel)?
@@ -711,6 +725,57 @@ fn main() -> ExitCode {
                 let text = std::fs::read_to_string(f)?;
                 let h = ConCorpus::hash_con_text(&text)?;
                 println!("{}", h.to_hex());
+            }
+            "annotate-topology" => {
+                let corpus = args.first().ok_or("corpus_dir")?.clone();
+                let mut cutoff = None::<f64>;
+                let mut graph = None;
+                let mut hops = None;
+                let mut seams = None;
+                let mut i = 1;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "--cutoff" => {
+                            cutoff = Some(args.get(i + 1).ok_or("cutoff")?.parse()?);
+                            i += 2;
+                        }
+                        "--graph" => {
+                            graph = Some(args.get(i + 1).ok_or("graph")?.clone());
+                            i += 2;
+                        }
+                        "--hops" => {
+                            hops = Some(args.get(i + 1).ok_or("hops")?.parse()?);
+                            i += 2;
+                        }
+                        "--seams" => {
+                            seams = Some(std::path::PathBuf::from(args.get(i + 1).ok_or("seams")?));
+                            i += 2;
+                        }
+                        _ => i += 1,
+                    }
+                }
+                let cutoff = cutoff.ok_or("--cutoff is required")?;
+                let db = ConCorpus::open_existing(&corpus)?;
+                let n = db.annotate_topology(&AnnotateTopologyOpts {
+                    cutoff,
+                    graph,
+                    hops,
+                    seams,
+                })?;
+                println!("annotated {n} frames");
+            }
+            "find-by-topology" => {
+                let corpus = args.first().ok_or("corpus_dir")?.clone();
+                let file = args.get(1).ok_or("file.con")?.clone();
+                let db = ConCorpus::open_readonly(&corpus)?;
+                let keys = db.find_by_topology_path(&file)?;
+                println!("{} keys", keys.len());
+                for k in keys.iter().take(20) {
+                    println!("  traj={} frame={}", k.traj_id, k.frame_idx);
+                }
+                if keys.len() > 20 {
+                    println!("  ...");
+                }
             }
             _ => return Err("unknown command".into()),
         }

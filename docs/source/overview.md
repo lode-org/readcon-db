@@ -6,7 +6,7 @@ Long-timescale and NEB campaigns produce **corpora**: many trajectories × many 
 
 1. **mmap** the LMDB environment — hot pages live in the OS page cache (“disk data in RAM” without a second buffer pool).
 2. **Many readers, one writer** — analysis threads open read transactions; ingest is serialized.
-3. **Secondary indexes** — atom counts (`idx_natoms`), symbols (`idx_symbol`), **per-element counts** (`idx_elem_count`), **exact formula** (`idx_formula`, e.g. `Cu:2|H:2`), **finite energy** (`idx_energy`), **fmax** (`idx_fmax` when forces exist), **section flags** (`idx_flags`), and **xxHash3-128** (`frame_by_hash`). **Reindex** rebuilds all secondary DBs from authoritative blobs. ASE.db **screening columns** (mass, volume, PBC, time/frame_index/NEB, charge/magmom) are indexed when CON-derivable—see `docs/design.md` matrix. Not a SQL engine; not ASE bookkeeping (`user`, `ctime`, calculator).
+3. **Secondary indexes** — atom counts (`idx_natoms`), symbols (`idx_symbol`), **per-element counts** (`idx_elem_count`), **exact formula** (`idx_formula`, e.g. `Cu:2|H:2`), **finite energy** (`idx_energy`), **fmax** (`idx_fmax` when forces exist), **section flags** (`idx_flags`), **xxHash3-128** (`frame_by_hash`), and optional **topology HEX** (`idx_topo`, from `seams fingerprint`). **Reindex** rebuilds all secondary DBs from authoritative blobs. ASE.db **screening columns** (mass, volume, PBC, time/frame_index/NEB, charge/magmom) are indexed when CON-derivable—see `docs/design.md` matrix. Not a SQL engine; not ASE bookkeeping (`user`, `ctime`, calculator).
 4. **Decode with readcon-core** — CON semantics never fork; metadata keys such as `energy` and declared `sections` are the same constants as in the CON spec.
 
 **Day-to-day path:** CON (or chemfiles→`ConFrame` in core) → ingest CON blobs → `Select` / CLI / `rkrdb_select_meta`. ASE is not on the I/O path; optional `to_ase` is only for calculators.
@@ -18,5 +18,11 @@ trajectory (CON stays authority). **Drain/join:** node-local `shard-ingest`,
 `drain` compact-snapshots `data.mdb`, then `join-drained`. `compact-join`
 is the single-root join. Ops: [campaign](campaign.md).
 
+
+**Topology up to relabelling.** xxHash3 says two CON blobs are the same bytes.
+The k-ART catalogue test uses the bonded graph: a saddle search that reaches
+a configuration whose topology key already exists has revisited a state up to
+symmetry (Trochet et al., Phys. Rev. B 91, 224106 (2015)). `annotate-topology`
+stores that coarser key; see {doc}`howto-topology`.
 
 **Benchmarks:** same-frame ASE comparison is `examples/benchmarks/fair_campaign.py`. See {doc}`workflows`.

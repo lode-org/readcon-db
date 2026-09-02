@@ -13,11 +13,12 @@ mod frame_scalars;
 mod keys;
 mod select;
 mod shard;
+mod topology;
 mod units_canon;
 
 pub use archive::ObservationArchive;
 pub use cooked_soa::CookedSoa;
-pub use corpus::{frame_fmax, ConCorpus};
+pub use corpus::{frame_fmax, ConCorpus, TrajMeta};
 pub use error::{Error, Result};
 pub use export_h5md::H5mdArrays;
 pub use export_xyz::{write_frame_extxyz, write_frames_extxyz};
@@ -31,6 +32,7 @@ pub use shard::{
     join_corpus_dirs, join_drained_roots, open_single_env_for_export, CorpusExportKind,
     ShardManifest, ShardedConCorpus, DEFAULT_N_SHARDS,
 };
+pub use topology::{AnnotateTopologyOpts, FingerprintRecord, TopoParams};
 pub use units_canon::{canonicalize_unit, canonicalize_units_object};
 
 pub mod ffi;

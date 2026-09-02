@@ -48,6 +48,8 @@ election, gRPC query plane. Those do not match the NEB-on-one-host threat model.
 | `idx_fmax` | order-preserving max \(\|F_i\|\) ‖ `FrameKey` (forces only) | `fmax_range` |
 | `idx_flags` | `flag_id` (u8) ‖ `FrameKey` | `require_forces` / `require_velocities` / `require_energy` |
 | `frame_by_hash` / `hash_by_frame` | xxHash3-128 | `exact_hash`, dedup |
+| `idx_topo` | topology hex UTF-8 ‖ `0xff` ‖ `FrameKey` | `topo_key`, `find_by_topology_path` |
+| `topo_by_frame` | `FrameKey` → topology hex | annotation store; `reindex` rebuilds `idx_topo` from this |
 
 Formula encoding: sorted non-empty symbols, `Sym:count` joined by `|` (e.g. `Cu:2|H:2`). Finite energies and fmax only; frames without forces never satisfy a finite `fmax_range`.
 

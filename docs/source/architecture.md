@@ -15,7 +15,7 @@ Frame **blobs are CON text**; indexes are derived at ingest from the same
 ```
 Environment (Heed / LMDB)
 ├── frames          : FrameKey → CON text blob (source span at ingest)
-├── traj_meta       : traj_id → { n_frames, source }
+├── traj_meta       : traj_id → { n_frames, source, optional topo_* }
 ├── idx_natoms      : (n_atoms BE, FrameKey) → ()
 ├── idx_symbol      : (symbol ‖ 0xFF ‖ FrameKey) → ()
 ├── idx_energy      : (ord(E) BE, FrameKey) → ()   # finite energy only
@@ -29,7 +29,9 @@ Environment (Heed / LMDB)
 ├── idx_flags       : (flag_id ‖ FrameKey) → ()    # forces / velocities / has_energy
 ├── frame_by_hash   : xxh3-128 → FrameKey (first wins)
 ├── frames_soa      : FrameKey → RCSO cooked numerics (optional, derived)
-└── hash_by_frame   : FrameKey → xxh3-128
+├── hash_by_frame   : FrameKey → xxh3-128
+├── idx_topo        : topology hex UTF-8 ‖ 0xFF ‖ FrameKey (optional; empty if missing on readonly)
+└── topo_by_frame   : FrameKey → topology hex (optional annotation store)
 ```
 
 **H5MD interchange:** `collect_h5md` / `export_h5md` emit one `[T][N][3]`
@@ -73,6 +75,7 @@ Postings lists from secondary DBs are intersected in-process (`BTreeSet`):
 | `require_symbol` | `idx_symbol` | Prefix walk for that element |
 | `element_exact` / `element_min` | `idx_elem_count` | Prefix + count filter |
 | `exact_composition` | `idx_formula` | Prefix on canonical formula |
+| `topo_key` | `idx_topo` | Prefix on topology hex; missing DB is empty |
 | `natoms_range` | `idx_natoms` | Ordered scan, early stop |
 | `energy_range` | `idx_energy` | Ordered scan on finite energies |
 | `fmax_range` | `idx_fmax` | Ordered scan (no forces ⇒ not indexed) |

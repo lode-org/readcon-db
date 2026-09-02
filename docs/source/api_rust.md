@@ -28,6 +28,30 @@ let sel = Select::new().exact_hash(h.to_bytes());
 let hits = db.select(&sel)?;
 ```
 
+Bonded topology up to relabelling is a second identity beside xxHash3.
+`TrajMeta` may carry `topo_cutoff`, `topo_graph`, `topo_hops`, and
+`topo_method` (serde default: missing keys load as `None`).
+`annotate_topology` runs `seams fingerprint FILE --format json`.
+`Select::topo_key` prefix-scans `idx_topo`. `find_by_topology_path` runs
+the fingerprint on a file with the recorded corpus parameters.
+
+```rust
+use readcon_db::{AnnotateTopologyOpts, ConCorpus, Select};
+
+db.annotate_topology(&AnnotateTopologyOpts::new(3.0))?;
+let hits = db.select(&Select::new().topo_key("abcdef"))?;
+let same = db.find_by_topology_path("permuted.con")?;
+let meta = db.traj_meta(1)?; // topo_* fields after annotate
+```
+
+CLI:
+
+```text
+readcon-db annotate-topology <corpus_dir> --cutoff A [--graph G] [--hops N] [--seams PATH]
+readcon-db select <corpus_dir> --topo-key abcdef
+readcon-db find-by-topology <corpus_dir> <file.con>
+```
+
 See crate docs (`cargo doc --open`) for `Error` variants and `ContentHash::to_hex`.
 
 ```rust

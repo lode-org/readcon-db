@@ -82,6 +82,7 @@ tutorial
 :caption: How-to guides
 
 howto
+howto-topology
 install
 campaign
 workflows
