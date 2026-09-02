@@ -19,11 +19,10 @@ use crate::frame_scalars::{
 use crate::keys::{
     composition_formula, elem_count_key, elem_count_symbol_prefix, energy_bin_key, flag_key,
     fmax_bin_key, formula_key, formula_prefix, hash_frame_bytes, mass_bin_key, meta_scalar_key,
-    natoms_key, ordered_f64_bits, parse_elem_count_key, pbc_key, pbc_mask_from_bools,
-    species_counts_from_symbols, symbol_key, symbol_prefix, topo_index_key, topo_index_prefix,
-    volume_bin_key, ContentHash, FrameKey, TrajId, FLAG_HAS_ENERGY, FLAG_HAS_FORCES,
-    FLAG_HAS_VELOCITIES, META_CHARGE, META_FRAME_INDEX, META_MAGMOM, META_NEB_BAND, META_NEB_BEAD,
-    META_TIME, META_TIMESTEP,
+    natoms_key, ordered_f64_bits, parse_elem_count_key, pbc_key, pbc_mask_from_bools, symbol_key,
+    symbol_prefix, topo_index_key, topo_index_prefix, volume_bin_key, ContentHash, FrameKey,
+    TrajId, FLAG_HAS_ENERGY, FLAG_HAS_FORCES, FLAG_HAS_VELOCITIES, META_CHARGE, META_FRAME_INDEX,
+    META_MAGMOM, META_NEB_BAND, META_NEB_BEAD, META_TIME, META_TIMESTEP,
 };
 use crate::select::Select;
 use crate::topology::{
@@ -3213,12 +3212,13 @@ mod tests {
         assert_eq!(hits, vec![orig]);
 
         let mut broken = db.get_frame(orig).unwrap();
-        if let Some(h) = broken
+        // Default seams neighbor list is the first atom type (Cu on this fixture).
+        if let Some(cu) = broken
             .atom_data
             .iter_mut()
-            .find(|a| a.symbol.as_ref() == "H")
+            .find(|a| a.symbol.as_ref() == "Cu")
         {
-            h.z += 10.0;
+            cu.z += 10.0;
         }
         let mut buf = Cursor::new(Vec::new());
         {

@@ -105,6 +105,7 @@ fn token_after<'a>(tokens: &[&'a str], label: &str) -> Option<&'a str> {
 }
 
 /// Parse one JSON object. `text` holds the CLI line.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn parse_fingerprint_object(json: &str) -> Result<FingerprintRecord> {
     let obj: SeamsJson = serde_json::from_str(json.trim())
         .map_err(|e| Error::Message(format!("seams fingerprint JSON: {e}")))?;
