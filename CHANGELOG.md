@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.1.6 - 2026-09-02
+#### Benchmarks
+- (**cpc**) restamp the fair campaign freeze with host and commit - (4a85c51) - *HaoZeke*
+- (**cpc**) stamp host, date, and commit on the fair campaign JSON - (fdd5697) - *HaoZeke*
+#### Features
+- add topology-key secondary index - (0963b8d) - *HaoZeke*
+#### Bug Fixes
+- (**docs**) keep the hero snippet on one raw-html line - (94de5d9) - *HaoZeke*
+- annotate TrajMeta in commit_prepared - (e7f209e) - *HaoZeke*
+#### Documentation
+- document topology keys and the kinetic ART catalogue test - (79c8542) - *HaoZeke*
+- drop the CPC positioning page from the public site - (84bc2b1) - *HaoZeke*
+- restore sibling docs sites in Ecosystem - (d4376cf) - *HaoZeke*
+- Ecosystem is only the sibling docs site - (face455) - *HaoZeke*
+- Ecosystem nav lists docs sites only - (1964885) - *HaoZeke*
+- switch Pages to Shibuya with Diátaxis pages like core - (c944f98) - *HaoZeke*
+- drop the second-crate card copy from the landing - (9b24526) - *HaoZeke*
+- export the landing from org and point Docs at /docs/ - (c32f07c) - *HaoZeke*
+#### Tests
+- break the Cu-Cu cutoff bond in the topology identity check - (2b2bee4) - *HaoZeke*
+#### Style
+- (**lychee**) apply taplo format - (98016d2) - *HaoZeke*
+
+
+
 ## v0.1.5 - 2026-08-24
 #### Features
 - (**abi**) rkrdb_get_frame returns a parsed ConFrame - (3802c6f) - *HaoZeke*

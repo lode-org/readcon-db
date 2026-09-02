@@ -1,7 +1,7 @@
 project(
     'readcon-db',
     'c',
-    version: '0.1.5',
+    version: '0.1.6',
     meson_version: '>=1.3.0',
     default_options: [
         'buildtype=debugoptimized',

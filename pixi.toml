@@ -1,6 +1,6 @@
 [workspace]
 name = "readcon-db"
-version = "0.1.5"
+version = "0.1.6"
 description = "Mmap-backed CON frame corpus (Heed/LMDB), xxHash exact match, multi-language FFI"
 channels = ["conda-forge"]
 platforms = ["linux-64"]

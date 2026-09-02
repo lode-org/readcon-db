@@ -10,7 +10,7 @@ with [fpm](https://fpm.fortran-lang.org/). Module source:
 Release tarball instead of `target/release`:
 
 ```bash
-VER=0.1.5
+VER=0.1.6
 TARGET=x86_64-unknown-linux-gnu
 curl -fsSL -O "https://github.com/lode-org/readcon-db/releases/download/v${VER}/readcon-db-clib-${VER}-${TARGET}.tar.gz"
 tar -xzf "readcon-db-clib-${VER}-${TARGET}.tar.gz"

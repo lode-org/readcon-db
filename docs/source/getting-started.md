@@ -6,7 +6,7 @@ Install one language, then run the {doc}`tutorial`.
 
 ## Install
 
-Pick **one** language. Pins match this tree (`0.1.5`). Core is `readcon-core` ^0.14 (pulled automatically for Rust).
+Pick **one** language. Pins match this tree (`0.1.6`). Core is `readcon-core` ^0.14 (pulled automatically for Rust).
 
 | Package | Install | Destination |
 |---------|---------|-------------|
