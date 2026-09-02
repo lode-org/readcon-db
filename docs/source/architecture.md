@@ -15,7 +15,7 @@ Frame **blobs are CON text**; indexes are derived at ingest from the same
 ```
 Environment (Heed / LMDB)
 ├── frames          : FrameKey → CON text blob (source span at ingest)
-├── traj_meta       : traj_id → { n_frames, source }
+├── traj_meta       : traj_id → { n_frames, source, optional topo_* }
 ├── idx_natoms      : (n_atoms BE, FrameKey) → ()
 ├── idx_symbol      : (symbol ‖ 0xFF ‖ FrameKey) → ()
 ├── idx_energy      : (ord(E) BE, FrameKey) → ()   # finite energy only
@@ -26,11 +26,20 @@ Environment (Heed / LMDB)
 ├── idx_meta        : channel ‖ ord(value) ‖ FrameKey  # time, NEB, charge, …
 ├── idx_elem_count  : symbol ‖ 0xFF ‖ BE count ‖ FrameKey
 ├── idx_formula     : `Cu:2|H:2` ‖ 0xFF ‖ FrameKey
+├── idx_topo        : topology-key utf-8 ‖ 0xFF ‖ FrameKey  # optional; empty if missing on readonly
+├── topo_by_frame   : FrameKey → topology key               # optional; authority for matching reindex
 ├── idx_flags       : (flag_id ‖ FrameKey) → ()    # forces / velocities / has_energy
 ├── frame_by_hash   : xxh3-128 → FrameKey (first wins)
 ├── frames_soa      : FrameKey → RCSO cooked numerics (optional, derived)
 └── hash_by_frame   : FrameKey → xxh3-128
 ```
+
+`idx_topo` and `topo_by_frame` are created on write-open. A readonly open of
+an older corpus that lacks them treats the topology index as empty.
+
+`TrajMeta` may record `topo_cutoff`, `topo_graph`, `topo_hops`, and
+`topo_method` after `annotate_topology`. Those fields have serde defaults so
+old JSON still loads. Ingest and extend preserve them.
 
 **H5MD interchange:** `collect_h5md` / `export_h5md` emit one `[T][N][3]`
 trajectory (position, optional force and velocity). CON text stays
@@ -62,6 +71,10 @@ or per-atom data.
 
 `ConCorpus::reindex` / CLI `readcon-db reindex` clears secondary DBs and rebuilds
 from authoritative `frames` (schema evolution without delete+re-ingest).
+`idx_topo` is rebuilt from `topo_by_frame` when every annotated
+trajectory records the same cutoff/graph/hops/method. Mixed
+parameters error without a half-rebuild. An unannotated corpus leaves
+`idx_topo` empty. That rebuild does not need the engine.
 
 ## Selection and query costs
 
@@ -73,6 +86,7 @@ Postings lists from secondary DBs are intersected in-process (`BTreeSet`):
 | `require_symbol` | `idx_symbol` | Prefix walk for that element |
 | `element_exact` / `element_min` | `idx_elem_count` | Prefix + count filter |
 | `exact_composition` | `idx_formula` | Prefix on canonical formula |
+| `topo_key` | `idx_topo` | Prefix on topology HEX |
 | `natoms_range` | `idx_natoms` | Ordered scan, early stop |
 | `energy_range` | `idx_energy` | Ordered scan on finite energies |
 | `fmax_range` | `idx_fmax` | Ordered scan (no forces ⇒ not indexed) |
@@ -81,6 +95,24 @@ Postings lists from secondary DBs are intersected in-process (`BTreeSet`):
 
 Decode (`get_frame`) is separate: one LMDB get + readcon-core parse. Keys-only
 select avoids decode.
+
+## Topology keys and the kinetic ART catalogue test
+
+xxHash3 on CON bytes is exact. A permutation of atom order, or
+relaxation that moves any coordinate, is a different frame. Kinetic ART
+catalogues events by the **bonded topology up to relabelling** instead.
+Two minima (or a new saddle) that share the same graph and ring census
+are the same catalogue entry even when the coordinates differ. A saddle
+search uses that test to decide that a state has been visited.
+
+d-SEAMS (`seams fingerprint`) supplies that coarser key: per-atom
+rooted-neighbourhood certificates (nauty or Weisfeiler-Lehman) and a
+frame key from their sorted multiset plus the primitive ring census.
+This crate stores the key in `idx_topo` after an explicit annotate pass.
+Every annotated `TrajMeta` records cutoff, graph, hops, and method.
+Mixing methods in one corpus is refused.
+
+Reference: Trochet, A., et al., Phys. Rev. B 91, 224106 (2015).
 
 ## Bindings hourglass
 

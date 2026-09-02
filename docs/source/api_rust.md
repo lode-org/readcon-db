@@ -30,6 +30,39 @@ let hits = db.select(&sel)?;
 
 See crate docs (`cargo doc --open`) for `Error` variants and `ContentHash::to_hex`.
 
+## Topology keys
+
+Exact match stays xxHash3 on CON bytes. The coarser identity is the bonded
+graph up to relabelling from `seams fingerprint FILE --format json`.
+
+```rust
+use readcon_db::{AnnotateTopologyOpts, ConCorpus, Select, TrajMeta};
+
+db.annotate_topology(AnnotateTopologyOpts::new(3.0))?;
+let hits = db.select(&Select::new().topo_key(hex))?;
+let same = db.find_by_topology_path("perm.con")?;
+let meta: TrajMeta = db.traj_meta(1)?.unwrap();
+// meta.topo_cutoff / topo_graph / topo_hops / topo_method
+```
+
+| API | Role |
+|-----|------|
+| `ConCorpus::annotate_topology` | Shells `seams fingerprint FILE --format json --cutoff C --graph G --hops H`. Resolves the binary from `--seams` / `SEAMS` / `PATH`. Default graph `cutoff`, hops 2. Cutoff required. Refuses a mixed method. |
+| `ConCorpus::find_by_topology_path` / `find_by_topology_text` | Fingerprint a file (or CON text) with the recorded corpus params and look up `idx_topo`. Errors if nothing is annotated or if seams is missing. |
+| `Select::topo_key` | Prefix-scan `idx_topo` (topology-key utf-8 \|\| `0xff` \|\| `FrameKey`). |
+| `TrajMeta` | Optional `topo_cutoff`, `topo_graph`, `topo_hops`, `topo_method` (serde default; old JSON still loads). Ingest/extend preserve these fields. |
+
+CLI:
+
+```text
+readcon-db annotate-topology <corpus_dir> --cutoff A [--graph G] [--hops N] [--seams PATH]
+readcon-db select <corpus_dir> --topo-key HEX
+readcon-db find-by-topology <corpus_dir> <file.con>
+```
+
+Missing seams: nonzero exit and a stderr message that names `seams fingerprint`.
+How-to: {doc}`howto-topology`.
+
 ```rust
 use readcon_db::{
     canonicalize_unit, join_drained_roots, ConCorpus, ShardedConCorpus,

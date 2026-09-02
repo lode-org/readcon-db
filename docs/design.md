@@ -44,6 +44,7 @@ election, gRPC query plane. Those do not match the NEB-on-one-host threat model.
 | `idx_symbol` | symbol UTF-8 ‖ `0xff` ‖ `FrameKey` | `require_symbol` |
 | `idx_elem_count` | symbol ‖ `0xff` ‖ BE count ‖ `FrameKey` | `element_exact` / `element_min` |
 | `idx_formula` | canonical `Sym:count\|...` ‖ `0xff` ‖ `FrameKey` | `exact_composition` |
+| `idx_topo` / `topo_by_frame` | topology-key utf-8 ‖ `0xff` ‖ `FrameKey`; FrameKey → key | `topo_key`, `find_by_topology_*` |
 | `idx_energy` | order-preserving BE bits of finite energy ‖ `FrameKey` | `energy_range` |
 | `idx_fmax` | order-preserving max \(\|F_i\|\) ‖ `FrameKey` (forces only) | `fmax_range` |
 | `idx_flags` | `flag_id` (u8) ‖ `FrameKey` | `require_forces` / `require_velocities` / `require_energy` |
@@ -61,7 +62,7 @@ Formula encoding: sorted non-empty symbols, `Sym:count` joined by `|` (e.g. `Cu:
 
 ## Reindex
 
-`ConCorpus::reindex` (CLI: `readcon-db reindex <corpus_dir>`) clears secondary DBs and rebuilds them from authoritative `frames` blobs—**schema upgrade path** after adding indexes. Safe to run twice (idempotent key sets). Frames and `traj_meta` are not deleted.
+`ConCorpus::reindex` (CLI: `readcon-db reindex <corpus_dir>`) clears secondary DBs and rebuilds them from authoritative `frames` blobs—**schema upgrade path** after adding indexes. Safe to run twice (idempotent key sets). Frames and `traj_meta` are not deleted. `idx_topo` is rebuilt from `topo_by_frame` when every annotated trajectory records the same cutoff/graph/hops/method; mixed parameters error without a half-rebuild. Unannotated corpora leave `idx_topo` empty.
 
 ## Invariants
 
@@ -160,6 +161,7 @@ Speed only matters if filters users already have in ASE.db exist. Architecture s
 | NEB bead/band | `neb_bead`, `neb_band` | `neb_bead_range`, `neb_band_range` / `idx_meta` |
 | `charge`, `magmom` | optional JSON numbers | `charge_range`, `magmom_range` / `idx_meta` |
 | exact structure id | CON blob | `exact_hash` / xxHash3 |
+| topology up to relabelling | `seams fingerprint` key | `topo_key` / `idx_topo` |
 | `id` / row id | — | `FrameKey` (traj_id, frame_idx) |
 | `unique_id` UUID | — | **N/A (ASE bookkeeping)**; use content hash |
 | `ctime` / `mtime` / `age` | — | **N/A (ASE bookkeeping)** |
