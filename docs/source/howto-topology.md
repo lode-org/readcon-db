@@ -75,7 +75,8 @@ let hits = db.find_by_topology_path("candidate.con")?;
 ```
 
 A permuted copy of a stored frame (swap two Cu rows) hits the original.
-A frame with a broken bond (one H displaced by about 10 A) does not.
+A frame with a broken bond (one Cu displaced by about 10 A on this
+fixture, whose default cutoff graph is the first-atom type) does not.
 
 A corpus with no recorded topology parameters errors and names
 `annotate-topology`.

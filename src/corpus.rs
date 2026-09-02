@@ -3048,17 +3048,19 @@ mod tests {
         out
     }
 
-    fn break_one_h(text: &str) -> String {
+    fn break_one_bond(text: &str) -> String {
         let mut fr = {
             let mut it = ConFrameIterator::new(text);
             it.next().unwrap().unwrap()
         };
-        let h = fr
+        // Default seams typeI is the first atom type (Cu here). H-H is
+        // inside 3 A but is not in that cutoff graph; displace a Cu.
+        let cu = fr
             .atom_data
             .iter_mut()
-            .find(|a| a.symbol.as_ref() == "H")
-            .expect("H");
-        h.z += 10.0;
+            .find(|a| a.symbol.as_ref() == "Cu")
+            .expect("Cu");
+        cu.z += 10.0;
         let mut buf = Cursor::new(Vec::new());
         {
             let mut w = ConFrameWriter::new(&mut buf);
@@ -3094,13 +3096,13 @@ mod tests {
 
         let orig = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
         let perm = permute_cu_rows(&orig);
-        let broken = break_one_h(&orig);
+        let broken = break_one_bond(&orig);
         let perm_hits = db.find_by_topology_text(&perm).unwrap();
         assert_eq!(perm_hits, vec![k0]);
         let broken_hits = db.find_by_topology_text(&broken).unwrap();
         assert!(
             broken_hits.is_empty(),
-            "displaced H must not share topology key, got {broken_hits:?}"
+            "broken Cu-Cu bond must not share topology key, got {broken_hits:?}"
         );
         let sel = db.select(&Select::new().topo_key(&hex)).unwrap();
         assert_eq!(sel, vec![k0]);
