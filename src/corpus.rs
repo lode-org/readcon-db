@@ -20,11 +20,16 @@ use crate::keys::{
     composition_formula, elem_count_key, elem_count_symbol_prefix, energy_bin_key, flag_key,
     fmax_bin_key, formula_key, formula_prefix, hash_frame_bytes, mass_bin_key, meta_scalar_key,
     natoms_key, ordered_f64_bits, parse_elem_count_key, pbc_key, pbc_mask_from_bools,
-    species_counts_from_symbols, symbol_key, symbol_prefix, volume_bin_key, ContentHash, FrameKey,
-    TrajId, FLAG_HAS_ENERGY, FLAG_HAS_FORCES, FLAG_HAS_VELOCITIES, META_CHARGE, META_FRAME_INDEX,
-    META_MAGMOM, META_NEB_BAND, META_NEB_BEAD, META_TIME, META_TIMESTEP,
+    species_counts_from_symbols, symbol_key, symbol_prefix, topo_key, topo_prefix, volume_bin_key,
+    ContentHash, FrameKey, TrajId, FLAG_HAS_ENERGY, FLAG_HAS_FORCES, FLAG_HAS_VELOCITIES,
+    META_CHARGE, META_FRAME_INDEX, META_MAGMOM, META_NEB_BAND, META_NEB_BEAD, META_TIME,
+    META_TIMESTEP,
 };
 use crate::select::Select;
+use crate::topology::{
+    fingerprint_con_bytes, mixed_topo_error, normalize_topo_hex, resolve_seams_binary,
+    run_seams_fingerprint, AnnotateTopologyOpts, TopologyParams,
+};
 
 /// Default mmap region (2 GiB). Raise via re-open with a larger map if the corpus grows.
 const MAP_SIZE: usize = 2 * 1024 * 1024 * 1024;
@@ -34,10 +39,40 @@ const MAX_DBS: u32 = 48;
 /// (Gray/Reuter MVCC; LMDB design notes — not a cluster consensus protocol).
 const MAX_READERS: u32 = 512;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct TrajMeta {
     pub n_frames: u32,
     pub source: String,
+    #[serde(default)]
+    pub topo_cutoff: Option<f64>,
+    #[serde(default)]
+    pub topo_graph: Option<String>,
+    #[serde(default)]
+    pub topo_hops: Option<u32>,
+    #[serde(default)]
+    pub topo_method: Option<String>,
+}
+
+impl TrajMeta {
+    fn topo_params(&self) -> TopologyParams {
+        TopologyParams {
+            cutoff: self.topo_cutoff,
+            graph: self.topo_graph.clone(),
+            hops: self.topo_hops,
+            method: self.topo_method.clone(),
+        }
+    }
+
+    fn has_topo(&self) -> bool {
+        !self.topo_params().is_empty()
+    }
+
+    fn stamp_topo(&mut self, cutoff: f64, graph: &str, hops: u32, method: &str) {
+        self.topo_cutoff = Some(cutoff);
+        self.topo_graph = Some(graph.to_owned());
+        self.topo_hops = Some(hops);
+        self.topo_method = Some(method.to_owned());
+    }
 }
 
 /// All secondary index keys precomputed **outside** exclusive write_txn (commit = puts only).
@@ -83,6 +118,10 @@ pub struct ConCorpus {
     hash_by_frame: Database<Bytes, Bytes>,
     /// Optional derived SoA numerics (`FrameKey` → cooked bytes). Not authoritative.
     frames_soa: Database<Bytes, Bytes>,
+    /// Optional topology HEX ‖ 0xff ‖ FrameKey. Missing on readonly of older corpora.
+    idx_topo: Option<Database<Bytes, Unit>>,
+    /// Optional FrameKey → HEX. Authority for a matching `reindex` rebuild.
+    topo_by_frame: Option<Database<Bytes, Bytes>>,
 }
 
 fn frame_has_forces(frame: &ConFrame) -> bool {
@@ -214,6 +253,9 @@ impl ConCorpus {
             let frames_soa = env
                 .open_database(&rtxn, Some("frames_soa"))?
                 .ok_or_else(|| missing("frames_soa"))?;
+            // Older corpora lack these; treat a missing index as empty.
+            let idx_topo = env.open_database(&rtxn, Some("idx_topo"))?;
+            let topo_by_frame = env.open_database(&rtxn, Some("topo_by_frame"))?;
             // heed: uncommitted open_database txn → EINVAL on the next RoTxn.
             rtxn.commit()?;
             return Ok(Self {
@@ -235,6 +277,8 @@ impl ConCorpus {
                 frame_by_hash,
                 hash_by_frame,
                 frames_soa,
+                idx_topo,
+                topo_by_frame,
             });
         }
 
@@ -255,6 +299,8 @@ impl ConCorpus {
         let frame_by_hash = env.create_database(&mut wtxn, Some("frame_by_hash"))?;
         let hash_by_frame = env.create_database(&mut wtxn, Some("hash_by_frame"))?;
         let frames_soa = env.create_database(&mut wtxn, Some("frames_soa"))?;
+        let idx_topo = env.create_database(&mut wtxn, Some("idx_topo"))?;
+        let topo_by_frame = env.create_database(&mut wtxn, Some("topo_by_frame"))?;
         wtxn.commit()?;
 
         Ok(Self {
@@ -276,6 +322,8 @@ impl ConCorpus {
             frame_by_hash,
             hash_by_frame,
             frames_soa,
+            idx_topo: Some(idx_topo),
+            topo_by_frame: Some(topo_by_frame),
         })
     }
 
@@ -591,7 +639,17 @@ impl ConCorpus {
             self.put_index_puts(&mut wtxn, p)?;
         }
         let n_frames = prepared.last().map(|p| p.fk.frame_idx + 1).unwrap_or(0);
-        let meta = TrajMeta { n_frames, source };
+        let existing = if replace_meta {
+            self.traj_meta
+                .get(&wtxn, &tid_key[..])?
+                .map(serde_json::from_str)
+                .transpose()?
+        } else {
+            None
+        };
+        let mut meta = existing.unwrap_or_default();
+        meta.n_frames = n_frames;
+        meta.source = source;
         self.traj_meta
             .put(&mut wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
         wtxn.commit()?;
@@ -711,26 +769,27 @@ impl ConCorpus {
         frames: &[ConFrame],
         source_hint: impl Into<String>,
     ) -> Result<u32> {
-        let (start_idx, source) = {
+        let (start_idx, prior) = {
             let rtxn = self.env.read_txn()?;
             let tid_key = traj_id.to_be_bytes();
             if let Some(existing) = self.traj_meta.get(&rtxn, &tid_key[..])? {
                 let meta: TrajMeta = serde_json::from_str(existing)?;
-                (meta.n_frames, meta.source)
+                (meta.n_frames, Some(meta))
             } else {
-                (0u32, source_hint.into())
+                (0u32, None)
             }
         };
         // Key derivation fully outside exclusive section.
         let prepared = Self::prepare_trajectory_frames(traj_id, frames, start_idx)?;
         let mut wtxn = self.env.write_txn()?;
         let tid_key = traj_id.to_be_bytes();
-        let live_n = if let Some(existing) = self.traj_meta.get(&wtxn, &tid_key[..])? {
-            let meta: TrajMeta = serde_json::from_str(existing)?;
-            meta.n_frames
+        let live: Option<TrajMeta> = if let Some(existing) = self.traj_meta.get(&wtxn, &tid_key[..])?
+        {
+            Some(serde_json::from_str(existing)?)
         } else {
-            0u32
+            None
         };
+        let live_n = live.as_ref().map(|m| m.n_frames).unwrap_or(0);
         if live_n != start_idx {
             return Err(Error::Message(format!(
                 "concurrent extend race on traj {traj_id}: expected start {start_idx}, live {live_n}"
@@ -743,7 +802,11 @@ impl ConCorpus {
             .last()
             .map(|p| p.fk.frame_idx + 1)
             .unwrap_or(start_idx);
-        let meta = TrajMeta { n_frames, source };
+        let mut meta = live.or(prior).unwrap_or_else(|| TrajMeta {
+            source: source_hint.into(),
+            ..Default::default()
+        });
+        meta.n_frames = n_frames;
         self.traj_meta
             .put(&mut wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
         wtxn.commit()?;
@@ -797,9 +860,18 @@ impl ConCorpus {
     }
 
     /// Rebuild all secondary indexes from authoritative `frames` blobs (schema upgrade path).
+    ///
+    /// `idx_topo` is rebuilt from `topo_by_frame` only when every annotated
+    /// trajectory records the same cutoff/graph/hops/method. Mixed parameters
+    /// return an error without writing. Unannotated corpora leave `idx_topo`
+    /// empty. The engine binary is not required for a matching rebuild.
     pub fn reindex(&self) -> Result<u32> {
+        let recorded = self.collected_topo_params()?;
         let mut wtxn = self.env.write_txn()?;
         self.clear_secondary(&mut wtxn)?;
+        if let Some(idx) = self.idx_topo {
+            idx.clear(&mut wtxn)?;
+        }
 
         let mut n = 0u32;
         // Collect keys first (heed iterator + puts on same txn is safer with snapshot list)
@@ -897,6 +969,9 @@ impl ConCorpus {
             }
             n += 1;
         }
+        if recorded.is_some() {
+            self.rebuild_idx_topo_from_stored(&mut wtxn)?;
+        }
         wtxn.commit()?;
         Ok(n)
     }
@@ -908,6 +983,256 @@ impl ConCorpus {
             None => Ok(None),
             Some(s) => Ok(Some(serde_json::from_str(s)?)),
         }
+    }
+
+    fn list_traj_metas(&self) -> Result<Vec<(TrajId, TrajMeta)>> {
+        let rtxn = self.env.read_txn()?;
+        let mut out = Vec::new();
+        let mut iter = self.traj_meta.iter(&rtxn)?;
+        while let Some(Ok((k, v))) = iter.next() {
+            if k.len() != 8 {
+                continue;
+            }
+            let mut tb = [0u8; 8];
+            tb.copy_from_slice(k);
+            out.push((u64::from_be_bytes(tb), serde_json::from_str(v)?));
+        }
+        Ok(out)
+    }
+
+    fn collected_topo_params(&self) -> Result<Option<TopologyParams>> {
+        let mut seen: Option<TopologyParams> = None;
+        for (_, meta) in self.list_traj_metas()? {
+            if !meta.has_topo() {
+                continue;
+            }
+            let rec = meta.topo_params();
+            match &seen {
+                None => seen = Some(rec),
+                Some(prev) if prev.agrees(&rec) => {}
+                Some(prev) => return Err(mixed_topo_error(prev, &rec)),
+            }
+        }
+        Ok(seen)
+    }
+
+    fn require_topo_dbs(&self) -> Result<(Database<Bytes, Unit>, Database<Bytes, Bytes>)> {
+        match (self.idx_topo, self.topo_by_frame) {
+            (Some(idx), Some(by)) => Ok((idx, by)),
+            _ => Err(Error::Message(
+                "topology indexes missing; open the corpus for write to create idx_topo".into(),
+            )),
+        }
+    }
+
+    fn rebuild_idx_topo_from_stored(&self, wtxn: &mut RwTxn) -> Result<u32> {
+        let (idx_topo, topo_by_frame) = self.require_topo_dbs()?;
+        let mut pairs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+        {
+            let mut iter = topo_by_frame.iter(wtxn)?;
+            while let Some(Ok((k, v))) = iter.next() {
+                pairs.push((k.to_vec(), v.to_vec()));
+            }
+        }
+        let mut n = 0u32;
+        for (fk_b, hex_b) in pairs {
+            let Some(fk) = FrameKey::from_bytes(&fk_b) else {
+                continue;
+            };
+            let hex = std::str::from_utf8(&hex_b)?;
+            let hex = normalize_topo_hex(hex)?;
+            idx_topo.put(wtxn, &topo_key(&hex, fk)[..], &())?;
+            n += 1;
+        }
+        Ok(n)
+    }
+
+    fn put_topo_entry(
+        &self,
+        wtxn: &mut RwTxn,
+        idx_topo: Database<Bytes, Unit>,
+        topo_by_frame: Database<Bytes, Bytes>,
+        fk: FrameKey,
+        hex: &str,
+    ) -> Result<()> {
+        let fk_b = fk.to_bytes();
+        if let Some(old) = topo_by_frame.get(wtxn, &fk_b[..])? {
+            let old_hex = std::str::from_utf8(old)?;
+            let _ = idx_topo.delete(wtxn, &topo_key(old_hex, fk)[..])?;
+        }
+        topo_by_frame.put(wtxn, &fk_b[..], hex.as_bytes())?;
+        idx_topo.put(wtxn, &topo_key(hex, fk)[..], &())?;
+        Ok(())
+    }
+
+    /// Stored topology HEX for one frame, if annotated.
+    pub fn frame_topo_key(&self, key: FrameKey) -> Result<Option<String>> {
+        let Some(by) = self.topo_by_frame else {
+            return Ok(None);
+        };
+        let rtxn = self.env.read_txn()?;
+        let fk_b = key.to_bytes();
+        match by.get(&rtxn, &fk_b[..])? {
+            None => Ok(None),
+            Some(b) => Ok(Some(std::str::from_utf8(b)?.to_owned())),
+        }
+    }
+
+    /// Populate `idx_topo` / `topo_by_frame` by shelling out to
+    /// `seams fingerprint FILE --format json`.
+    ///
+    /// Cutoff is required. Default graph is `cutoff`, hops is 2. The binary
+    /// comes from `opts.seams`, `SEAMS`, or `PATH`. A recorded method that
+    /// disagrees with this run is refused so methods are never mixed.
+    pub fn annotate_topology(&self, opts: AnnotateTopologyOpts) -> Result<u32> {
+        let seams = resolve_seams_binary(opts.seams.as_deref())?;
+        let (idx_topo, topo_by_frame) = self.require_topo_dbs()?;
+        let recorded = self.collected_topo_params()?;
+        if let Some(ref rec) = recorded {
+            let cutoff_diff = rec.cutoff.is_some() && rec.cutoff != Some(opts.cutoff);
+            let graph_diff = rec.graph.as_deref().is_some_and(|g| g != opts.graph);
+            let hops_diff = rec.hops.is_some_and(|h| h != opts.hops);
+            if cutoff_diff || graph_diff || hops_diff {
+                let incoming = TopologyParams {
+                    cutoff: Some(opts.cutoff),
+                    graph: Some(opts.graph.clone()),
+                    hops: Some(opts.hops),
+                    method: rec.method.clone(),
+                };
+                return Err(mixed_topo_error(rec, &incoming));
+            }
+        }
+        let metas = self.list_traj_metas()?;
+        let mut pending: Vec<(FrameKey, String)> = Vec::new();
+        let mut run_method: Option<String> = None;
+        for (tid, meta) in &metas {
+            if meta.n_frames == 0 {
+                continue;
+            }
+            let mut blob = String::new();
+            for frame_idx in 0..meta.n_frames {
+                blob.push_str(&self.get_frame_text(FrameKey {
+                    traj_id: *tid,
+                    frame_idx,
+                })?);
+            }
+            let recs = fingerprint_con_bytes(
+                &seams,
+                blob.as_bytes(),
+                opts.cutoff,
+                &opts.graph,
+                opts.hops,
+            )?;
+            if recs.len() != meta.n_frames as usize {
+                return Err(Error::Message(format!(
+                    "seams fingerprint returned {} objects for traj {tid} with {} frames",
+                    recs.len(),
+                    meta.n_frames
+                )));
+            }
+            for (i, rec) in recs.into_iter().enumerate() {
+                match &run_method {
+                    None => run_method = Some(rec.method.clone()),
+                    Some(m) if m == &rec.method => {}
+                    Some(m) => {
+                        return Err(Error::Message(format!(
+                            "seams fingerprint mixed methods in one run ({m} vs {})",
+                            rec.method
+                        )));
+                    }
+                }
+                pending.push((
+                    FrameKey {
+                        traj_id: *tid,
+                        frame_idx: i as u32,
+                    },
+                    rec.key,
+                ));
+            }
+        }
+        if let (Some(rec), Some(method)) = (recorded.as_ref(), run_method.as_deref()) {
+            if rec.method.as_deref().is_some_and(|m| m != method) {
+                let incoming = TopologyParams {
+                    cutoff: Some(opts.cutoff),
+                    graph: Some(opts.graph.clone()),
+                    hops: Some(opts.hops),
+                    method: Some(method.to_owned()),
+                };
+                return Err(mixed_topo_error(rec, &incoming));
+            }
+        }
+        let Some(method) = run_method else {
+            return Ok(0);
+        };
+        let mut wtxn = self.env.write_txn()?;
+        for (fk, hex) in &pending {
+            self.put_topo_entry(&mut wtxn, idx_topo, topo_by_frame, *fk, hex)?;
+        }
+        for (tid, mut meta) in metas {
+            meta.stamp_topo(opts.cutoff, &opts.graph, opts.hops, &method);
+            let tid_key = tid.to_be_bytes();
+            self.traj_meta
+                .put(&mut wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
+        }
+        wtxn.commit()?;
+        Ok(pending.len() as u32)
+    }
+
+    /// Fingerprint `file` with the recorded corpus parameters and look up
+    /// `idx_topo`. Errors if nothing is annotated or if seams is missing.
+    pub fn find_by_topology_path(&self, file: impl AsRef<Path>) -> Result<Vec<FrameKey>> {
+        let rec = self.collected_topo_params()?.ok_or_else(|| {
+            Error::Message(
+                "no recorded topology parameters on this corpus; run annotate-topology first"
+                    .into(),
+            )
+        })?;
+        let cutoff = rec.cutoff_or_err()?;
+        let graph = rec.graph_or_default();
+        let hops = rec.hops_or_default();
+        let seams = resolve_seams_binary(None)?;
+        let recs = run_seams_fingerprint(&seams, file.as_ref(), cutoff, &graph, hops)?;
+        self.lookup_topo_keys(recs.into_iter().map(|r| r.key))
+    }
+
+    /// Fingerprint CON text with the recorded corpus parameters.
+    pub fn find_by_topology_text(&self, text: &str) -> Result<Vec<FrameKey>> {
+        let rec = self.collected_topo_params()?.ok_or_else(|| {
+            Error::Message(
+                "no recorded topology parameters on this corpus; run annotate-topology first"
+                    .into(),
+            )
+        })?;
+        let cutoff = rec.cutoff_or_err()?;
+        let graph = rec.graph_or_default();
+        let hops = rec.hops_or_default();
+        let seams = resolve_seams_binary(None)?;
+        let recs = fingerprint_con_bytes(&seams, text.as_bytes(), cutoff, &graph, hops)?;
+        self.lookup_topo_keys(recs.into_iter().map(|r| r.key))
+    }
+
+    fn lookup_topo_keys<I>(&self, hexes: I) -> Result<Vec<FrameKey>>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut out = BTreeSet::new();
+        let Some(idx) = self.idx_topo else {
+            return Ok(Vec::new());
+        };
+        let rtxn = self.env.read_txn()?;
+        for hex in hexes {
+            let pref = topo_prefix(&normalize_topo_hex(&hex)?);
+            let mut iter = idx.prefix_iter(&rtxn, &pref)?;
+            while let Some(Ok((k, _))) = iter.next() {
+                if k.len() < 12 {
+                    continue;
+                }
+                if let Some(fk) = FrameKey::from_bytes(&k[k.len() - 12..]) {
+                    out.insert(fk);
+                }
+            }
+        }
+        Ok(out.into_iter().collect())
     }
 
     pub fn get_frame_text(&self, key: FrameKey) -> Result<String> {
@@ -1205,6 +1530,26 @@ impl ConCorpus {
                 if let Some(fk) = FrameKey::from_bytes(fk_bytes) {
                     if sel.traj_id.is_none_or(|t| t == fk.traj_id) {
                         s.insert(fk);
+                    }
+                }
+            }
+            sets.push(s);
+        }
+
+        if let Some(ref hex) = sel.topo_key {
+            let mut s = BTreeSet::new();
+            if let Some(idx) = self.idx_topo {
+                let pref = topo_prefix(&normalize_topo_hex(hex)?);
+                let mut iter = idx.prefix_iter(&rtxn, &pref)?;
+                while let Some(Ok((k, _))) = iter.next() {
+                    if k.len() < 12 {
+                        continue;
+                    }
+                    let fk_bytes = &k[k.len() - 12..];
+                    if let Some(fk) = FrameKey::from_bytes(fk_bytes) {
+                        if sel.traj_id.is_none_or(|t| t == fk.traj_id) {
+                            s.insert(fk);
+                        }
                     }
                 }
             }
@@ -2487,5 +2832,281 @@ mod tests {
         assert!((con_x - 0.6394).abs() < 1e-4);
         assert_eq!(db.get_frame_text(key).unwrap(), text);
         assert_eq!(db.frame_hash(key).unwrap().to_bytes(), h.to_bytes());
+    }
+
+    #[test]
+    fn traj_meta_old_json_loads_without_topo_fields() {
+        let m: TrajMeta = serde_json::from_str(r#"{"n_frames":3,"source":"a.con"}"#).unwrap();
+        assert_eq!(m.n_frames, 3);
+        assert_eq!(m.source, "a.con");
+        assert!(m.topo_cutoff.is_none());
+        assert!(m.topo_graph.is_none());
+        assert!(m.topo_hops.is_none());
+        assert!(m.topo_method.is_none());
+    }
+
+    fn seed_topo(db: &ConCorpus, fk: FrameKey, hex: &str) {
+        let (idx, by) = db.require_topo_dbs().unwrap();
+        let mut wtxn = db.env.write_txn().unwrap();
+        db.put_topo_entry(&mut wtxn, idx, by, fk, hex).unwrap();
+        wtxn.commit().unwrap();
+    }
+
+    fn stamp_traj_topo(db: &ConCorpus, tid: TrajId, method: &str, cutoff: f64) {
+        let mut meta = db.traj_meta(tid).unwrap().expect("meta");
+        meta.stamp_topo(cutoff, "cutoff", 2, method);
+        let mut wtxn = db.env.write_txn().unwrap();
+        let tid_key = tid.to_be_bytes();
+        db.traj_meta
+            .put(
+                &mut wtxn,
+                &tid_key[..],
+                &serde_json::to_string(&meta).unwrap(),
+            )
+            .unwrap();
+        wtxn.commit().unwrap();
+    }
+
+    #[test]
+    fn select_topo_key_prefix_without_seams() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            .unwrap();
+        let k0 = FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        seed_topo(&db, k0, "abc123");
+        let hits = db
+            .select(&Select::new().topo_key("ABC123"))
+            .unwrap();
+        assert_eq!(hits, vec![k0]);
+        let miss = db.select(&Select::new().topo_key("00")).unwrap();
+        assert!(miss.is_empty());
+    }
+
+    #[test]
+    fn reindex_without_annotation_leaves_idx_topo_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            .unwrap();
+        let k0 = FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        seed_topo(&db, k0, "abc123");
+        assert_eq!(
+            db.select(&Select::new().topo_key("abc123")).unwrap(),
+            vec![k0]
+        );
+        db.reindex().unwrap();
+        assert!(db
+            .select(&Select::new().topo_key("abc123"))
+            .unwrap()
+            .is_empty());
+        assert_eq!(db.frame_topo_key(k0).unwrap().as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn reindex_rebuilds_idx_topo_when_params_agree() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            .unwrap();
+        db.append_trajectory_path(2, fixture("tiny_cuh2.con"))
+            .unwrap();
+        let k0 = FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        let k1 = FrameKey {
+            traj_id: 2,
+            frame_idx: 0,
+        };
+        seed_topo(&db, k0, "deadbeef");
+        seed_topo(&db, k1, "deadbeef");
+        stamp_traj_topo(&db, 1, "nauty", 3.0);
+        stamp_traj_topo(&db, 2, "nauty", 3.0);
+        let (idx, _) = db.require_topo_dbs().unwrap();
+        {
+            let mut wtxn = db.env.write_txn().unwrap();
+            idx.clear(&mut wtxn).unwrap();
+            wtxn.commit().unwrap();
+        }
+        assert!(db
+            .select(&Select::new().topo_key("deadbeef"))
+            .unwrap()
+            .is_empty());
+        db.reindex().unwrap();
+        let hits = db.select(&Select::new().topo_key("deadbeef")).unwrap();
+        assert_eq!(hits.len(), 2);
+    }
+
+    #[test]
+    fn reindex_refuses_mixed_methods() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            .unwrap();
+        db.append_trajectory_path(2, fixture("tiny_cuh2.con"))
+            .unwrap();
+        stamp_traj_topo(&db, 1, "nauty", 3.0);
+        stamp_traj_topo(&db, 2, "wl", 3.0);
+        let err = db.reindex().unwrap_err().to_string();
+        assert!(err.contains("mixed topology"), "{err}");
+        let cu = db.select(&Select::new().require_symbol("Cu")).unwrap();
+        assert_eq!(cu.len(), 2);
+    }
+
+    #[test]
+    fn extend_preserves_topology_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            .unwrap();
+        stamp_traj_topo(&db, 1, "nauty", 3.0);
+        let fr = db
+            .get_frame(FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap();
+        db.extend_trajectory_frames(1, &[fr], "extra").unwrap();
+        let meta = db.traj_meta(1).unwrap().unwrap();
+        assert_eq!(meta.n_frames, 2);
+        assert_eq!(meta.topo_method.as_deref(), Some("nauty"));
+        assert_eq!(meta.topo_cutoff, Some(3.0));
+        assert_eq!(meta.topo_graph.as_deref(), Some("cutoff"));
+        assert_eq!(meta.topo_hops, Some(2));
+    }
+
+    #[test]
+    fn annotate_without_seams_names_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            .unwrap();
+        let err = db
+            .annotate_topology(
+                AnnotateTopologyOpts::new(3.0).seams("/no/such/seams-binary"),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("seams fingerprint"), "{err}");
+    }
+
+    #[test]
+    fn find_by_topology_without_params_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            .unwrap();
+        let err = db
+            .find_by_topology_path(fixture("tiny_cuh2.con"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("annotate-topology"), "{err}");
+    }
+
+    #[test]
+    fn readonly_missing_topo_select_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let db = ConCorpus::open(dir.path()).unwrap();
+            db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+                .unwrap();
+            db.close();
+        }
+        let db = ConCorpus::open_readonly(dir.path()).unwrap();
+        let hits = db.select(&Select::new().topo_key("abc")).unwrap();
+        assert!(hits.is_empty());
+    }
+
+    fn seams_or_skip() -> Option<std::path::PathBuf> {
+        match crate::topology::resolve_seams_binary(None) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                eprintln!("skipping topology seams test: {e}");
+                None
+            }
+        }
+    }
+
+    fn permute_cu_rows(text: &str) -> String {
+        let mut lines: Vec<&str> = text.lines().collect();
+        let mut cu = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            let t = line.trim_start();
+            if t.starts_with("0.6394") || t.starts_with("3.1969") {
+                cu.push(i);
+            }
+        }
+        assert_eq!(cu.len(), 2, "expected two Cu coordinate rows");
+        lines.swap(cu[0], cu[1]);
+        let mut out = lines.join("\n");
+        if text.ends_with('\n') {
+            out.push('\n');
+        }
+        out
+    }
+
+    fn break_one_h(text: &str) -> String {
+        let mut fr = {
+            let mut it = ConFrameIterator::new(text);
+            it.next().unwrap().unwrap()
+        };
+        let h = fr
+            .atom_data
+            .iter_mut()
+            .find(|a| a.symbol.as_ref() == "H")
+            .expect("H");
+        h.z += 10.0;
+        let mut buf = Cursor::new(Vec::new());
+        {
+            let mut w = ConFrameWriter::new(&mut buf);
+            w.write_frame(&fr).unwrap();
+        }
+        String::from_utf8(buf.into_inner()).unwrap()
+    }
+
+    #[test]
+    fn annotate_permutation_shares_hex_broken_does_not() {
+        let Some(seams) = seams_or_skip() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            .unwrap();
+        let n = db
+            .annotate_topology(AnnotateTopologyOpts::new(3.0).seams(&seams))
+            .unwrap();
+        assert_eq!(n, 1);
+        let k0 = FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        let hex = db.frame_topo_key(k0).unwrap().expect("hex");
+        assert!(!hex.is_empty());
+        let meta = db.traj_meta(1).unwrap().unwrap();
+        assert_eq!(meta.topo_cutoff, Some(3.0));
+        assert_eq!(meta.topo_graph.as_deref(), Some("cutoff"));
+        assert_eq!(meta.topo_hops, Some(2));
+        assert!(meta.topo_method.is_some());
+
+        let orig = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let perm = permute_cu_rows(&orig);
+        let broken = break_one_h(&orig);
+        let perm_hits = db.find_by_topology_text(&perm).unwrap();
+        assert_eq!(perm_hits, vec![k0]);
+        let broken_hits = db.find_by_topology_text(&broken).unwrap();
+        assert!(
+            broken_hits.is_empty(),
+            "displaced H must not share topology key, got {broken_hits:?}"
+        );
+        let sel = db.select(&Select::new().topo_key(&hex)).unwrap();
+        assert_eq!(sel, vec![k0]);
     }
 }

@@ -35,6 +35,8 @@ pub struct Select {
     pub element_count_min: Vec<(String, u32)>,
     pub element_count_exact: Vec<(String, u32)>,
     pub exact_formula: Option<String>,
+    /// Bonded-topology HEX from `seams fingerprint` (`idx_topo` prefix).
+    pub topo_key: Option<String>,
     pub require_forces: bool,
     pub require_velocities: bool,
     pub require_energy: bool,
@@ -131,6 +133,10 @@ impl Select {
     }
     pub fn exact_composition(mut self, formula: impl Into<String>) -> Self {
         self.exact_formula = Some(formula.into());
+        self
+    }
+    pub fn topo_key(mut self, hex: impl Into<String>) -> Self {
+        self.topo_key = Some(hex.into());
         self
     }
     pub fn require_forces(mut self) -> Self {

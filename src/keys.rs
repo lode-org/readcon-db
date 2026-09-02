@@ -166,6 +166,20 @@ pub(crate) fn formula_prefix(formula: &str) -> Vec<u8> {
     v
 }
 
+/// topology HEX (utf-8) || 0xff || FrameKey
+pub(crate) fn topo_key(hex: &str, fk: FrameKey) -> Vec<u8> {
+    let mut v = hex.as_bytes().to_vec();
+    v.push(0xff);
+    v.extend_from_slice(&fk.to_bytes());
+    v
+}
+
+pub(crate) fn topo_prefix(hex: &str) -> Vec<u8> {
+    let mut v = hex.as_bytes().to_vec();
+    v.push(0xff);
+    v
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,6 +210,19 @@ mod tests {
         let (c, fk2) = parse_elem_count_key(&k, "Cu").unwrap();
         assert_eq!(c, 2);
         assert_eq!(fk2, fk);
+    }
+
+    #[test]
+    fn topo_key_layout_hex_sep_frame() {
+        let fk = FrameKey {
+            traj_id: 1,
+            frame_idx: 2,
+        };
+        let k = topo_key("ab", fk);
+        assert_eq!(&k[..2], b"ab");
+        assert_eq!(k[2], 0xff);
+        assert_eq!(&k[3..], &fk.to_bytes());
+        assert_eq!(topo_prefix("ab"), b"ab\xff");
     }
 }
 
