@@ -63,8 +63,6 @@ fn usage() -> ExitCode {
   readcon-db delete-cooked <corpus_dir> --traj T --frame F
   readcon-db positions <corpus_dir> --traj T --frame F
   readcon-db hash-file <file.con>
-  readcon-db annotate-topology <corpus_dir> --cutoff A [--graph G] [--hops N] [--seams PATH]
-  readcon-db find-by-topology <corpus_dir> <file.con>
   (RCSO cooked tier is opt-in; CON text in frames remains authority — docs/orgmode/cooked-soa.org)
 "
     );

@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use readcon_db::{AnnotateTopologyOpts, ConCorpus, Select};
+use readcon_db::{ConCorpus, Select};
 
 fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_readcon-db"))
