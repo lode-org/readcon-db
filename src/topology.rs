@@ -86,9 +86,8 @@ impl TopologyParams {
     }
 
     pub fn cutoff_or_err(&self) -> Result<f64> {
-        self.cutoff.ok_or_else(|| {
-            Error::Message("recorded topology parameters lack cutoff".into())
-        })
+        self.cutoff
+            .ok_or_else(|| Error::Message("recorded topology parameters lack cutoff".into()))
     }
 
     pub fn graph_or_default(&self) -> String {
@@ -196,9 +195,8 @@ pub fn parse_fingerprint_text(text: &str) -> Result<(String, String)> {
 
 /// One JSON object from `seams fingerprint --format json`.
 pub fn parse_fingerprint_json_line(line: &str) -> Result<FingerprintRecord> {
-    let rec: SeamsJson = serde_json::from_str(line.trim()).map_err(|e| {
-        Error::Message(format!("seams fingerprint json: {e}: {line}"))
-    })?;
+    let rec: SeamsJson = serde_json::from_str(line.trim())
+        .map_err(|e| Error::Message(format!("seams fingerprint json: {e}: {line}")))?;
     if rec.status != 0 {
         return Err(Error::Message(format!(
             "seams fingerprint status {}: {}",
@@ -291,10 +289,8 @@ impl Drop for TempCon {
 
 fn write_temp_con(bytes: &[u8]) -> Result<TempCon> {
     let id = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!(
-        "readcon-db-topo-{}-{id}.con",
-        std::process::id()
-    ));
+    let path =
+        std::env::temp_dir().join(format!("readcon-db-topo-{}-{id}.con", std::process::id()));
     std::fs::write(&path, bytes)?;
     Ok(TempCon { path })
 }

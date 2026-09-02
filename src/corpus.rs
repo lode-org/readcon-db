@@ -20,7 +20,7 @@ use crate::keys::{
     composition_formula, elem_count_key, elem_count_symbol_prefix, energy_bin_key, flag_key,
     fmax_bin_key, formula_key, formula_prefix, hash_frame_bytes, mass_bin_key, meta_scalar_key,
     natoms_key, ordered_f64_bits, parse_elem_count_key, pbc_key, pbc_mask_from_bools,
-    species_counts_from_symbols, symbol_key, symbol_prefix, topo_key, topo_prefix, volume_bin_key,
+    symbol_key, symbol_prefix, topo_key, topo_prefix, volume_bin_key,
     ContentHash, FrameKey, TrajId, FLAG_HAS_ENERGY, FLAG_HAS_FORCES, FLAG_HAS_VELOCITIES,
     META_CHARGE, META_FRAME_INDEX, META_MAGMOM, META_NEB_BAND, META_NEB_BEAD, META_TIME,
     META_TIMESTEP,
@@ -639,7 +639,7 @@ impl ConCorpus {
             self.put_index_puts(&mut wtxn, p)?;
         }
         let n_frames = prepared.last().map(|p| p.fk.frame_idx + 1).unwrap_or(0);
-        let existing = if replace_meta {
+        let existing: Option<TrajMeta> = if replace_meta {
             self.traj_meta
                 .get(&wtxn, &tid_key[..])?
                 .map(serde_json::from_str)
@@ -783,12 +783,12 @@ impl ConCorpus {
         let prepared = Self::prepare_trajectory_frames(traj_id, frames, start_idx)?;
         let mut wtxn = self.env.write_txn()?;
         let tid_key = traj_id.to_be_bytes();
-        let live: Option<TrajMeta> = if let Some(existing) = self.traj_meta.get(&wtxn, &tid_key[..])?
-        {
-            Some(serde_json::from_str(existing)?)
-        } else {
-            None
-        };
+        let live: Option<TrajMeta> =
+            if let Some(existing) = self.traj_meta.get(&wtxn, &tid_key[..])? {
+                Some(serde_json::from_str(existing)?)
+            } else {
+                None
+            };
         let live_n = live.as_ref().map(|m| m.n_frames).unwrap_or(0);
         if live_n != start_idx {
             return Err(Error::Message(format!(
@@ -2878,9 +2878,7 @@ mod tests {
             frame_idx: 0,
         };
         seed_topo(&db, k0, "abc123");
-        let hits = db
-            .select(&Select::new().topo_key("ABC123"))
-            .unwrap();
+        let hits = db.select(&Select::new().topo_key("ABC123")).unwrap();
         assert_eq!(hits, vec![k0]);
         let miss = db.select(&Select::new().topo_key("00")).unwrap();
         assert!(miss.is_empty());
@@ -2989,9 +2987,7 @@ mod tests {
         db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
             .unwrap();
         let err = db
-            .annotate_topology(
-                AnnotateTopologyOpts::new(3.0).seams("/no/such/seams-binary"),
-            )
+            .annotate_topology(AnnotateTopologyOpts::new(3.0).seams("/no/such/seams-binary"))
             .unwrap_err()
             .to_string();
         assert!(err.contains("seams fingerprint"), "{err}");

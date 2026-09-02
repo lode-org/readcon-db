@@ -163,12 +163,7 @@ fn cli_topo_key_and_find_by_topology_with_seams() {
         hex
     };
     let out = bin()
-        .args([
-            "select",
-            corpus.to_str().unwrap(),
-            "--topo-key",
-            &hex,
-        ])
+        .args(["select", corpus.to_str().unwrap(), "--topo-key", &hex])
         .output()
         .unwrap();
     assert!(out.status.success(), "{:?}", out);

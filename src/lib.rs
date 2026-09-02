@@ -28,13 +28,13 @@ pub use keys::{
     FrameKey, TrajId,
 };
 pub use select::Select;
-pub use topology::{
-    parse_fingerprint_json_line, parse_fingerprint_json_stdout, parse_fingerprint_text,
-    AnnotateTopologyOpts, FingerprintRecord, TopologyParams, SEAMS_MISSING,
-};
 pub use shard::{
     join_corpus_dirs, join_drained_roots, open_single_env_for_export, CorpusExportKind,
     ShardManifest, ShardedConCorpus, DEFAULT_N_SHARDS,
+};
+pub use topology::{
+    parse_fingerprint_json_line, parse_fingerprint_json_stdout, parse_fingerprint_text,
+    AnnotateTopologyOpts, FingerprintRecord, TopologyParams, SEAMS_MISSING,
 };
 pub use units_canon::{canonicalize_unit, canonicalize_units_object};
 
