@@ -412,7 +412,7 @@ pub unsafe extern "C" fn rkrdb_append_trajectory_str(
     }
 }
 
-/// Ingest one parsed `RKRConFrame*` from libreadcon_core. Caller keeps the handle.
+/// Create a trajectory from one parsed `RKRConFrame*`. Caller keeps the handle.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_append_trajectory_frame(
     id: usize,
@@ -420,6 +420,30 @@ pub unsafe extern "C" fn rkrdb_append_trajectory_frame(
     frame: *const std::ffi::c_void,
     source: *const c_char,
     out_n_frames: *mut u32,
+) -> c_int {
+    ingest_trajectory_frame(id, traj_id, frame, source, out_n_frames, false)
+}
+
+/// Create or extend a trajectory with one parsed frame. Returns the total count.
+/// The caller retains ownership of the `RKRConFrame*` from libreadcon_core.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_extend_trajectory_frame(
+    id: usize,
+    traj_id: u64,
+    frame: *const std::ffi::c_void,
+    source: *const c_char,
+    out_n_frames: *mut u32,
+) -> c_int {
+    ingest_trajectory_frame(id, traj_id, frame, source, out_n_frames, true)
+}
+
+unsafe fn ingest_trajectory_frame(
+    id: usize,
+    traj_id: u64,
+    frame: *const std::ffi::c_void,
+    source: *const c_char,
+    out_n_frames: *mut u32,
+    extend: bool,
 ) -> c_int {
     if frame.is_null() {
         return RKRDB_NULL;
@@ -438,7 +462,13 @@ pub unsafe extern "C" fn rkrdb_append_trajectory_frame(
         Err(c) => return c,
     };
     let parsed = unsafe { &*(frame as *const readcon_core::types::ConFrame) };
-    match corpus.append_trajectory_frames(traj_id, std::slice::from_ref(parsed), source) {
+    let frames = std::slice::from_ref(parsed);
+    let result = if extend {
+        corpus.extend_trajectory_frames(traj_id, frames, source)
+    } else {
+        corpus.append_trajectory_frames(traj_id, frames, source)
+    };
+    match result {
         Ok(n) => {
             if !out_n_frames.is_null() {
                 unsafe { *out_n_frames = n };
@@ -1426,6 +1456,38 @@ mod tests {
             let again = rkrdb_get_frame(id, 2, 0);
             assert!(!again.is_null());
             rkrdb_close(id);
+        }
+    }
+
+    #[test]
+    fn c_abi_extend_frame_creates_then_preserves_frame_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = CString::new(dir.path().to_str().unwrap()).unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_multi_cuh2.con")).unwrap();
+        let frames: Vec<_> = readcon_core::iterators::ConFrameIterator::new(&text)
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(frames.len(), 2);
+        let mut id = 0usize;
+        let mut count = 0u32;
+        unsafe {
+            assert_eq!(rkrdb_open(path.as_ptr(), &mut id), RKRDB_OK);
+            for (index, frame) in frames.iter().enumerate() {
+                assert_eq!(
+                    rkrdb_extend_trajectory_frame(
+                        id, 7, frame as *const _ as *const _, ptr::null(), &mut count
+                    ),
+                    RKRDB_OK
+                );
+                assert_eq!(count, index as u32 + 1);
+            }
+            for (index, expected) in frames.iter().enumerate() {
+                let handle = rkrdb_get_frame(id, 7, index as u32);
+                assert!(!handle.is_null());
+                let stored = Box::from_raw(handle as *mut readcon_core::types::ConFrame);
+                assert_eq!(stored.atom_data, expected.atom_data);
+            }
+            assert_eq!(rkrdb_close(id), RKRDB_OK);
         }
     }
 

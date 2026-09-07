@@ -46,8 +46,12 @@ int rkrdb_append_trajectory_units(size_t id, uint64_t traj_id, const char *path,
 /** Ingest CON text. `source` may be NULL (`memory`). */
 int rkrdb_append_trajectory_str(size_t id, uint64_t traj_id, const char *text,
                                 const char *source, uint32_t *out_n_frames);
-/** Ingest one `RKRConFrame*` from libreadcon_core. Caller keeps the handle. */
+/** Create a trajectory from one `RKRConFrame*`. Caller keeps the handle. */
 int rkrdb_append_trajectory_frame(size_t id, uint64_t traj_id, const void *frame,
+                                  const char *source, uint32_t *out_n_frames);
+/** Create or extend a trajectory with one `RKRConFrame*`; returns total count.
+ * Caller keeps the handle from libreadcon_core. */
+int rkrdb_extend_trajectory_frame(size_t id, uint64_t traj_id, const void *frame,
                                   const char *source, uint32_t *out_n_frames);
 /** Create the trajectory or append CON frames after the live count. */
 int rkrdb_extend_trajectory(size_t id, uint64_t traj_id, const char *path, uint32_t *out_n_frames);
@@ -181,6 +185,14 @@ public:
     if (rkrdb_append_trajectory_frame(id_, traj_id, frame, source, &n) !=
         RKRDB_OK)
       throw std::runtime_error("append_frame failed");
+    return n;
+  }
+
+  uint32_t extend_trajectory_frame(uint64_t traj_id, const void *frame,
+                                   const char *source = nullptr) {
+    uint32_t n = 0;
+    if (rkrdb_extend_trajectory_frame(id_, traj_id, frame, source, &n) != RKRDB_OK)
+      throw std::runtime_error("extend_frame failed");
     return n;
   }
 
