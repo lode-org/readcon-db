@@ -6,6 +6,8 @@ Used by meson.build. Headers are shipped; this script never invokes cbindgen.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -33,6 +35,15 @@ def main(argv: list[str]) -> int:
     ) = argv[1:9]
     features = argv[9] if len(argv) == 10 else ""
     src_root_p = Path(src_root)
+    native_toolchain = {
+        name: os.environ.get(name, "")
+        for name in ("CC", "AR", "CFLAGS", "CPPFLAGS", "READCON_DB_NATIVE_TOOLCHAIN")
+    }
+    toolchain_key = hashlib.sha256(
+        json.dumps(native_toolchain, sort_keys=True).encode()
+    ).hexdigest()[:16]
+    # Compiler upgrades at the same path require fresh native objects.
+    target_dir = str(Path(target_dir) / toolchain_key)
     cmd = [
         cargo,
         "rustc",

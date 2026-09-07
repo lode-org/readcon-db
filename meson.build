@@ -30,6 +30,12 @@ if not fs.is_file(_msproot / 'include' / 'readcon-db-mpi.h')
 endif
 
 cc = meson.get_compiler('c')
+# LMDB must use the consumer's compiler, flags and libc ABI.
+_cargo_env = {
+    'CC': ' '.join(cc.cmd_array()),
+    'CFLAGS': ' '.join(get_option('c_args')),
+    'READCON_DB_NATIVE_TOOLCHAIN': cc.get_id() + ':' + cc.version(),
+}
 cargo_prog = find_program('cargo', required: true)
 rustc_prog = find_program('rustc', required: true)
 _py = find_program('python3', 'python')
@@ -92,6 +98,7 @@ readcon_cargo = custom_target(
         '@OUTPUT1@',
         get_option('cargo_features'),
     ],
+    env: _cargo_env,
     build_by_default: true,
     install: true,
     install_dir: [get_option('libdir'), get_option('libdir')],
