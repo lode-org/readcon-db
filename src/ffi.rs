@@ -1475,7 +1475,11 @@ mod tests {
             for (index, frame) in frames.iter().enumerate() {
                 assert_eq!(
                     rkrdb_extend_trajectory_frame(
-                        id, 7, frame as *const _ as *const _, ptr::null(), &mut count
+                        id,
+                        7,
+                        frame as *const _ as *const _,
+                        ptr::null(),
+                        &mut count
                     ),
                     RKRDB_OK
                 );
@@ -1749,9 +1753,7 @@ mod tests {
                 frc2[i_hfx]
             );
             assert!(
-                frc2[..na2 as usize * 3]
-                    .iter()
-                    .all(|&x| x.abs() < 1e-12),
+                frc2[..na2 as usize * 3].iter().all(|&x| x.abs() < 1e-12),
                 "frame 0 dest force must stay zero-pad, got {:?}",
                 &frc2[..na2 as usize * 3]
             );
@@ -1905,13 +1907,7 @@ mod tests {
             let tsrc = CString::new("memory").unwrap();
             let mut ntimed = 0u32;
             assert_eq!(
-                rkrdb_append_trajectory_str(
-                    id,
-                    2,
-                    ttext.as_ptr(),
-                    tsrc.as_ptr(),
-                    &mut ntimed
-                ),
+                rkrdb_append_trajectory_str(id, 2, ttext.as_ptr(), tsrc.as_ptr(), &mut ntimed),
                 RKRDB_OK
             );
             let mut t0 = [0.0f64; 8];
@@ -1921,7 +1917,8 @@ mod tests {
                 RKRDB_OK
             );
             assert!((t0[0] - 0.0125).abs() < 1e-12, "dest time fs->ps {}", t0[0]);
-            let tunits = CString::new(r#"{"length":"angstrom","energy":"eV","time":"ps"}"#).unwrap();
+            let tunits =
+                CString::new(r#"{"length":"angstrom","energy":"eV","time":"ps"}"#).unwrap();
             let mut nset2 = 0u32;
             assert_eq!(
                 rkrdb_set_units(id, 2, tunits.as_ptr(), &mut nset2),
