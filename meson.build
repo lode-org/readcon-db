@@ -44,6 +44,19 @@ if _rv.length() < 2 or not _rv[1].version_compare('>= 1.75.0')
     error('readcon-db requires rustc >= 1.75.0')
 endif
 
+# Cargo links the C ABI with the same compiler and libc as its consumer.
+_rust_host = ''
+foreach line : run_command(rustc_prog, '-vV', check: true).stdout().split('\n')
+    if line.startswith('host: ')
+        _rust_host = line.substring(6).strip()
+    endif
+endforeach
+if _rust_host == ''
+    error('rustc did not report its host target')
+endif
+_rust_linker_key = 'CARGO_TARGET_' + _rust_host.to_upper().replace('-', '_') + '_LINKER'
+_cargo_env += {_rust_linker_key: cc.cmd_array()[-1]}
+
 _rust_sys_deps = []
 if host_machine.system() == 'linux'
     _rust_sys_deps += [
