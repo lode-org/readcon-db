@@ -208,10 +208,8 @@ impl ObservationArchive {
                     "archive row {index}: atom id {orig} out of range"
                 )));
             }
-            positions[3 * orig..3 * orig + 3]
-                .copy_from_slice(&frame.positions.as_f64_row(stored));
-            forces[3 * orig..3 * orig + 3]
-                .copy_from_slice(&frame.forces.as_f64_row(stored));
+            positions[3 * orig..3 * orig + 3].copy_from_slice(&frame.positions.as_f64_row(stored));
+            forces[3 * orig..3 * orig + 3].copy_from_slice(&frame.forces.as_f64_row(stored));
         }
         let energy = frame
             .header
@@ -231,13 +229,7 @@ impl Drop for ObservationArchive {
     }
 }
 
-fn commit_row(
-    corpus: &ConCorpus,
-    traj: u64,
-    z: &[u32],
-    cell: [f64; 3],
-    row: &Row,
-) -> Result<()> {
+fn commit_row(corpus: &ConCorpus, traj: u64, z: &[u32], cell: [f64; 3], row: &Row) -> Result<()> {
     let mut builder = ConFrameBuilder::new(cell, [90.0, 90.0, 90.0]);
     builder.prebox_header("observation archive");
     builder.set_energy(row.energy);
@@ -491,14 +483,26 @@ mod tests {
         let z = vec![1_u32, 8, 1];
         let cell = [25.0, 25.0, 25.0];
         let positions = vec![
-            0.001_527_890_189_282_565_8, -0.0, 1.0,
-            1.234_567_890_123_456_7e-20, 2.0, 3.0,
-            4.0, 5.0, 6.0,
+            0.001_527_890_189_282_565_8,
+            -0.0,
+            1.0,
+            1.234_567_890_123_456_7e-20,
+            2.0,
+            3.0,
+            4.0,
+            5.0,
+            6.0,
         ];
         let forces = vec![
-            0.001_527_890_189_282_565_8, -0.001_527_890_189_282_565_8, -0.0,
-            f64::MIN_POSITIVE, f64::from_bits(1), -f64::from_bits(1),
-            1.234_567_890_123_456_7e30, f64::MAX, -f64::MAX,
+            0.001_527_890_189_282_565_8,
+            -0.001_527_890_189_282_565_8,
+            -0.0,
+            f64::MIN_POSITIVE,
+            f64::from_bits(1),
+            -f64::from_bits(1),
+            1.234_567_890_123_456_7e30,
+            f64::MAX,
+            -f64::MAX,
         ];
         let energy = 0.001_527_890_189_282_565_8_f64;
         {
@@ -511,7 +515,11 @@ mod tests {
         let archive = ObservationArchive::open(dir.path(), z, cell).unwrap();
         let (actual_positions, actual_forces, actual_energy) = archive.fetch(0).unwrap();
         for (actual, expected) in actual_positions.iter().zip(&positions) {
-            assert_eq!(actual.to_bits(), expected.to_bits(), "position {expected:e}");
+            assert_eq!(
+                actual.to_bits(),
+                expected.to_bits(),
+                "position {expected:e}"
+            );
         }
         for (actual, expected) in actual_forces.iter().zip(&forces) {
             assert_eq!(actual.to_bits(), expected.to_bits(), "force {expected:e}");
@@ -546,8 +554,7 @@ mod tests {
     #[test]
     fn append_rejects_wrong_length() {
         let dir = tempfile::tempdir().unwrap();
-        let archive =
-            ObservationArchive::open(dir.path(), vec![1, 1], [5.0, 5.0, 5.0]).unwrap();
+        let archive = ObservationArchive::open(dir.path(), vec![1, 1], [5.0, 5.0, 5.0]).unwrap();
         assert!(!archive.append(&[0.0; 3], &[0.0; 6], 0.0));
     }
 }
