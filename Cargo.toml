@@ -24,7 +24,7 @@ capi = []
 [dependencies]
 heed = "0.21"
 # The pinned writer provides exact numeric CON and JSON round trips.
-readcon-core = { version = "=0.14.10", git = "https://github.com/lode-org/readcon-core", rev = "2fd79dddb948e22e4a74b2e85de98a3ae4c3d08b" }
+readcon-core = { version = "=0.14.9", git = "https://github.com/lode-org/readcon-core", rev = "2fd79dddb948e22e4a74b2e85de98a3ae4c3d08b" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

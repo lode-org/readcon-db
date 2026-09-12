@@ -31,10 +31,10 @@ check_contains "CITATION.cff" "^version: ${cargo_ver}$"
 check_contains "docs/source/conf.py" "release = \"${cargo_ver}\""
 
 core_revision=2fd79dddb948e22e4a74b2e85de98a3ae4c3d08b
-if grep -qF 'version = "=0.14.10"' "$ROOT/Cargo.toml" &&
+if grep -qF 'version = "=0.14.9"' "$ROOT/Cargo.toml" &&
    grep -qF 'git = "https://github.com/lode-org/readcon-core"' "$ROOT/Cargo.toml" &&
    grep -qF "rev = \"$core_revision\"" "$ROOT/Cargo.toml"; then
-  ok "Cargo.toml pins readcon-core 0.14.10 at $core_revision"
+  ok "Cargo.toml pins readcon-core 0.14.9 at $core_revision"
 else
   die "Cargo.toml must pin the exact round-trip readcon-core revision"
 fi
