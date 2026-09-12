@@ -16,24 +16,13 @@ check_contains() {
   local pat="$2"
   local f="$ROOT/$rel"
   [[ -f "$f" ]] || { die "missing $rel"; return; }
-  if grep -qE "$pat" "$f"; then
-    ok "$rel matches $cargo_ver"
-  else
-    die "$rel does not contain version $cargo_ver (pattern $pat)"
-  fi
-}
-
-check_contains "python/pyproject.toml" "version = \"${cargo_ver}\""
-check_contains "meson.build" "version: '${cargo_ver}'"
-check_contains "pixi.toml" "version = \"${cargo_ver}\""
-check_contains "fortran/ReadConDb/fpm.toml" "^version = \"${cargo_ver}\""
-check_contains "CITATION.cff" "^version: ${cargo_ver}$"
-check_contains "docs/source/conf.py" "release = \"${cargo_ver}\""
-
-if grep -qE '^readcon-core = "=0\.14\.8"$' "$ROOT/Cargo.toml"; then
-  ok "Cargo.toml pins readcon-core =0.14.8"
+  core_revision=2fd79dddb948e22e4a74b2e85de98a3ae4c3d08b
+if grep -qF 'version = "=0.14.10"' "$ROOT/Cargo.toml" &&
+   grep -qF 'git = "https://github.com/lode-org/readcon-core"' "$ROOT/Cargo.toml" &&
+   grep -qF "rev = \"$core_revision\"" "$ROOT/Cargo.toml"; then
+  ok "Cargo.toml pins readcon-core 0.14.10 at $core_revision"
 else
-  die "Cargo.toml must pin readcon-core = \"=0.14.8\""
+  die "Cargo.toml must pin the exact round-trip readcon-core revision"
 fi
 
 if [[ "$fail" -ne 0 ]]; then

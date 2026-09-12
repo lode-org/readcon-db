@@ -30,6 +30,7 @@ use std::thread::JoinHandle;
 
 use readcon_core::helpers::atomic_number_to_symbol;
 use readcon_core::types::ConFrameBuilder;
+use readcon_core::writer::FloatFormat;
 
 use crate::corpus::ConCorpus;
 use crate::error::{Error, Result};
@@ -250,8 +251,9 @@ fn commit_row(corpus: &ConCorpus, traj: u64, z: &[u32], cell: [f64; 3], row: &Ro
     let frame = builder
         .build()
         .map_err(|e| Error::Message(format!("archive build: {e}")))?;
-    // 17 significant digits: the ledger must round-trip f64 exactly.
-    corpus.append_trajectory_frames_with_precision(traj, &[frame], "observation-archive", 17)?;
+    corpus.append_trajectory_frames_with_float_format(
+        traj, &[frame], "observation-archive", FloatFormat::RoundTrip,
+    )?;
     Ok(())
 }
 

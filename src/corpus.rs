@@ -7,7 +7,7 @@ use heed::types::{Bytes, Str, Unit};
 use heed::{CompactionOption, Database, Env, EnvFlags, EnvOpenOptions, RwTxn};
 use readcon_core::iterators::ConFrameIterator;
 use readcon_core::types::ConFrame;
-use readcon_core::writer::ConFrameWriter;
+use readcon_core::writer::{ConFrameWriter, FloatFormat};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
@@ -589,24 +589,21 @@ impl ConCorpus {
         frames: &[ConFrame],
         start_idx: u32,
     ) -> Result<Vec<PreparedIndexPuts>> {
-        Self::prepare_trajectory_frames_precise(traj_id, frames, start_idx, None)
+        Self::prepare_trajectory_frames_formatted(traj_id, frames, start_idx, FloatFormat::default())
     }
 
-    fn prepare_trajectory_frames_precise(
+    fn prepare_trajectory_frames_formatted(
         traj_id: TrajId,
         frames: &[ConFrame],
         start_idx: u32,
-        precision: Option<usize>,
+        float_format: FloatFormat,
     ) -> Result<Vec<PreparedIndexPuts>> {
         let mut out = Vec::with_capacity(frames.len());
         let mut frame_idx = start_idx;
         for fr in frames {
             let mut buf = Cursor::new(Vec::new());
             {
-                let mut w = match precision {
-                    Some(p) => ConFrameWriter::with_precision(&mut buf, p),
-                    None => ConFrameWriter::new(&mut buf),
-                };
+                let mut w = ConFrameWriter::with_float_format(&mut buf, float_format);
                 w.write_frame(fr)
                     .map_err(|e| Error::Parse(format!("serialize: {e}")))?;
             }
@@ -744,10 +741,9 @@ impl ConCorpus {
         self.commit_prepared(traj_id, &prepared, source, false)
     }
 
-    /// [`Self::append_trajectory_frames`] at an explicit float precision.
-    /// The writer default (6 decimals) is fine for structure handoff but
-    /// lossy for ledgers that must round-trip f64 exactly (17 significant
-    /// digits); the observation archive uses this path.
+    /// [`Self::append_trajectory_frames`] with an explicit number of decimal places.
+    /// Use [`Self::append_trajectory_frames_with_float_format`] and
+    /// [`FloatFormat::RoundTrip`] for exact binary64 observation storage.
     pub fn append_trajectory_frames_with_precision(
         &self,
         traj_id: TrajId,
@@ -755,9 +751,23 @@ impl ConCorpus {
         source: impl Into<String>,
         precision: usize,
     ) -> Result<u32> {
+        self.append_trajectory_frames_with_float_format(
+            traj_id, frames, source, FloatFormat::DecimalPlaces(precision),
+        )
+    }
+
+    /// Append frames using the selected CON numeric representation.
+    pub fn append_trajectory_frames_with_float_format(
+        &self,
+        traj_id: TrajId,
+        frames: &[ConFrame],
+        source: impl Into<String>,
+        float_format: FloatFormat,
+    ) -> Result<u32> {
         let source = source.into();
-        let prepared =
-            Self::prepare_trajectory_frames_precise(traj_id, frames, 0, Some(precision))?;
+        let prepared = Self::prepare_trajectory_frames_formatted(
+            traj_id, frames, 0, float_format,
+        )?;
         self.commit_prepared(traj_id, &prepared, source, false)
     }
 
