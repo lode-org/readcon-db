@@ -16,7 +16,21 @@ check_contains() {
   local pat="$2"
   local f="$ROOT/$rel"
   [[ -f "$f" ]] || { die "missing $rel"; return; }
-  core_revision=2fd79dddb948e22e4a74b2e85de98a3ae4c3d08b
+  if grep -qE "$pat" "$f"; then
+    ok "$rel matches $cargo_ver"
+  else
+    die "$rel does not contain version $cargo_ver (pattern $pat)"
+  fi
+}
+
+check_contains "python/pyproject.toml" "version = \"${cargo_ver}\""
+check_contains "meson.build" "version: '${cargo_ver}'"
+check_contains "pixi.toml" "version = \"${cargo_ver}\""
+check_contains "fortran/ReadConDb/fpm.toml" "^version = \"${cargo_ver}\""
+check_contains "CITATION.cff" "^version: ${cargo_ver}$"
+check_contains "docs/source/conf.py" "release = \"${cargo_ver}\""
+
+core_revision=2fd79dddb948e22e4a74b2e85de98a3ae4c3d08b
 if grep -qF 'version = "=0.14.10"' "$ROOT/Cargo.toml" &&
    grep -qF 'git = "https://github.com/lode-org/readcon-core"' "$ROOT/Cargo.toml" &&
    grep -qF "rev = \"$core_revision\"" "$ROOT/Cargo.toml"; then
