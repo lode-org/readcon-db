@@ -486,6 +486,40 @@ mod tests {
     }
 
     #[test]
+    fn roundtrip_preserves_small_observations_exactly() {
+        let dir = tempfile::tempdir().unwrap();
+        let z = vec![1_u32, 8, 1];
+        let cell = [25.0, 25.0, 25.0];
+        let positions = vec![
+            0.001_527_890_189_282_565_8, -0.0, 1.0,
+            1.234_567_890_123_456_7e-20, 2.0, 3.0,
+            4.0, 5.0, 6.0,
+        ];
+        let forces = vec![
+            0.001_527_890_189_282_565_8, -0.001_527_890_189_282_565_8, -0.0,
+            f64::MIN_POSITIVE, f64::from_bits(1), -f64::from_bits(1),
+            1.234_567_890_123_456_7e30, f64::MAX, -f64::MAX,
+        ];
+        let energy = 0.001_527_890_189_282_565_8_f64;
+        {
+            let archive = ObservationArchive::open(dir.path(), z.clone(), cell).unwrap();
+            assert!(archive.append(&positions, &forces, energy));
+            archive.flush();
+            assert_eq!(archive.committed(), 1);
+            assert_eq!(archive.dropped(), 0);
+        }
+        let archive = ObservationArchive::open(dir.path(), z, cell).unwrap();
+        let (actual_positions, actual_forces, actual_energy) = archive.fetch(0).unwrap();
+        for (actual, expected) in actual_positions.iter().zip(&positions) {
+            assert_eq!(actual.to_bits(), expected.to_bits(), "position {expected:e}");
+        }
+        for (actual, expected) in actual_forces.iter().zip(&forces) {
+            assert_eq!(actual.to_bits(), expected.to_bits(), "force {expected:e}");
+        }
+        assert_eq!(actual_energy.to_bits(), energy.to_bits());
+    }
+
+    #[test]
     fn restart_continues_trajectory_ids() {
         let dir = tempfile::tempdir().unwrap();
         let z = vec![6_u32, 1];
