@@ -697,9 +697,10 @@ impl ConCorpus {
             fr.header.set_units(merged);
             frames.push(fr);
         }
-        // Default CON writer is 6 decimals; dest Å/ps velocities are ~1e-3
-        // in CON fs and lose digits unless the rewrite keeps f64 digits.
-        let prepared = Self::prepare_trajectory_frames_precise(traj_id, &frames, 0, Some(17))?;
+        // Unit conversion retains the binary64 values of every stored field.
+        let prepared = Self::prepare_trajectory_frames_formatted(
+            traj_id, &frames, 0, FloatFormat::RoundTrip,
+        )?;
         let mut wtxn = self.env.write_txn()?;
         for p in &old_puts {
             self.delete_index_puts(&mut wtxn, p)?;
