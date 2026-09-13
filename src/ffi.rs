@@ -421,6 +421,30 @@ pub unsafe extern "C" fn rkrdb_append_trajectory_frame(
     source: *const c_char,
     out_n_frames: *mut u32,
 ) -> c_int {
+    ingest_trajectory_frame(id, traj_id, frame, source, out_n_frames, false)
+}
+
+/// Extend an existing trajectory with one parsed frame, or create it.
+/// Returns the total frame count. Caller retains ownership of the frame.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_extend_trajectory_frame(
+    id: usize,
+    traj_id: u64,
+    frame: *const std::ffi::c_void,
+    source: *const c_char,
+    out_n_frames: *mut u32,
+) -> c_int {
+    ingest_trajectory_frame(id, traj_id, frame, source, out_n_frames, true)
+}
+
+unsafe fn ingest_trajectory_frame(
+    id: usize,
+    traj_id: u64,
+    frame: *const std::ffi::c_void,
+    source: *const c_char,
+    out_n_frames: *mut u32,
+    extend: bool,
+) -> c_int {
     if frame.is_null() {
         return RKRDB_NULL;
     }
@@ -438,7 +462,13 @@ pub unsafe extern "C" fn rkrdb_append_trajectory_frame(
         Err(c) => return c,
     };
     let parsed = unsafe { &*(frame as *const readcon_core::types::ConFrame) };
-    match corpus.append_trajectory_frames(traj_id, std::slice::from_ref(parsed), source) {
+    let frames = std::slice::from_ref(parsed);
+    let result = if extend {
+        corpus.extend_trajectory_frames(traj_id, frames, source)
+    } else {
+        corpus.append_trajectory_frames(traj_id, frames, source)
+    };
+    match result {
         Ok(n) => {
             if !out_n_frames.is_null() {
                 unsafe { *out_n_frames = n };
@@ -1430,6 +1460,45 @@ mod tests {
     }
 
     #[test]
+    fn c_abi_extend_frame_preserves_sequential_indices() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = CString::new(dir.path().to_str().unwrap()).unwrap();
+        let text =
+            CString::new(std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap()).unwrap();
+        let mut id = 0usize;
+        let mut n = 0u32;
+        unsafe {
+            assert_eq!(rkrdb_open(path.as_ptr(), &mut id), RKRDB_OK);
+            assert_eq!(
+                rkrdb_append_trajectory_str(id, 1, text.as_ptr(), ptr::null(), &mut n),
+                RKRDB_OK
+            );
+            let handle = rkrdb_get_frame(id, 1, 0);
+            assert!(!handle.is_null());
+            let frame = Box::from_raw(handle as *mut readcon_core::types::ConFrame);
+            let frame_ptr = (&*frame as *const readcon_core::types::ConFrame).cast();
+            for expected in 1..=3 {
+                assert_eq!(
+                    rkrdb_extend_trajectory_frame(id, 2, frame_ptr, ptr::null(), &mut n),
+                    RKRDB_OK
+                );
+                assert_eq!(n, expected);
+            }
+            for index in 0..3 {
+                let stored = rkrdb_get_frame(id, 2, index);
+                assert!(!stored.is_null());
+                drop(Box::from_raw(stored as *mut readcon_core::types::ConFrame));
+            }
+            assert_eq!(
+                rkrdb_extend_trajectory_frame(id, 2, ptr::null(), ptr::null(), &mut n),
+                RKRDB_NULL
+            );
+            assert_eq!(n, 3);
+            rkrdb_close(id);
+        }
+    }
+
+    #[test]
     fn c_abi_append_units_canonical() {
         let dir = tempfile::tempdir().unwrap();
         let path = CString::new(dir.path().to_str().unwrap()).unwrap();
@@ -1687,9 +1756,7 @@ mod tests {
                 frc2[i_hfx]
             );
             assert!(
-                frc2[..na2 as usize * 3]
-                    .iter()
-                    .all(|&x| x.abs() < 1e-12),
+                frc2[..na2 as usize * 3].iter().all(|&x| x.abs() < 1e-12),
                 "frame 0 dest force must stay zero-pad, got {:?}",
                 &frc2[..na2 as usize * 3]
             );
@@ -1843,13 +1910,7 @@ mod tests {
             let tsrc = CString::new("memory").unwrap();
             let mut ntimed = 0u32;
             assert_eq!(
-                rkrdb_append_trajectory_str(
-                    id,
-                    2,
-                    ttext.as_ptr(),
-                    tsrc.as_ptr(),
-                    &mut ntimed
-                ),
+                rkrdb_append_trajectory_str(id, 2, ttext.as_ptr(), tsrc.as_ptr(), &mut ntimed),
                 RKRDB_OK
             );
             let mut t0 = [0.0f64; 8];
@@ -1859,7 +1920,8 @@ mod tests {
                 RKRDB_OK
             );
             assert!((t0[0] - 0.0125).abs() < 1e-12, "dest time fs->ps {}", t0[0]);
-            let tunits = CString::new(r#"{"length":"angstrom","energy":"eV","time":"ps"}"#).unwrap();
+            let tunits =
+                CString::new(r#"{"length":"angstrom","energy":"eV","time":"ps"}"#).unwrap();
             let mut nset2 = 0u32;
             assert_eq!(
                 rkrdb_set_units(id, 2, tunits.as_ptr(), &mut nset2),

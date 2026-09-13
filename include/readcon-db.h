@@ -49,6 +49,9 @@ int rkrdb_append_trajectory_str(size_t id, uint64_t traj_id, const char *text,
 /** Ingest one `RKRConFrame*` from libreadcon_core. Caller keeps the handle. */
 int rkrdb_append_trajectory_frame(size_t id, uint64_t traj_id, const void *frame,
                                   const char *source, uint32_t *out_n_frames);
+/** Extend with one RKRConFrame, preserving its owner and returning the total count. */
+int rkrdb_extend_trajectory_frame(size_t id, uint64_t traj_id, const void *frame,
+                                  const char *source, uint32_t *out_n_frames);
 /** Create the trajectory or append CON frames after the live count. */
 int rkrdb_extend_trajectory(size_t id, uint64_t traj_id, const char *path, uint32_t *out_n_frames);
 int rkrdb_extend_trajectory_units(size_t id, uint64_t traj_id, const char *path,
