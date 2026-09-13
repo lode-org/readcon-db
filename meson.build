@@ -115,6 +115,12 @@ readcon_dep = declare_dependency(
 meson.override_dependency('readcon-db', readcon_dep)
 
 if get_option('with_tests')
+    runtime_consumer = executable(
+        'test_runtime_dependency',
+        files('tests/meson-wrap/main.c'),
+        dependencies: readcon_dep,
+    )
+    test('runtime-dependency', runtime_consumer, env: {'LD_LIBRARY_PATH': ''})
     test(
         'cargo-tests',
         cargo_prog,
