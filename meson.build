@@ -102,12 +102,32 @@ install_headers(
     'include/readcon-db-mpi.h',
 )
 
-# link_args + sources: Meson must not promote an installed static consumer
-# to link_whole (custom_target is not a library target).
-_link_idx = get_option('default_library') == 'static' ? 1 : 0
+# Static archives travel as linker arguments so Meson does not promote
+# installed static consumers to link_whole. A header orders the Cargo
+# build without becoming an archive member of those consumers.
+_readcon_link_args = []
+_readcon_link_with = []
+if get_option('default_library') == 'static'
+    _readcon_link_args = [readcon_cargo[1].full_path()]
+else
+    # The shared target carries its runtime search directory to consumers.
+    _readcon_link_with = [readcon_cargo[0]]
+endif
+readcon_link_stub = custom_target(
+    'readcon-link-order',
+    input: readcon_cargo,
+    output: 'readcon_db_link_order.h',
+    command: [
+        _py,
+        '-c',
+        'import pathlib, sys; pathlib.Path(sys.argv[1]).write_text("/* orders the readcon-db cargo build before consumers link */" + chr(10))',
+        '@OUTPUT@',
+    ],
+)
 readcon_dep = declare_dependency(
-    link_args: [readcon_cargo[_link_idx].full_path()],
-    sources: readcon_cargo,
+    link_args: _readcon_link_args,
+    link_with: _readcon_link_with,
+    sources: readcon_link_stub,
     dependencies: _rust_sys_deps,
     include_directories: _incdir,
     version: meson.project_version(),
