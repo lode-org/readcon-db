@@ -16,6 +16,62 @@ pub const RKRDB_ERR: c_int = -1;
 pub const RKRDB_NOT_FOUND: c_int = -2;
 pub const RKRDB_NULL: c_int = -3;
 
+/// Breaking-change major for the public C ABI.
+pub const RKRDB_ABI_VERSION_MAJOR: u32 = 1;
+/// Additive-change minor for the public C ABI.
+pub const RKRDB_ABI_VERSION_MINOR: u32 = 0;
+/// Layout revision for exported records and the handle contract.
+pub const RKRDB_ABI_LAYOUT_REVISION: u32 = 1;
+
+/// Returns the breaking-change major of the loaded library's C ABI.
+#[no_mangle]
+pub extern "C" fn rkrdb_abi_version_major() -> u32 {
+    RKRDB_ABI_VERSION_MAJOR
+}
+
+/// Returns the additive-change minor of the loaded library's C ABI.
+#[no_mangle]
+pub extern "C" fn rkrdb_abi_version_minor() -> u32 {
+    RKRDB_ABI_VERSION_MINOR
+}
+
+/// Returns the layout revision of the loaded library's C ABI.
+#[no_mangle]
+pub extern "C" fn rkrdb_abi_layout_revision() -> u32 {
+    RKRDB_ABI_LAYOUT_REVISION
+}
+
+/// Returns the stable human-readable ABI negotiation stamp.
+///
+/// The pointer refers to static storage and must not be freed.
+#[no_mangle]
+pub extern "C" fn rkrdb_abi_stamp() -> *const c_char {
+    const STAMP: &[u8] = b"readcon-db/abi-1.0/layout-1\0";
+    STAMP.as_ptr() as *const c_char
+}
+
+/// Whether a library with stamp `library` serves a caller built against
+/// `caller`: equal major, equal layout revision, library minor at least the
+/// caller's. Each triple is `(major, minor, layout_revision)`.
+const fn abi_accepts(library: (u32, u32, u32), caller: (u32, u32, u32)) -> bool {
+    caller.0 == library.0 && caller.2 == library.2 && caller.1 <= library.1
+}
+
+/// Returns 1 when the loaded library can serve a caller built against the
+/// given `RKRDB_ABI_VERSION_MAJOR`, `RKRDB_ABI_VERSION_MINOR` and
+/// `RKRDB_ABI_LAYOUT_REVISION`, and 0 otherwise.
+#[no_mangle]
+pub extern "C" fn rkrdb_abi_compatible(major: u32, minor: u32, layout_revision: u32) -> c_int {
+    c_int::from(abi_accepts(
+        (
+            RKRDB_ABI_VERSION_MAJOR,
+            RKRDB_ABI_VERSION_MINOR,
+            RKRDB_ABI_LAYOUT_REVISION,
+        ),
+        (major, minor, layout_revision),
+    ))
+}
+
 struct Handle {
     /// Shared so ingest runs **outside** the handle-table mutex (no app-level writer serialize).
     corpus: Arc<ConCorpus>,
@@ -1422,6 +1478,101 @@ mod tests {
     use super::*;
     use std::ffi::CString;
     use std::path::PathBuf;
+
+    #[test]
+    fn abi_stamp_equals_the_constants() {
+        assert_eq!(rkrdb_abi_version_major(), RKRDB_ABI_VERSION_MAJOR);
+        assert_eq!(rkrdb_abi_version_minor(), RKRDB_ABI_VERSION_MINOR);
+        assert_eq!(rkrdb_abi_layout_revision(), RKRDB_ABI_LAYOUT_REVISION);
+        let stamp = unsafe { CStr::from_ptr(rkrdb_abi_stamp()) }.to_str().unwrap();
+        assert_eq!(
+            stamp,
+            format!(
+                "readcon-db/abi-{}.{}/layout-{}",
+                RKRDB_ABI_VERSION_MAJOR, RKRDB_ABI_VERSION_MINOR, RKRDB_ABI_LAYOUT_REVISION
+            )
+        );
+        assert_eq!(
+            rkrdb_abi_compatible(
+                RKRDB_ABI_VERSION_MAJOR,
+                RKRDB_ABI_VERSION_MINOR,
+                RKRDB_ABI_LAYOUT_REVISION
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn abi_header_carries_the_stamp() {
+        let header = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/include/readcon-db.h"
+        ))
+        .unwrap();
+        for (name, value) in [
+            ("RKRDB_ABI_VERSION_MAJOR", RKRDB_ABI_VERSION_MAJOR),
+            ("RKRDB_ABI_VERSION_MINOR", RKRDB_ABI_VERSION_MINOR),
+            ("RKRDB_ABI_LAYOUT_REVISION", RKRDB_ABI_LAYOUT_REVISION),
+        ] {
+            let want = format!("#define {name} {value}");
+            assert!(header.contains(&want), "readcon-db.h lacks {want}");
+        }
+        for f in [
+            "rkrdb_abi_version_major(void)",
+            "rkrdb_abi_version_minor(void)",
+            "rkrdb_abi_layout_revision(void)",
+            "rkrdb_abi_stamp(void)",
+            "rkrdb_abi_compatible(uint32_t major",
+        ] {
+            assert!(header.contains(f), "readcon-db.h lacks {f}");
+        }
+    }
+
+    #[test]
+    fn a_lower_caller_minor_is_accepted() {
+        let library = (2, 3, 5);
+        assert!(abi_accepts(library, (2, 2, 5)));
+        assert!(abi_accepts(library, (2, 0, 5)));
+        assert!(abi_accepts(library, (2, 3, 5)));
+    }
+
+    #[test]
+    fn a_higher_minor_other_major_or_other_layout_is_refused() {
+        let library = (2, 3, 5);
+        assert!(!abi_accepts(library, (2, 4, 5)));
+        assert!(!abi_accepts(library, (1, 3, 5)));
+        assert!(!abi_accepts(library, (3, 3, 5)));
+        assert!(!abi_accepts(library, (2, 3, 4)));
+        assert!(!abi_accepts(library, (2, 3, 6)));
+    }
+
+    #[test]
+    fn the_exported_check_refuses_a_foreign_stamp() {
+        assert_eq!(
+            rkrdb_abi_compatible(
+                RKRDB_ABI_VERSION_MAJOR + 1,
+                RKRDB_ABI_VERSION_MINOR,
+                RKRDB_ABI_LAYOUT_REVISION
+            ),
+            0
+        );
+        assert_eq!(
+            rkrdb_abi_compatible(
+                RKRDB_ABI_VERSION_MAJOR,
+                RKRDB_ABI_VERSION_MINOR + 1,
+                RKRDB_ABI_LAYOUT_REVISION
+            ),
+            0
+        );
+        assert_eq!(
+            rkrdb_abi_compatible(
+                RKRDB_ABI_VERSION_MAJOR,
+                RKRDB_ABI_VERSION_MINOR,
+                RKRDB_ABI_LAYOUT_REVISION + 1
+            ),
+            0
+        );
+    }
 
     fn fixture(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
