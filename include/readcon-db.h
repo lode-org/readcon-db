@@ -14,6 +14,28 @@ extern "C" {
 #define RKRDB_NOT_FOUND -2
 #define RKRDB_NULL -3
 
+/** Breaking-change major for the public C ABI. */
+#define RKRDB_ABI_VERSION_MAJOR 1
+/** Additive-change minor for the public C ABI. */
+#define RKRDB_ABI_VERSION_MINOR 0
+/** Layout revision for exported records and the handle contract. */
+#define RKRDB_ABI_LAYOUT_REVISION 1
+
+/** ABI major of the loaded library. */
+uint32_t rkrdb_abi_version_major(void);
+/** ABI minor of the loaded library. */
+uint32_t rkrdb_abi_version_minor(void);
+/** Layout revision of the loaded library. */
+uint32_t rkrdb_abi_layout_revision(void);
+/** Stable human-readable ABI stamp, e.g. "readcon-db/abi-1.0/layout-1". Static; do not free. */
+const char *rkrdb_abi_stamp(void);
+/**
+ * Nonzero when the loaded library serves a caller built against the given
+ * RKRDB_ABI_* macros: equal major, equal layout revision, library minor at
+ * least the caller's.
+ */
+int rkrdb_abi_compatible(uint32_t major, uint32_t minor, uint32_t layout_revision);
+
 int rkrdb_open(const char *path, size_t *out_id);
 /** Existing corpus, MDB_RDONLY. No mkdir. */
 int rkrdb_open_readonly(const char *path, size_t *out_id);

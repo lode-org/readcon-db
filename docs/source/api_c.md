@@ -2,6 +2,46 @@
 
 Header: [`include/readcon-db.h`](https://github.com/lode-org/readcon-db/blob/main/include/readcon-db.h).
 
+## ABI stamp
+
+`readcon-db.h` carries the stamp of the library it describes, in the same shape as `readcon-core`'s `rkr_abi_*`:
+
+```c
+#define RKRDB_ABI_VERSION_MAJOR 1
+#define RKRDB_ABI_VERSION_MINOR 0
+#define RKRDB_ABI_LAYOUT_REVISION 1
+
+uint32_t rkrdb_abi_version_major(void);
+uint32_t rkrdb_abi_version_minor(void);
+uint32_t rkrdb_abi_layout_revision(void);
+const char *rkrdb_abi_stamp(void);   /* "readcon-db/abi-1.0/layout-1" */
+int rkrdb_abi_compatible(uint32_t major, uint32_t minor, uint32_t layout_revision);
+```
+
+The macros hold the stamp of the header a caller compiled against; the functions report the stamp of the library actually loaded.
+`rkrdb_abi_compatible` returns nonzero when the loaded library serves a caller built against that triple: equal major, equal layout revision, and a library minor at least the caller's.
+A host that opens `libreadcon_db.so` at run time checks it once:
+
+```c
+if (!rkrdb_abi_compatible(RKRDB_ABI_VERSION_MAJOR, RKRDB_ABI_VERSION_MINOR,
+                          RKRDB_ABI_LAYOUT_REVISION)) {
+  fprintf(stderr, "loaded %s, built against %d.%d layout %d\n", rkrdb_abi_stamp(),
+          RKRDB_ABI_VERSION_MAJOR, RKRDB_ABI_VERSION_MINOR, RKRDB_ABI_LAYOUT_REVISION);
+  abort();
+}
+```
+
+The numbers live in `src/ffi.rs` and are repeated in `include/readcon-db.h`, which is hand-written.
+The `abi_header_carries_the_stamp` unit test fails when the two disagree.
+They do not follow the package version, and a release that changes no exported symbol leaves them where they are.
+
+- `RKRDB_ABI_VERSION_MAJOR`: increment for a change an old caller cannot survive: removing or renaming an exported function, changing a signature, or changing the meaning of an argument or status code.
+  Reset the minor to 0.
+- `RKRDB_ABI_VERSION_MINOR`: increment for an additive change that leaves every old call valid, such as a new exported function or a new status code.
+- `RKRDB_ABI_LAYOUT_REVISION`: increment when the size or field order of an exported record changes, or an existing field changes type, or the buffer formats `rkrdb_pack_frame` writes change.
+  A caller and a library with different layout revisions never match.
+
+
 ```c
 #include "readcon-db.h"
 
