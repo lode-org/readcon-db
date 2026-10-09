@@ -1,8 +1,8 @@
 project = "readcon-db"
 copyright = "2026, LODE developers"
 author = "LODE developers"
-release = "0.1.6"
-version = "0.1.6"
+release = "0.1.7"
+version = "0.1.7"
 
 extensions = [
     "sphinx.ext.autodoc",

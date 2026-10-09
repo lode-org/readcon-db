@@ -1,6 +1,6 @@
 [package]
 name = "readcon-db"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 description = "Mmap-backed CON frame corpus (Heed/LMDB), xxHash exact match, multi-language FFI"
 license = "MIT"

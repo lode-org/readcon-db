@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.1.7 - 2026-10-09
+
+### Fixed
+
+- Keep shared libraries out of Meson static consumers' archive members.
+- Propagate shared runtime directories through the Meson dependency.
+
+### Added
+
+- Export an ABI stamp and compatibility check through the C header.
+
 ## v0.1.6 - 2026-09-02
 #### Benchmarks
 - (**cpc**) restamp the fair campaign freeze with host and commit - (4a85c51) - *HaoZeke*
