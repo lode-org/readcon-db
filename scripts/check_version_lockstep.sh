@@ -30,13 +30,10 @@ check_contains "fortran/ReadConDb/fpm.toml" "^version = \"${cargo_ver}\""
 check_contains "CITATION.cff" "^version: ${cargo_ver}$"
 check_contains "docs/source/conf.py" "release = \"${cargo_ver}\""
 
-core_revision=2fd79dddb948e22e4a74b2e85de98a3ae4c3d08b
-if grep -qF 'version = "=0.14.9"' "$ROOT/Cargo.toml" &&
-   grep -qF 'git = "https://github.com/lode-org/readcon-core"' "$ROOT/Cargo.toml" &&
-   grep -qF "rev = \"$core_revision\"" "$ROOT/Cargo.toml"; then
-  ok "Cargo.toml pins readcon-core 0.14.9 at $core_revision"
+if grep -qxF 'readcon-core = "=0.16.1"' "$ROOT/Cargo.toml"; then
+  ok "Cargo.toml pins the published readcon-core 0.16.1"
 else
-  die "Cargo.toml must pin the exact round-trip readcon-core revision"
+  die "Cargo.toml must pin the published round-trip readcon-core release"
 fi
 
 if [[ "$fail" -ne 0 ]]; then
