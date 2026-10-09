@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.8 - 2026-10-09
+
+### Fixed
+
+- Use the published readcon-core 0.16.1 writer for exact numeric round trips.
+- Verify the packaged crate against registry dependencies in CI.
+
 ## v0.1.7 - 2026-10-09
 
 ### Fixed
