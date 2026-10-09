@@ -37,3 +37,5 @@ jobs:
         run: cargo clippy --locked --all-targets
       - name: Docs
         run: cargo doc --locked --no-deps
+      - name: Verify registry package
+        run: cargo package --locked
