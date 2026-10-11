@@ -1,8 +1,11 @@
 name: Lint
 
 on:
+  push:
+    branches: [main, "fix/**", "feat/**", "ci/**"]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 jobs:
   lint:
     runs-on: ubuntu-latest
