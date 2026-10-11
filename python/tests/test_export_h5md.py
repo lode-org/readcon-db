@@ -7,6 +7,12 @@ import numpy as np
 from readcon_db import ConCorpus, canonicalize_unit, unit_conversion_factor
 
 FIXTURE = Path(__file__).resolve().parents[2] / "resources" / "test"
+NATURAL_TIME = "(amu*angstrom^2/eV)^0.5"
+
+
+def natural_angstrom_per_ps(v_natural: float) -> float:
+    """D10: natural-unit velocity to Angstrom/ps."""
+    return v_natural / unit_conversion_factor(NATURAL_TIME, "ps")
 
 
 def test_export_h5md_readonly_corpus(tmp_path):
@@ -327,11 +333,15 @@ def test_export_h5md_mdanalysis_reader_with_velocity(tmp_path):
     assert reader.n_frames == n
     ts = reader.ts
     assert ts.has_velocities
-    assert abs(float(ts.velocities[0, 0]) - 1.234) < 1e-3
+    expected = natural_angstrom_per_ps(0.001234)
+    assert abs(float(ts.velocities[0, 0]) - expected) < 1e-3
     with h5py.File(out, "r") as f:
         assert f["particles/all/velocity/step"].shape == (n,)
         assert f["particles/all/velocity/time"].shape == (n,)
         assert _as_str(f["particles/all/velocity/time"].attrs["unit"]) == "ps"
+        assert (
+            _as_str(f["particles/all/velocity/value"].attrs["unit"]) == "Angstrom ps-1"
+        )
     native = db.get_velocities(1, 0)
     assert native is not None
     assert abs(float(native[0][0]) - 0.001234) < 1e-9
@@ -417,7 +427,7 @@ def test_export_h5md_writes_velocity(tmp_path):
         assert v.shape[2] == 3
         assert np.any(v[:] != 0.0)
         assert _as_str(v.attrs["unit"]) == "Angstrom ps-1"
-        assert abs(float(v[0, 0, 0]) - 1.234) < 1e-9
+        assert abs(float(v[0, 0, 0]) - natural_angstrom_per_ps(0.001234)) < 1e-6
 
 
 def test_ingest_directory_units(tmp_path):
@@ -487,7 +497,7 @@ def test_export_h5md_set_units_keeps_dest_vel_and_edges(tmp_path):
         va = a["particles/all/velocity/value"][:]
         vb = b["particles/all/velocity/value"][:]
         np.testing.assert_allclose(va, vb)
-        assert abs(float(va[0, 0, 0]) - 1.234) < 1e-9
+        assert abs(float(va[0, 0, 0]) - natural_angstrom_per_ps(0.001234)) < 1e-6
         ea = a["particles/all/box/edges/value"][:]
         eb = b["particles/all/box/edges/value"][:]
         np.testing.assert_allclose(ea, eb)
@@ -531,3 +541,43 @@ def test_export_h5md_set_units_keeps_dest_time(tmp_path):
         assert abs(ta - 0.0125) < 1e-12
         assert abs(tb - 0.0125) < 1e-12
         assert _as_str(b["particles/all/position/time"].attrs["unit"]) == "ps"
+
+
+def test_export_h5md_velocity_time_unit_override_fs(tmp_path):
+    db = ConCorpus(str(tmp_path / "corpus"))
+    db.append_trajectory(1, str(FIXTURE / "tiny_cuh2.convel"))
+    out = tmp_path / "fs.h5"
+    db.export_h5md(1, str(out), velocity_time_unit="fs")
+    with h5py.File(out, "r") as f:
+        v = float(f["particles/all/velocity/value"][0, 0, 0])
+    assert abs(v - 1.234) < 1e-9
+
+
+def test_eon36_convel_mdanalysis_velocity_unit_and_ke(tmp_path):
+    """KE from H5MD velocities matches eOn 3.6 printed KE within 6 decimals."""
+    from MDAnalysis.coordinates.H5MD import H5MDReader
+
+    printed = 1.5004770201120763e-2
+    db = ConCorpus(str(tmp_path / "corpus"))
+    db.append_trajectory(1, str(FIXTURE / "eon36_lj_dimer.convel"))
+    out = tmp_path / "eon.h5"
+    db.export_h5md(1, str(out))
+    with h5py.File(out, "r") as f:
+        assert (
+            _as_str(f["particles/all/velocity/value"].attrs["unit"]) == "Angstrom ps-1"
+        )
+        vel = np.asarray(f["particles/all/velocity/value"][0], dtype=float)
+    reader = H5MDReader(str(out), convert_units=True)
+    assert reader.ts.has_velocities
+    np.testing.assert_allclose(reader.ts.velocities, vel, atol=1e-6)
+    assert reader.units["velocity"] == "Angstrom/ps"
+    t_ps = unit_conversion_factor(NATURAL_TIME, "ps")
+    masses = np.array([12.0, 12.0])
+    native = vel * t_ps
+    ke = 0.5 * float(np.sum(masses * np.sum(native * native, axis=1)))
+    half_ulp = 5e-7
+    bound = 0.0
+    for m, v in zip(masses, native):
+        for c in v:
+            bound += m * abs(float(c)) * half_ulp + 0.5 * m * half_ulp * half_ulp
+    assert abs(ke - printed) <= bound

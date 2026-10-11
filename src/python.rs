@@ -65,7 +65,18 @@ impl PyConCorpus {
 
     /// Cooked H5MD interchange (h5py). CON text stays authority in the corpus.
     /// One `[T][N][3]` dataset per trajectory. Fixed N only.
-    fn export_h5md(&self, py: Python<'_>, traj_id: u64, path: &str) -> PyResult<u32> {
+    ///
+    /// `velocity_time_unit` overrides D10. Pass `fs` when a v1, v2, or v3.0
+    /// file really stored Angstrom/fs, or the natural unit
+    /// `(amu*angstrom^2/eV)^0.5` when a v3.1 file mislabeled that unit as `fs`.
+    #[pyo3(signature = (traj_id, path, velocity_time_unit=None))]
+    fn export_h5md(
+        &self,
+        py: Python<'_>,
+        traj_id: u64,
+        path: &str,
+        velocity_time_unit: Option<String>,
+    ) -> PyResult<u32> {
         if std::path::Path::new(path).exists() {
             return Err(PyRuntimeError::new_err(format!(
                 "export_h5md dest exists: {path}"
@@ -76,7 +87,10 @@ impl PyConCorpus {
             .map_err(|_| PyRuntimeError::new_err("export_h5md requires h5py"))?;
         let a = self
             .inner
-            .collect_h5md(traj_id)
+            .collect_h5md_with(
+                traj_id,
+                &crate::export_h5md::H5mdCollectOpts { velocity_time_unit },
+            )
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let n_frames = a.n_frames;
         let natoms = a.natoms;
@@ -248,12 +262,7 @@ impl PyConCorpus {
 
     /// Ingest CON text without a temp file.
     #[pyo3(signature = (traj_id, text, source="memory"))]
-    fn append_trajectory_str(
-        &self,
-        traj_id: u64,
-        text: &str,
-        source: &str,
-    ) -> PyResult<u32> {
+    fn append_trajectory_str(&self, traj_id: u64, text: &str, source: &str) -> PyResult<u32> {
         self.inner
             .append_trajectory_str(traj_id, text, source)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))

@@ -16,6 +16,7 @@
 //! readcon-db recook-all <corpus_dir>
 //! readcon-db delete-cooked <corpus_dir> --traj T --frame F
 //! readcon-db positions <corpus_dir> --traj T --frame F
+//! readcon-db h5md-velocities <corpus_dir> --traj T [--velocity-time-unit UNIT]
 //! readcon-db dedup-export <corpus_dir> [filters...] -o train.xyz
 //! readcon-db reindex <corpus_dir>
 //! readcon-db annotate-topology <corpus_dir> --cutoff A [--graph G] [--hops N] [--seams PATH]
@@ -28,7 +29,7 @@ use std::process::ExitCode;
 
 use readcon_db::{
     join_drained_roots, open_single_env_for_export, AnnotateTopologyOpts, ConCorpus, FrameKey,
-    Select, ShardedConCorpus, DEFAULT_N_SHARDS,
+    H5mdCollectOpts, Select, ShardedConCorpus, DEFAULT_N_SHARDS,
 };
 
 fn usage() -> ExitCode {
@@ -63,6 +64,7 @@ fn usage() -> ExitCode {
   readcon-db recook-all <corpus_dir>
   readcon-db delete-cooked <corpus_dir> --traj T --frame F
   readcon-db positions <corpus_dir> --traj T --frame F
+  readcon-db h5md-velocities <corpus_dir> --traj T [--velocity-time-unit UNIT]
   readcon-db hash-file <file.con>
   (RCSO cooked tier is opt-in; CON text in frames remains authority — docs/orgmode/cooked-soa.org)
 "
@@ -773,6 +775,40 @@ fn main() -> ExitCode {
                 }
                 if pos.len() > 5 {
                     println!("  ... ({} more)", pos.len() - 5);
+                }
+            }
+            "h5md-velocities" => {
+                let corpus = args.first().ok_or("corpus_dir")?.clone();
+                let mut traj = 1u64;
+                let mut unit: Option<String> = None;
+                let mut i = 1;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "--traj" => {
+                            traj = args.get(i + 1).ok_or("traj")?.parse()?;
+                            i += 2;
+                        }
+                        "--velocity-time-unit" => {
+                            unit = Some(args.get(i + 1).ok_or("unit")?.clone());
+                            i += 2;
+                        }
+                        _ => i += 1,
+                    }
+                }
+                let db = ConCorpus::open_readonly(&corpus)?;
+                let a = db.collect_h5md_with(
+                    traj,
+                    &H5mdCollectOpts {
+                        velocity_time_unit: unit,
+                    },
+                )?;
+                let v = a.velocities.ok_or("trajectory has no velocities")?;
+                println!(
+                    "frames {} natoms {} unit {}",
+                    a.n_frames, a.natoms, a.velocity_unit
+                );
+                for row in v.chunks(3) {
+                    println!("{} {} {}", row[0], row[1], row[2]);
                 }
             }
             "hash-file" => {

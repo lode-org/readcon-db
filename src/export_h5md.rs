@@ -36,8 +36,18 @@ pub const H5MD_LENGTH_CORE: &str = "angstrom";
 pub const H5MD_LENGTH_ATTR: &str = "Angstrom";
 pub const H5MD_TIME_CORE: &str = "ps";
 pub const H5MD_TIME_ATTR: &str = "ps";
-/// CON v3 default when `units.time` is absent (`default_v3_units_json`).
+/// CON v3 default when `units.time` is absent on the simulation clock.
 pub const CON_TIME_DEFAULT: &str = "fs";
+
+/// Options for [`ConCorpus::collect_h5md_with`].
+///
+/// `velocity_time_unit` overrides D10. Use it for a file that breaks the
+/// rule: natural-unit numbers under a v3.1 `fs` label, or true fs numbers
+/// on a v1, v2, or v3.0 frame.
+#[derive(Clone, Debug, Default)]
+pub struct H5mdCollectOpts {
+    pub velocity_time_unit: Option<String>,
+}
 pub const H5MD_FORCE_ATTR: &str = "kJ mol-1 Angstrom-1";
 pub const H5MD_VELOCITY_ATTR: &str = "Angstrom ps-1";
 /// 1 kJ mol^{-1} Å^{-1} in N. CODATA 2018 N_A.
@@ -144,11 +154,39 @@ fn boxl_angles_to_edges33(boxl: &[f64; 3], angles: &[f64; 3]) -> [f64; 9] {
     [ax, 0.0, 0.0, bx, by, 0.0, cx, cy, cz]
 }
 
+fn velocity_time_unit_for(
+    header: &readcon_core::types::FrameHeader,
+    has_velocities: bool,
+    override_unit: Option<&str>,
+) -> Result<String> {
+    if let Some(unit) = override_unit {
+        let _ = time_scale_to_ps(unit)?;
+        return Ok(unit.to_string());
+    }
+    if crate::units_canon::velocity_time_is_declared(header) {
+        match header.unit_for("time") {
+            Some(unit) if !unit.trim().is_empty() => Ok(unit.to_string()),
+            _ if has_velocities => Err(crate::error::Error::Message(
+                "v3.1 frame has velocities but no units.time (D10)".into(),
+            )),
+            _ => Ok(CON_TIME_DEFAULT.to_string()),
+        }
+    } else {
+        Ok(crate::units_canon::NATURAL_TIME_UNIT.to_string())
+    }
+}
+
 impl ConCorpus {
     /// Collect one trajectory as H5MD-shaped arrays (fixed `N`).
     /// Times are dest `ps`: CON `header.time()`, or `i * timestep`, else
-    /// the frame index. Missing `units.time` is CON default `fs`.
+    /// the frame index. A missing `units.time` is `fs` for that clock.
+    /// Velocities use D10 (see [`H5mdCollectOpts`]).
     pub fn collect_h5md(&self, traj_id: u64) -> Result<H5mdArrays> {
+        self.collect_h5md_with(traj_id, &H5mdCollectOpts::default())
+    }
+
+    /// [`collect_h5md`] with an explicit velocity time override.
+    pub fn collect_h5md_with(&self, traj_id: u64, opts: &H5mdCollectOpts) -> Result<H5mdArrays> {
         let keys = self.select(&Select::new().trajectory(traj_id))?;
         if keys.is_empty() {
             return Err(crate::error::Error::Message("no frames for traj".into()));
@@ -175,9 +213,7 @@ impl ConCorpus {
             };
             let length_u = header_unit(&fr.header, "length", H5MD_LENGTH_CORE);
             let energy_u = header_unit(&fr.header, "energy", "eV");
-            let time_u = header_unit(&fr.header, "time", CON_TIME_DEFAULT);
             let len_scale = uc(&length_u, H5MD_LENGTH_CORE)?;
-            let vel_scale = len_scale / time_scale_to_ps(&time_u)?;
             times.push(frame_time_ps(&fr.header, k.frame_idx)?);
             let e33 = edges33_from_header(&fr.header);
             for x in e33 {
@@ -229,6 +265,12 @@ impl ConCorpus {
                 };
                 (pos, vel, frc)
             };
+            let vel_time = velocity_time_unit_for(
+                &fr.header,
+                vel_src.is_some(),
+                opts.velocity_time_unit.as_deref(),
+            )?;
+            let vel_scale = len_scale / time_scale_to_ps(&vel_time)?;
             for p in &pos_src {
                 positions.extend_from_slice(&[
                     p[0] * len_scale,
@@ -909,9 +951,7 @@ mod tests {
         db.set_trajectory_units(1, serde_json::json!({"length": "nm", "energy": "hartree"}))
             .unwrap();
         let after_e = db.collect_h5md(1).unwrap();
-        let after_energy = after_e
-            .forces
-            .expect("dest forces after set_units energy");
+        let after_energy = after_e.forces.expect("dest forces after set_units energy");
         assert_eq!(bf.len(), after_energy.len());
         for (i, (b, a)) in bf.iter().zip(after_energy.iter()).enumerate() {
             assert!(
@@ -981,9 +1021,10 @@ mod tests {
         assert_eq!(v.len(), a.n_frames * a.natoms * 3);
         assert!(v.iter().any(|&x| x != 0.0));
         assert_eq!(a.velocity_unit, "Angstrom ps-1");
+        let scale = natural_velocity_scale();
         assert!(
-            (v[0] - 1.234).abs() < 1e-9,
-            "0.001234 A/fs -> 1.234 A/ps, got {}",
+            (v[0] - 0.001234 * scale).abs() < 1e-9,
+            "v2 convel is the natural unit (D10), got {}",
             v[0]
         );
     }
@@ -1024,5 +1065,149 @@ mod tests {
             .unwrap();
         assert_eq!(u["length"], "angstrom");
         assert_eq!(u["energy"], "eV");
+    }
+
+    fn natural_velocity_scale() -> f64 {
+        let t_ps = time_scale_to_ps(crate::units_canon::NATURAL_TIME_UNIT).unwrap();
+        1.0 / t_ps
+    }
+
+    fn with_line2(src: &str, line2: &str) -> String {
+        let mut lines: Vec<String> = src.lines().map(str::to_string).collect();
+        lines[1] = line2.to_string();
+        let mut out = lines.join("\n");
+        out.push('\n');
+        out
+    }
+
+    #[test]
+    fn collect_h5md_v30_ignores_fs_label() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let src = std::fs::read_to_string(fixture("tiny_cuh2.convel")).unwrap();
+        let text = with_line2(
+            &src,
+            r#"{"con_spec_version":3,"sections":["velocities"],"units":{"length":"angstrom","energy":"eV","mass":"amu","time":"fs"}}"#,
+        );
+        db.append_trajectory_str(1, &text, "v30").unwrap();
+        let a = db.collect_h5md(1).unwrap();
+        let v = a.velocities.expect("vel");
+        let scale = natural_velocity_scale();
+        assert!(
+            (v[0] - 0.001234 * scale).abs() < 1e-9,
+            "v3.0 fs label is not the velocity unit, got {}",
+            v[0]
+        );
+    }
+
+    #[test]
+    fn collect_h5md_v31_uses_units_time_fs() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let src = std::fs::read_to_string(fixture("tiny_cuh2.convel")).unwrap();
+        let text = with_line2(
+            &src,
+            r#"{"con_spec_version":3,"con_spec_minor":1,"sections":["velocities"],"units":{"length":"angstrom","energy":"eV","mass":"amu","time":"fs"}}"#,
+        );
+        db.append_trajectory_str(1, &text, "v31").unwrap();
+        let a = db.collect_h5md(1).unwrap();
+        let v = a.velocities.expect("vel");
+        assert!(
+            (v[0] - 1.234).abs() < 1e-9,
+            "v3.1 units.time fs -> A/ps, got {}",
+            v[0]
+        );
+    }
+
+    #[test]
+    fn collect_h5md_v31_velocities_without_time_fail() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let src = std::fs::read_to_string(fixture("tiny_cuh2.convel")).unwrap();
+        let text = with_line2(
+            &src,
+            r#"{"con_spec_version":3,"con_spec_minor":1,"sections":["velocities"],"units":{"length":"angstrom","energy":"eV","mass":"amu"}}"#,
+        );
+        db.append_trajectory_str(1, &text, "v31-notime").unwrap();
+        let err = db.collect_h5md(1).unwrap_err();
+        assert!(err.to_string().contains("no units.time"), "{err}");
+    }
+
+    #[test]
+    fn collect_h5md_velocity_time_override_fs_on_v2() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.convel"))
+            .unwrap();
+        let opts = H5mdCollectOpts {
+            velocity_time_unit: Some("fs".into()),
+        };
+        let a = db.collect_h5md_with(1, &opts).unwrap();
+        let v = a.velocities.expect("vel");
+        assert!(
+            (v[0] - 1.234).abs() < 1e-9,
+            "override fs on a v2 file, got {}",
+            v[0]
+        );
+    }
+
+    /// eonclient 3.6.0 (conda-forge, c4efc62) `setThermalVelocity` on a
+    /// two-atom ljcluster frame, then `matter2convel`. Printed KE is
+    /// `getKineticEnergy` before the 6-decimal write.
+    #[test]
+    fn eon36_convel_h5md_ke_matches_printed() {
+        let printed = 1.5004770201120763e-2;
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("eon36_lj_dimer.convel"))
+            .unwrap();
+        let fr = db
+            .get_frame(crate::keys::FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap();
+        assert_eq!(fr.header.spec_version, 3);
+        assert!(crate::units_canon::con_spec_minor(&fr.header).is_none());
+        assert_eq!(fr.header.unit_for("time"), Some("fs"));
+        let mut masses = Vec::new();
+        for (n, m) in fr
+            .header
+            .natms_per_type
+            .iter()
+            .zip(&fr.header.masses_per_type)
+        {
+            for _ in 0..*n {
+                masses.push(*m);
+            }
+        }
+        let native: Vec<[f64; 3]> = fr
+            .atom_data
+            .iter()
+            .map(|a| a.velocity.expect("vel"))
+            .collect();
+        assert_eq!(masses.len(), native.len());
+        let half_ulp = 5e-7;
+        let mut bound = 0.0;
+        for (m, v) in masses.iter().zip(&native) {
+            for c in v {
+                bound += m * c.abs() * half_ulp + 0.5 * m * half_ulp * half_ulp;
+            }
+        }
+        let a = db.collect_h5md(1).unwrap();
+        let dest = a.velocities.expect("h5md vel");
+        let t_ps = time_scale_to_ps(crate::units_canon::NATURAL_TIME_UNIT).unwrap();
+        let mut ke = 0.0;
+        for (i, m) in masses.iter().enumerate() {
+            let vx = dest[i * 3] * t_ps;
+            let vy = dest[i * 3 + 1] * t_ps;
+            let vz = dest[i * 3 + 2] * t_ps;
+            ke += 0.5 * m * (vx * vx + vy * vy + vz * vz);
+        }
+        assert!(
+            (ke - printed).abs() <= bound,
+            "H5MD KE {ke} vs eOn {printed}, 6-decimal bound {bound}"
+        );
+        assert_eq!(a.velocity_unit, "Angstrom ps-1");
     }
 }
