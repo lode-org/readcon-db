@@ -83,7 +83,7 @@ ShardedConCorpus::drain_to(src, dest)?;
 join_drained_roots(&[dest_a, dest_b], joined)?;
 #+end_src
 
-=set_trajectory_units= converts stored numbers. =append_trajectory_path_units= and =extend_trajectory_path_units= stamp incoming frames. H5MD velocities follow D10 and are written as =Angstrom ps-1=. v1, v2, and v3.0 frames use =(amu*angstrom^2/eV)^0.5= whatever the time label says. v3.1 frames use =units.time= and =collect_h5md= fails when velocities have no =units.time=. =H5mdCollectOpts.velocity_time_unit= overrides that rule for a file that breaks it. The clock (=time=, =timestep=, H5MD time) still uses =units.time=, and a missing clock unit is CON =fs=.
+=set_trajectory_units= converts stored numbers. =append_trajectory_path_units= and =extend_trajectory_path_units= stamp incoming frames. H5MD velocities follow D10 and are written as =Angstrom ps-1=. v1, v2, and v3.0 frames use =(amu*angstrom^2/eV)^0.5= whatever the time label says. v3.1 frames use =units.time= and =collect_h5md= fails when velocities have no =units.time=. =H5mdCollectOpts.velocity_time_unit= overrides that rule for a file that breaks it. The clock (=time=, =timestep=, H5MD time) uses =units.time= when that key is present. A v3.1 frame with =time= or =timestep= and no =units.time= is an error, and the same override supplies that missing clock unit. A present =units.time= still scales the clock. v1, v2, and v3.0 clocks with no =units.time= are read as =fs=.
 
 ** Cooked SoA (RCSO)
 :PROPERTIES:

@@ -54,7 +54,7 @@ db.export_h5md(traj_id=1, path="traj.h5")
 
 Dest must not exist (=File= ="x"=). A write failure removes the dest.
 
-Time on the file is dest =ps=: CON =header.time()=, or =i * timestep=, else the frame index. A missing clock =units.time= is CON =fs=. Optional force and velocity groups are dest =kJ mol-1 Angstrom-1= and =Angstrom ps-1=. Velocities follow D10: v1, v2, and v3.0 use =(amu*angstrom^2/eV)^0.5= whatever the label says; v3.1 uses =units.time= and fails if that key is missing. =velocity_time_unit= overrides that rule for a file that breaks it. =readcon-db compact-join= is the single-root join (=open_existing=).
+Time on the file is dest =ps=: CON =header.time()=, or =i * timestep=, else the frame index. A v3.1 frame with =time= or =timestep= and no =units.time= is an error. =velocity_time_unit= supplies that missing clock unit and overrides the D10 velocity rule for a file that breaks it. A present =units.time= still scales the clock. v1, v2, and v3.0 clocks with no =units.time= are read as =fs=. Optional force and velocity groups are dest =kJ mol-1 Angstrom-1= and =Angstrom ps-1=. Velocities follow D10: v1, v2, and v3.0 use =(amu*angstrom^2/eV)^0.5= whatever the label says; v3.1 uses =units.time= and fails if that key is missing. =readcon-db compact-join= is the single-root join (=open_existing=).
 
 ** CON-native (default)
 :PROPERTIES:

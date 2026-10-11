@@ -94,7 +94,11 @@ Foreign trajectories: **`readcon.read_chemfiles("traj.xyz")` → frames → inge
   `--velocity-time-unit`, Rust `H5mdCollectOpts`, the Python
   `velocity_time_unit` argument, and C `rkrdb_set_velocity_time_unit`
   override that rule for a file that breaks it.
-  The simulation clock still uses `units.time`, and a missing clock unit is CON `fs`.
+  The simulation clock uses `units.time` when that key is present.
+  A v3.1 frame with `time` or `timestep` and no `units.time` is an error.
+  The same override supplies that missing clock unit.
+  A present `units.time` still scales the clock.
+  v1, v2, and v3.0 clocks with no `units.time` are read as `fs`.
 - **Node-local drain/join** — `shard-ingest` then `drain` to a unique
   dest (`data.mdb` only, refuse overwrite), then `join-drained`.
   `compact-join` joins one sharded root (`open_existing`). Campaign

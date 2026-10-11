@@ -36,14 +36,20 @@ pub const H5MD_LENGTH_CORE: &str = "angstrom";
 pub const H5MD_LENGTH_ATTR: &str = "Angstrom";
 pub const H5MD_TIME_CORE: &str = "ps";
 pub const H5MD_TIME_ATTR: &str = "ps";
-/// CON v3 default when `units.time` is absent on the simulation clock.
+/// Historical clock unit for v1, v2, and v3.0 when `units.time` is absent.
+///
+/// Spec v3.1 does not default a missing clock unit. CON-header.3 defaults
+/// only angstrom and amu. CON-units.4 forbids a silent `time: fs`. A v3.1
+/// clock without `units.time` is an error.
 pub const CON_TIME_DEFAULT: &str = "fs";
 
 /// Options for [`ConCorpus::collect_h5md_with`].
 ///
 /// `velocity_time_unit` overrides D10. Use it for a file that breaks the
 /// rule: natural-unit numbers under a v3.1 `fs` label, or true fs numbers
-/// on a v1, v2, or v3.0 frame.
+/// on a v1, v2, or v3.0 frame. The same string is the clock unit when a
+/// v3.1 frame has `time` or `timestep` and no `units.time`. A present
+/// `units.time` still scales the clock.
 #[derive(Clone, Debug, Default)]
 pub struct H5mdCollectOpts {
     pub velocity_time_unit: Option<String>,
@@ -96,13 +102,46 @@ fn time_scale_to_ps(from: &str) -> Result<f64> {
     }
 }
 
-fn frame_time_ps(h: &readcon_core::types::FrameHeader, frame_idx: u32) -> Result<f64> {
-    let from = header_unit(h, "time", CON_TIME_DEFAULT);
-    if let Some(t) = h.time() {
-        return Ok(t * time_scale_to_ps(&from)?);
+fn declared_time_unit(h: &readcon_core::types::FrameHeader) -> Option<String> {
+    h.unit_for("time")
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+        .map(str::to_string)
+}
+
+fn positive_timestep(h: &readcon_core::types::FrameHeader) -> Option<f64> {
+    h.timestep().filter(|x| x.is_finite() && *x > 0.0)
+}
+
+fn frame_time_ps(
+    h: &readcon_core::types::FrameHeader,
+    frame_idx: u32,
+    override_unit: Option<&str>,
+) -> Result<f64> {
+    let clock = h.time().is_some() || positive_timestep(h).is_some();
+    if !clock {
+        return Ok(f64::from(frame_idx));
     }
-    if let Some(dt) = h.timestep().filter(|x| x.is_finite() && *x > 0.0) {
-        return Ok(f64::from(frame_idx) * dt * time_scale_to_ps(&from)?);
+    let from = if let Some(unit) = declared_time_unit(h) {
+        unit
+    } else if crate::units_canon::velocity_time_is_declared(h) {
+        match override_unit.map(str::trim).filter(|u| !u.is_empty()) {
+            Some(unit) => unit.to_string(),
+            None => {
+                return Err(crate::error::Error::Message(
+                    "v3.1 frame has a clock but no units.time (D10)".into(),
+                ));
+            }
+        }
+    } else {
+        CON_TIME_DEFAULT.to_string()
+    };
+    let scale = time_scale_to_ps(&from)?;
+    if let Some(t) = h.time() {
+        return Ok(t * scale);
+    }
+    if let Some(dt) = positive_timestep(h) {
+        return Ok(f64::from(frame_idx) * dt * scale);
     }
     Ok(f64::from(frame_idx))
 }
@@ -169,6 +208,7 @@ fn velocity_time_unit_for(
             _ if has_velocities => Err(crate::error::Error::Message(
                 "v3.1 frame has velocities but no units.time (D10)".into(),
             )),
+            // No velocity section. This string is not the clock unit.
             _ => Ok(CON_TIME_DEFAULT.to_string()),
         }
     } else {
@@ -179,8 +219,10 @@ fn velocity_time_unit_for(
 impl ConCorpus {
     /// Collect one trajectory as H5MD-shaped arrays (fixed `N`).
     /// Times are dest `ps`: CON `header.time()`, or `i * timestep`, else
-    /// the frame index. A missing `units.time` is `fs` for that clock.
-    /// Velocities use D10 (see [`H5mdCollectOpts`]).
+    /// the frame index. A v3.1 clock with no `units.time` is an error
+    /// unless [`H5mdCollectOpts::velocity_time_unit`] is set. v1, v2, and
+    /// v3.0 clocks with no `units.time` use `fs`. Velocities use D10
+    /// (see [`H5mdCollectOpts`]).
     pub fn collect_h5md(&self, traj_id: u64) -> Result<H5mdArrays> {
         self.collect_h5md_with(traj_id, &H5mdCollectOpts::default())
     }
@@ -214,7 +256,11 @@ impl ConCorpus {
             let length_u = header_unit(&fr.header, "length", H5MD_LENGTH_CORE);
             let energy_u = header_unit(&fr.header, "energy", "eV");
             let len_scale = uc(&length_u, H5MD_LENGTH_CORE)?;
-            times.push(frame_time_ps(&fr.header, k.frame_idx)?);
+            times.push(frame_time_ps(
+                &fr.header,
+                k.frame_idx,
+                opts.velocity_time_unit.as_deref(),
+            )?);
             let e33 = edges33_from_header(&fr.header);
             for x in e33 {
                 edges.push(x * len_scale);
@@ -732,7 +778,7 @@ mod tests {
         let a = db.collect_h5md(1).unwrap();
         assert!(
             (a.times[0] - 0.0125).abs() < 1e-12,
-            "12.5 with no units.time is CON fs -> 0.0125 ps, got {}",
+            "v2 12.5 with no units.time is fs -> 0.0125 ps, got {}",
             a.times[0]
         );
     }
@@ -1131,6 +1177,112 @@ mod tests {
         db.append_trajectory_str(1, &text, "v31-notime").unwrap();
         let err = db.collect_h5md(1).unwrap_err();
         assert!(err.to_string().contains("no units.time"), "{err}");
+    }
+
+    #[test]
+    fn collect_h5md_v30_clock_without_time_is_fs() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let src = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let text = with_line2(
+            &src,
+            r#"{"con_spec_version":3,"time":12.5,"units":{"length":"angstrom","energy":"eV"}}"#,
+        );
+        db.append_trajectory_str(1, &text, "v30-clock").unwrap();
+        let a = db.collect_h5md(1).unwrap();
+        assert!(
+            (a.times[0] - 0.0125).abs() < 1e-12,
+            "v3.0 clock with no units.time is fs, got {}",
+            a.times[0]
+        );
+    }
+
+    #[test]
+    fn collect_h5md_v31_clock_without_time_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let src = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let text = with_line2(
+            &src,
+            r#"{"con_spec_version":3,"con_spec_minor":1,"time":12.5,"units":{"length":"angstrom","energy":"eV"}}"#,
+        );
+        db.append_trajectory_str(1, &text, "v31-clock").unwrap();
+        let err = db.collect_h5md(1).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no units.time"), "{err}");
+        assert!(msg.contains("clock"), "{err}");
+    }
+
+    #[test]
+    fn collect_h5md_v31_timestep_without_time_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let src = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let text = with_line2(
+            &src,
+            r#"{"con_spec_version":3,"con_spec_minor":1,"timestep":10.0,"units":{"length":"angstrom","energy":"eV"}}"#,
+        );
+        db.append_trajectory_str(1, &text, "v31-dt").unwrap();
+        let err = db.collect_h5md(1).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no units.time"), "{err}");
+        assert!(msg.contains("clock"), "{err}");
+    }
+
+    #[test]
+    fn collect_h5md_v31_clock_override_is_fs() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let src = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let text = with_line2(
+            &src,
+            r#"{"con_spec_version":3,"con_spec_minor":1,"time":12.5,"units":{"length":"angstrom","energy":"eV"}}"#,
+        );
+        db.append_trajectory_str(1, &text, "v31-clock-fs").unwrap();
+        let opts = H5mdCollectOpts {
+            velocity_time_unit: Some("fs".into()),
+        };
+        let a = db.collect_h5md_with(1, &opts).unwrap();
+        assert!(
+            (a.times[0] - 0.0125).abs() < 1e-12,
+            "override fs on a v3.1 clock, got {}",
+            a.times[0]
+        );
+    }
+
+    #[test]
+    fn collect_h5md_v31_present_time_ignores_clock_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let src = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let text = with_line2(
+            &src,
+            r#"{"con_spec_version":3,"con_spec_minor":1,"time":2.0,"units":{"length":"angstrom","energy":"eV","time":"ns"}}"#,
+        );
+        db.append_trajectory_str(1, &text, "v31-ns").unwrap();
+        let opts = H5mdCollectOpts {
+            velocity_time_unit: Some("fs".into()),
+        };
+        let a = db.collect_h5md_with(1, &opts).unwrap();
+        assert!(
+            (a.times[0] - 2000.0).abs() < 1e-9,
+            "present units.time ns still scales the clock, got {}",
+            a.times[0]
+        );
+    }
+
+    #[test]
+    fn collect_h5md_v31_without_clock_is_frame_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let src = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let text = with_line2(
+            &src,
+            r#"{"con_spec_version":3,"con_spec_minor":1,"units":{"length":"angstrom","energy":"eV"}}"#,
+        );
+        db.append_trajectory_str(1, &text, "v31-noclock").unwrap();
+        let a = db.collect_h5md(1).unwrap();
+        assert!((a.times[0] - 0.0).abs() < 1e-12, "got {}", a.times[0]);
     }
 
     #[test]

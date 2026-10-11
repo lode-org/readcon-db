@@ -69,6 +69,9 @@ impl PyConCorpus {
     /// `velocity_time_unit` overrides D10. Pass `fs` when a v1, v2, or v3.0
     /// file really stored Angstrom/fs, or the natural unit
     /// `(amu*angstrom^2/eV)^0.5` when a v3.1 file mislabeled that unit as `fs`.
+    /// The same string is the clock unit when a v3.1 frame has `time` or
+    /// `timestep` and no `units.time`. A present `units.time` still scales
+    /// the clock. v1, v2, and v3.0 clocks with no `units.time` are `fs`.
     #[pyo3(signature = (traj_id, path, velocity_time_unit=None))]
     fn export_h5md(
         &self,

@@ -1228,7 +1228,9 @@ fn collect_h5md_handle(
         })
 }
 
-/// Override D10 for later `rkrdb_h5md_*` calls. NULL clears the override.
+/// Override D10 for later `rkrdb_h5md_*` calls.
+/// The same unit is the clock when a v3.1 frame has no `units.time`.
+/// NULL clears the override.
 ///
 /// # Safety
 /// `unit` is null or points at a NUL-terminated string that stays valid for this call.

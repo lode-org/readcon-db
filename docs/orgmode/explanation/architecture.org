@@ -45,7 +45,7 @@ Environment (Heed / LMDB)
 
 =TrajMeta= may record =topo_cutoff=, =topo_graph=, =topo_hops=, and =topo_method= after =annotate_topology=. Those fields have serde defaults so old JSON still loads. Ingest and extend preserve them.
 
-*H5MD interchange:* =collect_h5md= / =export_h5md= emit one =[T][N][3]= trajectory (position, optional force and velocity). CON text stays authority. Dest units are Å / ps / kJ mol^{-1} Å^{-1}; velocity dest is =Angstrom ps-1=. Velocities follow D10: v1, v2, and v3.0 use the natural unit whatever the time label says; v3.1 uses =units.time=.
+*H5MD interchange:* =collect_h5md= / =export_h5md= emit one =[T][N][3]= trajectory (position, optional force and velocity). CON text stays authority. Dest units are Å / ps / kJ mol^{-1} Å^{-1}; velocity dest is =Angstrom ps-1=. Velocities follow D10: v1, v2, and v3.0 use the natural unit whatever the time label says; v3.1 uses =units.time=. A v3.1 clock with no =units.time= is an error. v1, v2, and v3.0 clocks with no =units.time= are read as =fs=.
 
 *Drain/join:* node-local =shard-ingest=, =drain_to= compact-snapshots =data.mdb= (refuse overwrite), then =join-drained=. =compact-join= is the single-root join (=open_existing=). Ops: @@rst::doc:`/howto/campaign`@@.
 

@@ -92,7 +92,7 @@ rkrdb_close(id);
 
 Status: =RKRDB_OK= (0), =RKRDB_ERR= (-1), =RKRDB_NOT_FOUND= (-2), =RKRDB_NULL= (-3).
 
-H5MD velocities follow D10 and are written as =Angstrom ps-1=. v1, v2, and v3.0 frames use =(amu*angstrom^2/eV)^0.5= whatever the time label says. v3.1 frames use =units.time= and fail when a velocities section has no =units.time=. =rkrdb_set_velocity_time_unit= (C++ =Corpus::set_velocity_time_unit=) overrides that rule for a file that breaks it. Pass =fs= when the file really stored Angstrom/fs. The simulation clock still uses =units.time=, and a missing clock unit is CON =fs=.
+H5MD velocities follow D10 and are written as =Angstrom ps-1=. v1, v2, and v3.0 frames use =(amu*angstrom^2/eV)^0.5= whatever the time label says. v3.1 frames use =units.time= and fail when a velocities section has no =units.time=. =rkrdb_set_velocity_time_unit= (C++ =Corpus::set_velocity_time_unit=) overrides that rule for a file that breaks it. Pass =fs= when the file really stored Angstrom/fs. The simulation clock uses =units.time= when that key is present. A v3.1 frame with =time= or =timestep= and no =units.time= is an error, and the same override supplies that missing clock unit. A present =units.time= still scales the clock. v1, v2, and v3.0 clocks with no =units.time= are read as =fs=.
 
 Link =libreadcon_db= from =cargo build --release= (=cdylib= / =staticlib=), or unpack the prebuilt =readcon-db-clib-$VERSION-$target.tar.gz= Release asset and =pkg-config --libs readcon-db=. See @@rst::doc:`/howto/install`@@.
 

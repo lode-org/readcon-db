@@ -129,6 +129,8 @@ int rkrdb_h5md_forces(size_t id, uint64_t traj_id, double *out, size_t cap);
 int rkrdb_h5md_velocities(size_t id, uint64_t traj_id, double *out, size_t cap);
 /**
  * Override the D10 velocity time unit for later `rkrdb_h5md_*` calls.
+ * The same unit is the clock when a v3.1 frame has time or timestep and
+ * no units.time. A present units.time still scales the clock.
  * `unit == NULL` clears the override. A non-NULL unit must be a time
  * expression (`fs`, or `(amu*angstrom^2/eV)^0.5`).
  */
@@ -382,7 +384,8 @@ public:
     return true;
   }
 
-  /// D10 override. `unit == nullptr` clears it.
+  /// D10 override. Also the clock unit when a v3.1 frame has no units.time.
+  /// `unit == nullptr` clears it.
   void set_velocity_time_unit(const char *unit) {
     if (rkrdb_set_velocity_time_unit(id_, unit) != RKRDB_OK)
       throw std::runtime_error("set_velocity_time_unit failed");
