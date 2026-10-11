@@ -37,13 +37,29 @@ fn docs_state_con_text_is_authority() {
         "docs/orgmode/cooked-soa.org",
     );
 
-    let design = read("docs/design.md");
-    assert_contains(&design, "non-authoritative", "docs/design.md");
-    assert_contains(&design, "UTF-8 CON text in `frames` only", "docs/design.md");
+    let design = read("docs/orgmode/explanation/design.org");
+    assert_contains(
+        &design,
+        "non-authoritative",
+        "docs/orgmode/explanation/design.org",
+    );
+    assert_contains(
+        &design,
+        "UTF-8 CON text in `frames` only",
+        "docs/orgmode/explanation/design.org",
+    );
 
-    let arch = read("docs/source/architecture.md");
-    assert_contains(&arch, "non-authoritative", "docs/source/architecture.md");
-    assert_contains(&arch, "sole authority", "docs/source/architecture.md");
+    let arch = read("docs/orgmode/explanation/architecture.org");
+    assert_contains(
+        &arch,
+        "non-authoritative",
+        "docs/orgmode/explanation/architecture.org",
+    );
+    assert_contains(
+        &arch,
+        "sole authority",
+        "docs/orgmode/explanation/architecture.org",
+    );
 
     let readme = read("README.md");
     assert_contains(&readme, "non-authoritative", "README.md");

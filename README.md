@@ -7,7 +7,7 @@ Part of the **readcon ecosystem** with [`readcon-core`](https://github.com/lode-
 | Crate / package | Role | Docs |
 |-----------------|------|------|
 | **[readcon-core](https://github.com/lode-org/readcon-core)** / **`readcon`** | CON interchange (parse/write/spec v2–v3). **XYZ/PDB/GRO → `ConFrame` via chemfiles** (`read_chemfiles*`), not ASE. Optional `to_ase` only for calculators. | Core README, `docs/orgmode/` |
-| **readcon-db** / **`readcon_db`** (this repo) | mmap CON corpus: indexes (natoms, symbols, **energy range**, **forces/velocities/energy flags**), multi-reader, dedup. Blobs are **CON text** decoded with readcon-core. | [docs](https://lode-org.github.io/readcon-db/docs/), [`docs/design.md`](docs/design.md) |
+| **readcon-db** / **`readcon_db`** (this repo) | mmap CON corpus: indexes (natoms, symbols, **energy range**, **forces/velocities/energy flags**), multi-reader, dedup. Blobs are **CON text** decoded with readcon-core. | [docs](https://lode-org.github.io/readcon-db/docs/), [`docs/orgmode/explanation/design.org`](docs/orgmode/explanation/design.org) |
 
 ASE is not on the CON or XYZ read path. Optional `to_ase` is calculator hand-off only.
 
@@ -75,7 +75,7 @@ Foreign trajectories: **`readcon.read_chemfiles("traj.xyz")` → frames → inge
 
 ## Design
 
-- **No SQL engine** — explicit indexes + in-process intersection, with **ASE.db-competitive screening fields** (mass, volume, PBC, reserved metadata, charge/magmom; see [design matrix](docs/design.md)).
+- **No SQL engine** — explicit indexes + in-process intersection, with **ASE.db-competitive screening fields** (mass, volume, PBC, reserved metadata, charge/magmom; see [design matrix](docs/orgmode/explanation/design.org)).
 - **Decode via readcon-core** — CON semantics never fork.
 - **Metadata indexes** — finite `energy` bins; flags for forces, velocities, energy presence.
 - **xxHash3-128** on stored blobs — exact dedup / `find_by_hash`.
@@ -87,12 +87,18 @@ Foreign trajectories: **`readcon.read_chemfiles("traj.xyz")` → frames → inge
   already own.
 - **H5MD interchange** — `export_h5md` / `collect_h5md` writes one
   `[T][N][3]` trajectory (CON stays authority). Engine dest is Å / ps /
-  kJ mol^{-1} Angstrom^{-1}; velocity dest is `Angstrom ps-1`. Callers stamp
-  units on ingest; missing `units.time` is CON `fs`.
+  kJ mol^{-1} Angstrom^{-1}; velocity dest is `Angstrom ps-1`.
+  Velocities follow D10: v1, v2, and v3.0 frames use the natural unit
+  `(amu*angstrom^2/eV)^0.5` whatever the time label says; v3.1 frames use
+  `units.time` and fail when a velocities section has no `units.time`.
+  `--velocity-time-unit`, Rust `H5mdCollectOpts`, the Python
+  `velocity_time_unit` argument, and C `rkrdb_set_velocity_time_unit`
+  override that rule for a file that breaks it.
+  The simulation clock still uses `units.time`, and a missing clock unit is CON `fs`.
 - **Node-local drain/join** — `shard-ingest` then `drain` to a unique
   dest (`data.mdb` only, refuse overwrite), then `join-drained`.
   `compact-join` joins one sharded root (`open_existing`). Campaign
-  ops: [`docs/source/campaign.md`](docs/source/campaign.md).
+  ops: [`docs/orgmode/howto/campaign.org`](docs/orgmode/howto/campaign.org).
 
 Full ABI table, logo, Sphinx docs, and site: see `docs/`, `website/`, `assets/logo/`, `CHANGELOG.md`. Fortran module notes: `fortran/README.md`, `fortran/ReadConDb/`.
 

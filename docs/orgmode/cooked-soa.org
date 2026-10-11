@@ -43,5 +43,5 @@ never read =frames_soa=.
 
 * See also
 
-- Internal design notes: =docs/design.md= (engineer-facing; mirrors this contract)
+- Internal design notes: =docs/orgmode/explanation/design.org= (engineer-facing; mirrors this contract)
 - Architecture Sphinx page (synced summary from this org)

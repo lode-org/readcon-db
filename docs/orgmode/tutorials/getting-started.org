@@ -1,0 +1,104 @@
+#+OPTIONS: toc:nil num:nil
+
+* Getting started
+:PROPERTIES:
+:CUSTOM_ID: getting-started
+:END:
+
+#+BEGIN_EXPORT rst
+.. tip::
+
+   Install one language, then run the :doc:`/tutorials/tutorial`.
+#+END_EXPORT
+
+
+
+** Install
+:PROPERTIES:
+:CUSTOM_ID: install
+:END:
+Pick *one* language. Pins match this tree (=0.1.8=). Core is =readcon-core= 0.16.2 (pulled automatically for Rust).
+
+| Package        | Install                                                     | Destination                                                    |
+|----------------+-------------------------------------------------------------+----------------------------------------------------------------|
+| Rust           | =cargo add readcon-db=                                      | this site · [[https://crates.io/crates/readcon-db][crates.io]] |
+| CLI            | =cargo install readcon-db --locked=                         | =readcon-db= binary                                            |
+| Python         | =pip install readcon-db=                                    | [[https://pypi.org/project/readcon-db/][PyPI]]                 |
+| C / C++        | CMake FetchContent, Meson wrap, or =pkg-config readcon-db=  | @@rst::doc:`/howto/install`@@                                         |
+| Fortran        | =fortran/ReadConDb= after a prefix or clib install          | @@rst::doc:`/reference/fortran`@@                                     |
+| Prebuilt C ABI | =readcon-db-clib-$VER-$target.tar.gz= on the GitHub Release | @@rst::doc:`/howto/install`@@                                         |
+
+CON parse/write outside the corpus API is [[https://lode-org.github.io/readcon-core/getting-started.html][readcon-core]] (=pip install readcon= / =cargo add readcon-core=).
+
+*** Rust
+:PROPERTIES:
+:CUSTOM_ID: rust
+:END:
+#+begin_src sh
+cargo add readcon-db
+#+end_src
+
+*** Python
+:PROPERTIES:
+:CUSTOM_ID: python
+:END:
+#+begin_src sh
+pip install readcon-db
+python -c "import readcon_db"
+#+end_src
+
+*** C / C++ / Fortran
+:PROPERTIES:
+:CUSTOM_ID: c-c-fortran
+:END:
+Headers in =include/= are shipped. cbindgen is not required. Full FetchContent / Meson / clib matrix: @@rst::doc:`/howto/install`@@.
+
+** Smoke test
+:PROPERTIES:
+:CUSTOM_ID: smoke-test
+:END:
+From a checkout (fixture under =resources/test/=):
+
+#+begin_src python
+import tempfile
+from pathlib import Path
+import readcon_db
+
+root = Path(tempfile.mkdtemp())
+db = readcon_db.ConCorpus.open(str(root))
+db.append_trajectory_path(1, "resources/test/tiny_cuh2.con")
+keys = db.select(readcon_db.Select().require_symbol("Cu"))
+print(len(keys), db.frame_hash(keys[0]))
+#+end_src
+
+#+begin_src rust
+use readcon_db::{ConCorpus, Select};
+let db = ConCorpus::open("/tmp/readcon-db-smoke")?;
+db.append_trajectory_path(1, "resources/test/tiny_cuh2.con")?;
+let keys = db.select(&Select::new().require_symbol("Cu"))?;
+println!("{} {:?}", keys.len(), db.frame_hash(keys[0])?);
+#+end_src
+
+** Where to go next
+:PROPERTIES:
+:CUSTOM_ID: where-to-go-next
+:END:
+| Goal                            | Page                              | Kind        |
+|---------------------------------+-----------------------------------+-------------|
+| Learn open / ingest / select    | @@rst::doc:`/tutorials/tutorial`@@       | Tutorial    |
+| Same tasks in C / Fortran       | @@rst::doc:`/howto/howto`@@              | How-to      |
+| Many writers, shards            | @@rst::doc:`/howto/campaign`@@           | How-to      |
+| MPI, H5MD, ASE.db comparison    | @@rst::doc:`/howto/workflows`@@          | How-to      |
+| Why mmap / indexes              | @@rst::doc:`/explanation/architecture`@@ | Explanation |
+| Rust / C / Python / Fortran API | @@rst::doc:`/reference/rust`@@           | Reference   |
+
+** Scope
+:PROPERTIES:
+:CUSTOM_ID: scope
+:END:
+| Task                             | Path                                                       |
+|----------------------------------+------------------------------------------------------------|
+| Parse or write one =.con=        | [[https://lode-org.github.io/readcon-core/][readcon-core]] |
+| Many frames, filter, hash        | =readcon-db=                                               |
+| Field meanings (energy, formula) | =readcon_core::index_proj= (same keys as db indexes)       |
+| Foreign XYZ / PDB / GRO          | core chemfiles path, then ingest CON                       |
