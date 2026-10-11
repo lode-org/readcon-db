@@ -17,7 +17,7 @@ templates_path = ["_templates"]
 exclude_patterns = []
 
 myst_enable_extensions = ["colon_fence", "deflist"]
-source_suffix = {".rst": "restructuredtext", ".md": "markdown"}
+source_suffix = {".rst": "restructuredtext"}
 master_doc = "index"
 
 html_theme = "shibuya"
@@ -50,23 +50,23 @@ html_theme_options = {
     "light_logo": "_static/logo-nav-light.svg",
     "dark_logo": "_static/logo-nav-dark.svg",
     "nav_links": [
-        {"title": "Start", "url": "getting-started"},
+        {"title": "Start", "url": "tutorials/getting-started"},
         {
             "title": "Learn",
             "children": [
                 {
-                    "title": "Tutorial — first corpus",
-                    "url": "tutorial",
+                    "title": "Tutorial: first corpus",
+                    "url": "tutorials/tutorial",
                     "summary": "Open, ingest a fixture, select, hash",
                 },
                 {
                     "title": "How-to by language",
-                    "url": "howto",
+                    "url": "howto/howto",
                     "summary": "Rust, Python, C, Fortran recipes",
                 },
                 {
                     "title": "Campaign ops",
-                    "url": "campaign",
+                    "url": "howto/campaign",
                     "summary": "Shards, drain, join, compact",
                 },
             ],
@@ -75,33 +75,58 @@ html_theme_options = {
             "title": "Ecosystem",
             "children": [
                 {
-                    "title": "readcon-core",
-                    "url": "https://lode-org.github.io/readcon-core/",
-                    "summary": "CON parse, write, hourglass ABI",
-                },
-                {
                     "title": "eOn",
                     "url": "https://eondocs.org",
-                    "summary": "Saddle-point search on PESs",
+                    "summary": "Long-timescale saddle search",
                 },
                 {
                     "title": "rgpot",
-                    "url": "https://omnipotentrpc.github.io/rgpot/",
-                    "summary": "Potential evaluation toolkit",
+                    "url": "https://rgpot.rgoswami.me",
+                    "summary": "Potential evaluation",
                 },
                 {
-                    "title": "chemparseplot",
-                    "url": "https://chemparseplot.rgoswami.me",
-                    "summary": "Parsing and plotting for computational chemistry",
+                    "title": "rgmin",
+                    "url": "https://omnipotentrpc.github.io/rgmin",
+                    "summary": "Geometry optimization",
+                },
+                {
+                    "title": "rgsaddle",
+                    "url": "https://omnipotentrpc.github.io/rgsaddle",
+                    "summary": "Saddle searches",
+                },
+                {
+                    "title": "cpmdc",
+                    "url": "https://cpmdc.rgoswami.me",
+                    "summary": "CPMD frontend",
                 },
                 {
                     "title": "rgpycrumbs",
                     "url": "https://rgpycrumbs.rgoswami.me",
-                    "summary": "CLI helpers for LODE / eOn workflows",
+                    "summary": "Python helpers",
+                },
+                {
+                    "title": "minimage",
+                    "url": "https://lode-org.github.io/minimage",
+                    "summary": "Minimum-image distances",
+                },
+                {
+                    "title": "linkcell",
+                    "url": "https://docs.rs/linkcell",
+                    "summary": "Cell lists",
+                },
+                {
+                    "title": "readcon",
+                    "url": "https://lode-org.github.io/readcon-core",
+                    "summary": "CON interchange",
+                },
+                {
+                    "title": "readcon-ops",
+                    "url": "https://github.com/lode-org/readcon-ops",
+                    "summary": "Campaign operations",
                 },
             ],
         },
-        {"title": "Architecture", "url": "architecture"},
+        {"title": "Architecture", "url": "explanation/architecture"},
     ],
 }
 

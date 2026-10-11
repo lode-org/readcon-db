@@ -1,0 +1,17 @@
+#+TITLE: Citation
+#+OPTIONS: toc:nil num:nil
+
+* readcon and CON
+
+R. Goswami, MethodsX 2026, doi:10.1016/j.mex.2026.103899.
+Reproducible NEB orchestration, uses CON.
+
+R. Goswami, MethodsX 2026, doi:10.1016/j.mex.2026.103851.
+2D RMSD projections over CON paths.
+
+R. Goswami et al., J. Chem. Theory Comput. 2025, doi:10.1021/acs.jctc.5c00866.
+eOn Gaussian-process saddle searches.
+
+* eOn
+
+S. T. Chill et al., Modelling and Simulation in Materials Science and Engineering 22 (2014) 055002, doi:10.1088/0965-0393/22/5/055002.

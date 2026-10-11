@@ -1,0 +1,90 @@
+#+OPTIONS: toc:nil num:nil
+
+* Developer workflow and release
+:PROPERTIES:
+:CUSTOM_ID: developer-workflow-and-release
+:END:
+** Tools
+:PROPERTIES:
+:CUSTOM_ID: tools
+:END:
+- [[https://github.com/cocogitto/cocogitto][cocogitto]] (=cog=) --- conventional commits and =CHANGELOG.md=
+- [[https://prek.j178.dev][prek]] --- git hooks (=prek.toml=)
+- [[https://github.com/lycheeverse/lychee][lychee]] --- link check on the assembled Pages tree
+- Org sources under =docs/orgmode/= (tutorial, howto, explanation, reference). =scripts/build-docs.sh= runs pandoc to rst, then Sphinx + *Shibuya* (=pixi r -e docs docbld=). Generated rst is not committed.
+- Pages serves that tree at =/= and =/docs/= (same HTML). =website/= is the old ox-html marketing page and is not deployed.
+
+#+begin_src sh
+prek install
+prek run -a
+cog check
+pixi r -e docs docbld
+scripts/export-landing.sh
+scripts/assemble-site.sh
+lychee --config lychee.toml '_site/**/*.html'
+#+end_src
+
+Refresh the documentation lock after changing =pixi.toml= =[feature.docs]= or =docs/requirements.txt=:
+
+#+begin_src sh
+pixi lock
+#+end_src
+
+** Continuous integration
+:PROPERTIES:
+:CUSTOM_ID: continuous-integration
+:END:
+| Workflow         | File                                | Trigger                                  | Purpose                                                          |
+|------------------+-------------------------------------+------------------------------------------+------------------------------------------------------------------|
+| Prek             | =ci_prek.yml=                       | push, PR                                 | =prek run -a=                                                    |
+| Documentation    | =ci_docs.yml=                       | push, PR                                 | Locked Sphinx HTML (=pixi.lock=) + assembled site + lychee       |
+| Pages            | =pages.yml=                         | push to main                             | Deploy site + locked Sphinx docs                                 |
+| Lint             | =lint.yml=                          | PR                                       | Conventional commits + large-file audit                          |
+| Version lockstep | =scripts/check_version_lockstep.sh= | =cargo test=                             | Cargo, Python, meson, pixi, Fortran, CITATION, Sphinx, core pin  |
+| C/C++ dist       | =ci_cxx.yml=                        | push, PR                                 | CMake/Meson/pkg-config without cbindgen; clib fixture gate       |
+| crates.io        | =crates_publish.yml=                | =v*= tag                                 | =cargo publish --locked=                                         |
+| Python wheels    | =python-wheels.yml=                 | =v*= tag, PR                             | maturin matrix → PyPI                                            |
+| cxx tarball      | =cxx_tarball.yml=                   | GitHub Release                           | slim + vendor C/C++ source tarballs                              |
+| C ABI tarball    | =c_lib_tarball.yml=                 | GitHub Release + =workflow_dispatch= tag | Attach prebuilt =libreadcon_db= (=readcon-db-clib-$VER-$target=) |
+
+** Release
+:PROPERTIES:
+:CUSTOM_ID: release
+:END:
+#+begin_src text
+  scripts/release-prep.sh X.Y.Z
+        │  prek, sphinx + lychee, version bump, cog CHANGELOG, cxx-dist + clib gate
+        ▼
+  commit: maint: bump to vX.Y.Z   ──►  open Pull Request to main
+        ▼
+  merge PR to main  ──►  git tag -s vX.Y.Z && git push origin vX.Y.Z
+        │
+        ├─► workflow "Publish to crates.io": cargo publish --locked
+        ├─► workflow "Python wheels": maturin matrix → PyPI
+        ├─► workflow "cxx source tarball": after a GitHub Release exists
+        └─► workflow "C ABI library tarball": prebuilt clib (or dispatch tag later)
+#+end_src
+
+Attach prebuilt C ABI to an existing tag: Actions → *C ABI library tarball* → ~tag=vX.Y.Z~ on a branch that has =scripts/package-clib.sh=.
+
+#+begin_src sh
+prek run -a
+pixi r -e docs docbld
+scripts/export-landing.sh
+scripts/assemble-site.sh
+lychee --config lychee.toml '_site/**/*.html'
+scripts/release-prep.sh X.Y.Z
+git commit -m "maint: bump to vX.Y.Z"
+# open PR, merge, then:
+git checkout main && git pull
+git tag -s vX.Y.Z -m "vX.Y.Z"
+git push origin vX.Y.Z
+#+end_src
+
+Do not hand-edit the generated =CHANGELOG.md= section. Extend =cog.toml= =[commit_types]= if a historical type blocks =cog changelog=. Push only the version tag (=git push origin vX.Y.Z=), not every local tag.
+
+Fair-campaign freeze check (does not re-run the campaign):
+
+#+begin_src sh
+python paper/cpc/scripts/gen_fair_table.py --check
+#+end_src

@@ -19,7 +19,7 @@ pub const RKRDB_NULL: c_int = -3;
 /// Breaking-change major for the public C ABI.
 pub const RKRDB_ABI_VERSION_MAJOR: u32 = 1;
 /// Additive-change minor for the public C ABI.
-pub const RKRDB_ABI_VERSION_MINOR: u32 = 0;
+pub const RKRDB_ABI_VERSION_MINOR: u32 = 1;
 /// Layout revision for exported records and the handle contract.
 pub const RKRDB_ABI_LAYOUT_REVISION: u32 = 1;
 
@@ -46,7 +46,7 @@ pub extern "C" fn rkrdb_abi_layout_revision() -> u32 {
 /// The pointer refers to static storage and must not be freed.
 #[no_mangle]
 pub extern "C" fn rkrdb_abi_stamp() -> *const c_char {
-    const STAMP: &[u8] = b"readcon-db/abi-1.0/layout-1\0";
+    const STAMP: &[u8] = b"readcon-db/abi-1.1/layout-1\0";
     STAMP.as_ptr() as *const c_char
 }
 
@@ -77,6 +77,8 @@ struct Handle {
     corpus: Arc<ConCorpus>,
     last_keys: Vec<FrameKey>,
     last_error: String,
+    /// D10 override for H5MD velocity conversion. Empty means the frame rule.
+    velocity_time_unit: Option<String>,
 }
 
 static HANDLES: Mutex<Vec<Option<Box<Handle>>>> = Mutex::new(Vec::new());
@@ -140,6 +142,7 @@ pub unsafe extern "C" fn rkrdb_open(path: *const c_char, out_id: *mut usize) -> 
                 corpus: Arc::new(corpus),
                 last_keys: Vec::new(),
                 last_error: String::new(),
+                velocity_time_unit: None,
             });
             unsafe { *out_id = id };
             RKRDB_OK
@@ -165,6 +168,7 @@ pub unsafe extern "C" fn rkrdb_open_readonly(path: *const c_char, out_id: *mut u
                 corpus: Arc::new(corpus),
                 last_keys: Vec::new(),
                 last_error: String::new(),
+                velocity_time_unit: None,
             });
             unsafe { *out_id = id };
             RKRDB_OK
@@ -1201,6 +1205,58 @@ pub unsafe extern "C" fn rkrdb_get_frame(
     .unwrap_or(std::ptr::null_mut())
 }
 
+fn collect_h5md_handle(
+    id: usize,
+    traj_id: u64,
+) -> std::result::Result<crate::export_h5md::H5mdArrays, c_int> {
+    let (corpus, unit) = {
+        let g = HANDLES.lock().unwrap();
+        let slot = g.get(id).ok_or(RKRDB_NULL)?;
+        let h = slot.as_ref().ok_or(RKRDB_NULL)?;
+        (Arc::clone(&h.corpus), h.velocity_time_unit.clone())
+    };
+    corpus
+        .collect_h5md_with(
+            traj_id,
+            &crate::export_h5md::H5mdCollectOpts {
+                velocity_time_unit: unit,
+            },
+        )
+        .map_err(|e| {
+            set_err_id(id, e);
+            RKRDB_ERR
+        })
+}
+
+/// Override D10 for later `rkrdb_h5md_*` calls.
+/// The same unit is the clock when a v3.1 frame has no `units.time`.
+/// NULL clears the override.
+///
+/// # Safety
+/// `unit` is null or points at a NUL-terminated string that stays valid for this call.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_set_velocity_time_unit(id: usize, unit: *const c_char) -> c_int {
+    let parsed = if unit.is_null() {
+        None
+    } else {
+        let c = unsafe { CStr::from_ptr(unit) };
+        let s = match c.to_str() {
+            Ok(s) => s,
+            Err(_) => return RKRDB_ERR,
+        };
+        if readcon_core::units::unit_conversion_factor(s, "ps").is_err() {
+            set_err_id(id, "velocity_time_unit is not a time unit");
+            return RKRDB_ERR;
+        }
+        Some(s.to_string())
+    };
+    with_handle(id, |h| {
+        h.velocity_time_unit = parsed;
+        Ok(RKRDB_OK)
+    })
+    .unwrap_or(RKRDB_NULL)
+}
+
 /// `nframes` and `natoms` for one trajectory's H5MD arrays.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_h5md_shape(
@@ -1212,11 +1268,7 @@ pub unsafe extern "C" fn rkrdb_h5md_shape(
     if out_nframes.is_null() || out_natoms.is_null() {
         return RKRDB_NULL;
     }
-    let corpus = match corpus_arc(id) {
-        Ok(c) => c,
-        Err(c) => return c,
-    };
-    match corpus.collect_h5md(traj_id) {
+    match collect_h5md_handle(id, traj_id) {
         Ok(a) => {
             unsafe {
                 *out_nframes = a.n_frames as u32;
@@ -1244,11 +1296,7 @@ pub unsafe extern "C" fn rkrdb_h5md_positions(
     if out.is_null() || out_nframes.is_null() || out_natoms.is_null() {
         return RKRDB_NULL;
     }
-    let corpus = match corpus_arc(id) {
-        Ok(c) => c,
-        Err(c) => return c,
-    };
-    match corpus.collect_h5md(traj_id) {
+    match collect_h5md_handle(id, traj_id) {
         Ok(a) => {
             if a.positions.len() > cap {
                 set_err_id(id, "h5md_positions buffer too small");
@@ -1279,11 +1327,7 @@ unsafe fn h5md_copy_slice(
     if out.is_null() {
         return RKRDB_NULL;
     }
-    let corpus = match corpus_arc(id) {
-        Ok(c) => c,
-        Err(c) => return c,
-    };
-    match corpus.collect_h5md(traj_id) {
+    match collect_h5md_handle(id, traj_id) {
         Ok(a) => {
             let Some(sl) = pick(&a) else {
                 set_err_id(id, missing);
@@ -1354,11 +1398,7 @@ pub unsafe extern "C" fn rkrdb_h5md_species(
     if out.is_null() || out_natoms.is_null() {
         return RKRDB_NULL;
     }
-    let corpus = match corpus_arc(id) {
-        Ok(c) => c,
-        Err(c) => return c,
-    };
-    match corpus.collect_h5md(traj_id) {
+    match collect_h5md_handle(id, traj_id) {
         Ok(a) => {
             if a.species_z.len() > cap {
                 set_err_id(id, "h5md_species buffer too small");
@@ -1437,11 +1477,7 @@ pub unsafe extern "C" fn rkrdb_h5md_times(
     if out.is_null() || out_n.is_null() {
         return RKRDB_NULL;
     }
-    let corpus = match corpus_arc(id) {
-        Ok(c) => c,
-        Err(c) => return c,
-    };
-    match corpus.collect_h5md(traj_id) {
+    match collect_h5md_handle(id, traj_id) {
         Ok(a) => {
             if a.times.len() > cap {
                 set_err_id(id, "h5md_times buffer too small");
@@ -1484,7 +1520,9 @@ mod tests {
         assert_eq!(rkrdb_abi_version_major(), RKRDB_ABI_VERSION_MAJOR);
         assert_eq!(rkrdb_abi_version_minor(), RKRDB_ABI_VERSION_MINOR);
         assert_eq!(rkrdb_abi_layout_revision(), RKRDB_ABI_LAYOUT_REVISION);
-        let stamp = unsafe { CStr::from_ptr(rkrdb_abi_stamp()) }.to_str().unwrap();
+        let stamp = unsafe { CStr::from_ptr(rkrdb_abi_stamp()) }
+            .to_str()
+            .unwrap();
         assert_eq!(
             stamp,
             format!(
@@ -1504,11 +1542,9 @@ mod tests {
 
     #[test]
     fn abi_header_carries_the_stamp() {
-        let header = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/include/readcon-db.h"
-        ))
-        .unwrap();
+        let header =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/include/readcon-db.h"))
+                .unwrap();
         for (name, value) in [
             ("RKRDB_ABI_VERSION_MAJOR", RKRDB_ABI_VERSION_MAJOR),
             ("RKRDB_ABI_VERSION_MINOR", RKRDB_ABI_VERSION_MINOR),
@@ -1572,6 +1608,15 @@ mod tests {
             ),
             0
         );
+    }
+
+    fn natural_dest_velocity(native: f64) -> f64 {
+        let t_ps = readcon_core::units::unit_conversion_factor(
+            crate::units_canon::NATURAL_TIME_UNIT,
+            "ps",
+        )
+        .unwrap();
+        native / t_ps
     }
 
     fn fixture(name: &str) -> PathBuf {
@@ -1940,7 +1985,8 @@ mod tests {
                 rkrdb_h5md_velocities(id2, 2, vel.as_mut_ptr(), vel.len()),
                 RKRDB_OK
             );
-            assert!((vel[0] - 1.234).abs() < 1e-9, "got {}", vel[0]);
+            let expect = natural_dest_velocity(0.001234);
+            assert!((vel[0] - expect).abs() < 1e-9, "got {}", vel[0]);
             let mut native = vec![0.0f64; 32];
             let mut nv = 0u32;
             let mut has_v = 0u8;
@@ -2016,7 +2062,8 @@ mod tests {
                 rkrdb_h5md_velocities(id, 1, vel1.as_mut_ptr(), vel1.len()),
                 RKRDB_OK
             );
-            assert!((vel0[0] - 1.234).abs() < 1e-9, "got {}", vel0[0]);
+            let expect = natural_dest_velocity(0.001234);
+            assert!((vel0[0] - expect).abs() < 1e-9, "got {}", vel0[0]);
             assert!(
                 (vel0[0] - vel1[0]).abs() < 1e-12,
                 "dest vel after set_units {} vs {}",

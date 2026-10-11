@@ -30,8 +30,8 @@ check_contains "fortran/ReadConDb/fpm.toml" "^version = \"${cargo_ver}\""
 check_contains "CITATION.cff" "^version: ${cargo_ver}$"
 check_contains "docs/source/conf.py" "release = \"${cargo_ver}\""
 
-if grep -qxF 'readcon-core = "=0.16.1"' "$ROOT/Cargo.toml"; then
-  ok "Cargo.toml pins the published readcon-core 0.16.1"
+if grep -qxF 'readcon-core = "=0.16.2"' "$ROOT/Cargo.toml"; then
+  ok "Cargo.toml pins the published readcon-core 0.16.2"
 else
   die "Cargo.toml must pin the published round-trip readcon-core release"
 fi

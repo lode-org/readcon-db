@@ -39,7 +39,7 @@ fpm build --flag "-I../../include" \
   --link-flag "-L../../target/release -lreadcon_db -ldl -lpthread -lm"
 ```
 
-API notes: Sphinx [Fortran API](../docs/source/api_fortran.md). Campaign
+API notes: Sphinx [Fortran API](../docs/orgmode/reference/fortran.org). Campaign
 shard/drain/join stays on the `readcon-db` CLI; a Fortran rank that owns
 one shard opens `root/shard_XXXX` with `db_open`. See
-[campaign ops](../docs/source/campaign.md).
+[campaign ops](../docs/orgmode/howto/campaign.org).

@@ -17,7 +17,7 @@ extern "C" {
 /** Breaking-change major for the public C ABI. */
 #define RKRDB_ABI_VERSION_MAJOR 1
 /** Additive-change minor for the public C ABI. */
-#define RKRDB_ABI_VERSION_MINOR 0
+#define RKRDB_ABI_VERSION_MINOR 1
 /** Layout revision for exported records and the handle contract. */
 #define RKRDB_ABI_LAYOUT_REVISION 1
 
@@ -27,7 +27,7 @@ uint32_t rkrdb_abi_version_major(void);
 uint32_t rkrdb_abi_version_minor(void);
 /** Layout revision of the loaded library. */
 uint32_t rkrdb_abi_layout_revision(void);
-/** Stable human-readable ABI stamp, e.g. "readcon-db/abi-1.0/layout-1". Static; do not free. */
+/** Stable human-readable ABI stamp, e.g. "readcon-db/abi-1.1/layout-1". Static; do not free. */
 const char *rkrdb_abi_stamp(void);
 /**
  * Nonzero when the loaded library serves a caller built against the given
@@ -127,6 +127,14 @@ int rkrdb_h5md_positions(size_t id, uint64_t traj_id, double *out, size_t cap,
 int rkrdb_h5md_edges(size_t id, uint64_t traj_id, double *out, size_t cap);
 int rkrdb_h5md_forces(size_t id, uint64_t traj_id, double *out, size_t cap);
 int rkrdb_h5md_velocities(size_t id, uint64_t traj_id, double *out, size_t cap);
+/**
+ * Override the D10 velocity time unit for later `rkrdb_h5md_*` calls.
+ * The same unit is the clock when a v3.1 frame has time or timestep and
+ * no units.time. A present units.time still scales the clock.
+ * `unit == NULL` clears the override. A non-NULL unit must be a time
+ * expression (`fs`, or `(amu*angstrom^2/eV)^0.5`).
+ */
+int rkrdb_set_velocity_time_unit(size_t id, const char *unit);
 /** Integer Z, length N. Writes *out_natoms. */
 int rkrdb_h5md_species(size_t id, uint64_t traj_id, int32_t *out, size_t cap,
                        uint32_t *out_natoms);
@@ -374,6 +382,13 @@ public:
     if (st != RKRDB_OK)
       throw std::runtime_error("h5md_velocities failed");
     return true;
+  }
+
+  /// D10 override. Also the clock unit when a v3.1 frame has no units.time.
+  /// `unit == nullptr` clears it.
+  void set_velocity_time_unit(const char *unit) {
+    if (rkrdb_set_velocity_time_unit(id_, unit) != RKRDB_OK)
+      throw std::runtime_error("set_velocity_time_unit failed");
   }
 
   uint32_t h5md_species(uint64_t traj_id, int32_t *out, size_t cap) {

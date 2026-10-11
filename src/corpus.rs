@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use heed::types::{Bytes, Str, Unit};
 use heed::{CompactionOption, Database, Env, EnvFlags, EnvOpenOptions, RwTxn};
@@ -19,11 +20,10 @@ use crate::frame_scalars::{
 use crate::keys::{
     composition_formula, elem_count_key, elem_count_symbol_prefix, energy_bin_key, flag_key,
     fmax_bin_key, formula_key, formula_prefix, hash_frame_bytes, mass_bin_key, meta_scalar_key,
-    natoms_key, ordered_f64_bits, parse_elem_count_key, pbc_key, pbc_mask_from_bools,
-    symbol_key, symbol_prefix, topo_key, topo_prefix, volume_bin_key,
-    ContentHash, FrameKey, TrajId, FLAG_HAS_ENERGY, FLAG_HAS_FORCES, FLAG_HAS_VELOCITIES,
-    META_CHARGE, META_FRAME_INDEX, META_MAGMOM, META_NEB_BAND, META_NEB_BEAD, META_TIME,
-    META_TIMESTEP,
+    natoms_key, ordered_f64_bits, parse_elem_count_key, pbc_key, pbc_mask_from_bools, symbol_key,
+    symbol_prefix, topo_key, topo_prefix, volume_bin_key, ContentHash, FrameKey, TrajId,
+    FLAG_HAS_ENERGY, FLAG_HAS_FORCES, FLAG_HAS_VELOCITIES, META_CHARGE, META_FRAME_INDEX,
+    META_MAGMOM, META_NEB_BAND, META_NEB_BEAD, META_TIME, META_TIMESTEP,
 };
 use crate::select::Select;
 use crate::topology::{
@@ -143,6 +143,31 @@ pub fn frame_fmax(frame: &ConFrame) -> Option<f64> {
 
 fn frame_species(frame: &ConFrame) -> Vec<(String, u32)> {
     readcon_core::index_proj::frame_species_counts(frame)
+}
+
+/// Chunk bounds are a function of the input length only (D10 wave thread rule).
+fn ingest_chunk_bounds(n: usize) -> Vec<(usize, usize)> {
+    if n == 0 {
+        return Vec::new();
+    }
+    let chunk = (n / 8).max(1);
+    let mut bounds = Vec::new();
+    let mut i = 0;
+    while i < n {
+        let j = (i + chunk).min(n);
+        bounds.push((i, j));
+        i = j;
+    }
+    bounds
+}
+
+fn ingest_thread_count() -> usize {
+    match std::env::var("RAYON_NUM_THREADS") {
+        Ok(raw) => raw.parse::<usize>().unwrap_or(1).max(1),
+        Err(_) => std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1),
+    }
 }
 
 impl ConCorpus {
@@ -589,7 +614,12 @@ impl ConCorpus {
         frames: &[ConFrame],
         start_idx: u32,
     ) -> Result<Vec<PreparedIndexPuts>> {
-        Self::prepare_trajectory_frames_formatted(traj_id, frames, start_idx, FloatFormat::default())
+        Self::prepare_trajectory_frames_formatted(
+            traj_id,
+            frames,
+            start_idx,
+            FloatFormat::default(),
+        )
     }
 
     fn prepare_trajectory_frames_formatted(
@@ -698,9 +728,8 @@ impl ConCorpus {
             frames.push(fr);
         }
         // Unit conversion retains the binary64 values of every stored field.
-        let prepared = Self::prepare_trajectory_frames_formatted(
-            traj_id, &frames, 0, FloatFormat::RoundTrip,
-        )?;
+        let prepared =
+            Self::prepare_trajectory_frames_formatted(traj_id, &frames, 0, FloatFormat::RoundTrip)?;
         let mut wtxn = self.env.write_txn()?;
         for p in &old_puts {
             self.delete_index_puts(&mut wtxn, p)?;
@@ -753,7 +782,10 @@ impl ConCorpus {
         precision: usize,
     ) -> Result<u32> {
         self.append_trajectory_frames_with_float_format(
-            traj_id, frames, source, FloatFormat::DecimalPlaces(precision),
+            traj_id,
+            frames,
+            source,
+            FloatFormat::DecimalPlaces(precision),
         )
     }
 
@@ -766,9 +798,7 @@ impl ConCorpus {
         float_format: FloatFormat,
     ) -> Result<u32> {
         let source = source.into();
-        let prepared = Self::prepare_trajectory_frames_formatted(
-            traj_id, frames, 0, float_format,
-        )?;
+        let prepared = Self::prepare_trajectory_frames_formatted(traj_id, frames, 0, float_format)?;
         self.commit_prepared(traj_id, &prepared, source, false)
     }
 
@@ -1883,14 +1913,27 @@ impl ConCorpus {
     }
 
     /// Ingest every `.con`/`.convel` in `dir`, optionally stamping `units`.
+    ///
+    /// Files are sorted by path. Parse runs in chunks whose bounds depend
+    /// only on the file count. Commits run in that same order.
+    /// `RAYON_NUM_THREADS` sets the worker count (default: available parallelism).
     pub fn ingest_directory_units(
         &self,
         dir: impl AsRef<Path>,
         start_traj_id: TrajId,
         units: Option<serde_json::Value>,
     ) -> Result<Vec<(TrajId, u32, String)>> {
-        let mut out = Vec::new();
-        let mut tid = start_traj_id;
+        self.ingest_directory_units_nthreads(dir, start_traj_id, units, ingest_thread_count())
+    }
+
+    /// [`ingest_directory_units`] with an explicit worker count.
+    pub fn ingest_directory_units_nthreads(
+        &self,
+        dir: impl AsRef<Path>,
+        start_traj_id: TrajId,
+        units: Option<serde_json::Value>,
+        threads: usize,
+    ) -> Result<Vec<(TrajId, u32, String)>> {
         let mut paths: Vec<_> = fs::read_dir(dir)?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
@@ -1900,12 +1943,151 @@ impl ConCorpus {
             })
             .collect();
         paths.sort();
-        for p in paths {
-            let n = self.append_trajectory_path_units(tid, &p, units.clone())?;
-            out.push((tid, n, p.display().to_string()));
-            tid += 1;
+        let n = paths.len();
+        let bounds = ingest_chunk_bounds(n);
+        let threads = threads.max(1);
+        let mut prepared: Vec<Result<Vec<PreparedIndexPuts>>> =
+            (0..n).map(|_| Ok(Vec::new())).collect();
+        if threads == 1 || bounds.len() <= 1 {
+            for (lo, hi) in bounds {
+                for i in lo..hi {
+                    let tid = start_traj_id + i as u64;
+                    prepared[i] = Self::prepare_path(tid, &paths[i], units.as_ref());
+                }
+            }
+        } else {
+            let next = AtomicUsize::new(0);
+            let prepared_slots = std::sync::Mutex::new(prepared);
+            std::thread::scope(|scope| {
+                for _ in 0..threads.min(bounds.len()) {
+                    let next = &next;
+                    let bounds = &bounds;
+                    let paths = &paths;
+                    let units = &units;
+                    let prepared_slots = &prepared_slots;
+                    scope.spawn(move || loop {
+                        let chunk = next.fetch_add(1, Ordering::Relaxed);
+                        if chunk >= bounds.len() {
+                            break;
+                        }
+                        let (lo, hi) = bounds[chunk];
+                        for (i, path) in paths.iter().enumerate().take(hi).skip(lo) {
+                            let tid = start_traj_id + i as u64;
+                            let row = Self::prepare_path(tid, path, units.as_ref());
+                            prepared_slots.lock().unwrap()[i] = row;
+                        }
+                    });
+                }
+            });
+            prepared = prepared_slots.into_inner().unwrap();
+        }
+        let mut out = Vec::with_capacity(n);
+        for (i, row) in prepared.into_iter().enumerate() {
+            let puts = row?;
+            let tid = start_traj_id + i as u64;
+            let source = paths[i].display().to_string();
+            let n_frames = self.commit_prepared(tid, &puts, source.clone(), false)?;
+            out.push((tid, n_frames, source));
         }
         Ok(out)
+    }
+
+    fn prepare_path(
+        traj_id: TrajId,
+        path: &Path,
+        units: Option<&serde_json::Value>,
+    ) -> Result<Vec<PreparedIndexPuts>> {
+        let text = fs::read_to_string(path)?;
+        let Some(units) = units else {
+            return Self::prepare_trajectory_str(traj_id, &text);
+        };
+        let units = crate::units_canon::canonicalize_units_object(units.clone())?;
+        let mut frames = Vec::new();
+        for item in ConFrameIterator::new(&text) {
+            let mut fr = item.map_err(|e| Error::Parse(e.to_string()))?;
+            fr.header.set_units(units.clone());
+            frames.push(fr);
+        }
+        Self::prepare_trajectory_frames(traj_id, &frames, 0)
+    }
+
+    /// Sorted `database key value` lines for every logical entry.
+    /// Values are hex so the dump does not depend on LMDB page layout.
+    pub fn sorted_logical_dump(&self) -> Result<Vec<String>> {
+        let rtxn = self.env.read_txn()?;
+        let mut lines = Vec::new();
+        fn hex(bytes: &[u8]) -> String {
+            const DIGITS: &[u8] = b"0123456789abcdef";
+            let mut s = String::with_capacity(bytes.len() * 2);
+            for b in bytes {
+                s.push(DIGITS[(b >> 4) as usize] as char);
+                s.push(DIGITS[(b & 0xf) as usize] as char);
+            }
+            s
+        }
+        {
+            let mut iter = self.frames.iter(&rtxn)?;
+            while let Some(Ok((k, v))) = iter.next() {
+                lines.push(format!("frames\t{}\t{}", hex(k), hex(v.as_bytes())));
+            }
+        }
+        {
+            let mut iter = self.traj_meta.iter(&rtxn)?;
+            while let Some(Ok((k, v))) = iter.next() {
+                lines.push(format!("traj_meta\t{}\t{}", hex(k), hex(v.as_bytes())));
+            }
+        }
+        {
+            let mut iter = self.frame_by_hash.iter(&rtxn)?;
+            while let Some(Ok((k, v))) = iter.next() {
+                lines.push(format!("frame_by_hash\t{}\t{}", hex(k), hex(v)));
+            }
+        }
+        {
+            let mut iter = self.hash_by_frame.iter(&rtxn)?;
+            while let Some(Ok((k, v))) = iter.next() {
+                lines.push(format!("hash_by_frame\t{}\t{}", hex(k), hex(v)));
+            }
+        }
+        {
+            let mut iter = self.frames_soa.iter(&rtxn)?;
+            while let Some(Ok((k, v))) = iter.next() {
+                lines.push(format!("frames_soa\t{}\t{}", hex(k), hex(v)));
+            }
+        }
+        let unit_dbs: [(&str, Database<Bytes, Unit>); 11] = [
+            ("idx_natoms", self.idx_natoms),
+            ("idx_symbol", self.idx_symbol),
+            ("idx_energy", self.idx_energy),
+            ("idx_flags", self.idx_flags),
+            ("idx_elem_count", self.idx_elem_count),
+            ("idx_formula", self.idx_formula),
+            ("idx_fmax", self.idx_fmax),
+            ("idx_mass", self.idx_mass),
+            ("idx_volume", self.idx_volume),
+            ("idx_pbc", self.idx_pbc),
+            ("idx_meta", self.idx_meta),
+        ];
+        for (name, db) in unit_dbs {
+            let mut iter = db.iter(&rtxn)?;
+            while let Some(Ok((k, ()))) = iter.next() {
+                lines.push(format!("{name}\t{}", hex(k)));
+            }
+        }
+        if let Some(db) = self.idx_topo {
+            let mut iter = db.iter(&rtxn)?;
+            while let Some(Ok((k, ()))) = iter.next() {
+                lines.push(format!("idx_topo\t{}", hex(k)));
+            }
+        }
+        if let Some(db) = self.topo_by_frame {
+            let mut iter = db.iter(&rtxn)?;
+            while let Some(Ok((k, v))) = iter.next() {
+                lines.push(format!("topo_by_frame\t{}\t{}", hex(k), hex(v)));
+            }
+        }
+        lines.sort();
+        Ok(lines)
     }
 
     pub fn unique_frame_keys(&self, sel: &Select) -> Result<Vec<FrameKey>> {
@@ -1934,6 +2116,84 @@ mod tests {
 
     fn fixtures_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/test")
+    }
+
+    #[test]
+    fn ingest_dump_identical_at_1_2_3_8_threads() {
+        let src = tempfile::tempdir().unwrap();
+        for name in ["a.con", "b.convel", "c.con", "d.con"] {
+            let from = if name.ends_with(".convel") {
+                fixture("tiny_cuh2.convel")
+            } else if name.starts_with('c') {
+                fixture("tiny_cuh2_forces.con")
+            } else if name.starts_with('d') {
+                fixture("tiny_multi_cuh2.con")
+            } else {
+                fixture("tiny_cuh2.con")
+            };
+            std::fs::copy(from, src.path().join(name)).unwrap();
+        }
+        let mut dumps = Vec::new();
+        for threads in [1usize, 2, 3, 8] {
+            let dir = tempfile::tempdir().unwrap();
+            let db = ConCorpus::open(dir.path()).unwrap();
+            let rows = db
+                .ingest_directory_units_nthreads(src.path(), 1, None, threads)
+                .unwrap();
+            assert_eq!(rows.len(), 4);
+            let ids: Vec<u64> = rows.iter().map(|r| r.0).collect();
+            assert_eq!(ids, vec![1, 2, 3, 4]);
+            let dump = db.sorted_logical_dump().unwrap();
+            assert!(dump.iter().any(|l| l.starts_with("frames\t")));
+            assert!(dump.iter().any(|l| l.starts_with("traj_meta\t")));
+            dumps.push(dump);
+        }
+        for dump in &dumps[1..] {
+            assert_eq!(dump, &dumps[0]);
+        }
+    }
+
+    #[test]
+    fn ingest_first_error_independent_of_thread_count() {
+        let src = tempfile::tempdir().unwrap();
+        std::fs::copy(fixture("tiny_cuh2.con"), src.path().join("a.con")).unwrap();
+        std::fs::write(src.path().join("b.con"), "not a con frame\n").unwrap();
+        std::fs::write(src.path().join("c.con"), "also not a frame\n").unwrap();
+        let mut messages = Vec::new();
+        for threads in [1usize, 2, 3, 8] {
+            let dir = tempfile::tempdir().unwrap();
+            let db = ConCorpus::open(dir.path()).unwrap();
+            let err = db
+                .ingest_directory_units_nthreads(src.path(), 1, None, threads)
+                .unwrap_err();
+            messages.push(err.to_string());
+        }
+        for msg in &messages[1..] {
+            assert_eq!(msg, &messages[0], "{messages:?}");
+        }
+        assert!(!messages[0].is_empty(), "{messages:?}");
+        let lower = messages[0].to_lowercase();
+        assert!(
+            lower.contains("parse")
+                || lower.contains("invalid")
+                || lower.contains("incomplete")
+                || lower.contains("header"),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn ingest_chunk_bounds_depend_on_file_count_only() {
+        assert!(ingest_chunk_bounds(0).is_empty());
+        assert_eq!(
+            ingest_chunk_bounds(8),
+            (0..8).map(|i| (i, i + 1)).collect::<Vec<_>>()
+        );
+        let sixteen = ingest_chunk_bounds(16);
+        assert_eq!(sixteen.len(), 8);
+        assert_eq!(sixteen[0], (0, 2));
+        assert_eq!(sixteen[7], (14, 16));
+        assert_eq!(ingest_chunk_bounds(10), ingest_chunk_bounds(10));
     }
 
     #[test]

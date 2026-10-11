@@ -1,0 +1,41 @@
+#+OPTIONS: toc:nil num:nil
+
+* FAQ
+:PROPERTIES:
+:CUSTOM_ID: faq
+:END:
+** Why is this a separate crate?
+:PROPERTIES:
+:CUSTOM_ID: why-is-this-a-separate-crate
+:END:
+[[https://lode-org.github.io/readcon-core/][readcon-core]] is the decoder and writer for one stream or file. *readcon-db* owns the LMDB tree, secondary indexes, and multi-reader mmap. Once structures are CON text, the same files ingest here without a second structure dialect.
+
+** What is authoritative?
+:PROPERTIES:
+:CUSTOM_ID: what-is-authoritative
+:END:
+UTF-8 CON text. Hashes, dedup, join/split, and =reindex= run on the stored blobs. Cooked SoA / RCSO / H5MD arrays are derived and discardable.
+
+** Is this SQL?
+:PROPERTIES:
+:CUSTOM_ID: is-this-sql
+:END:
+No. =Select= is an explicit builder (symbol, (N), energy, flags, exact hash) over B-tree postings. There is no planner.
+
+** Where do large campaigns go?
+:PROPERTIES:
+:CUSTOM_ID: where-do-large-campaigns-go
+:END:
+CON text stays the structure contract. This crate indexes it. Multi-frame CON files and =iter_con= in core cover trajectory-style loads. For many writers, use @@rst::doc:`/howto/campaign`@@ (one writer per shard).
+
+** How do XYZ, PDB, GRO fit in?
+:PROPERTIES:
+:CUSTOM_ID: how-do-xyz-pdb-gro-fit-in
+:END:
+They are ingress in *readcon-core* (chemfiles). Convert to CON, then ingest. Optional =to_ase= is calculator hand-off only; ASE is not on the read path.
+
+** How do I install it?
+:PROPERTIES:
+:CUSTOM_ID: how-do-i-install-it
+:END:
+@@rst::doc:`/tutorials/getting-started`@@. Rust: =cargo add readcon-db=. Python: =pip install readcon-db=. C/Fortran: @@rst::doc:`/howto/install`@@.

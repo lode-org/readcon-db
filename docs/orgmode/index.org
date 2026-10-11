@@ -1,0 +1,116 @@
+#+TITLE: readcon-db
+#+OPTIONS: toc:nil num:nil title:nil
+
+#+BEGIN_EXPORT rst
+.. raw:: html
+
+   <div class="rc-hero">
+     <div class="rc-hero-rule" aria-hidden="true"></div>
+     <div class="rc-hero-brand">
+       <img class="rc-hero-mark" src="_static/mark.svg" width="56" height="56" alt="" />
+       <div>
+         <p class="rc-hero-name"><span class="rc-hero-read">read</span><span class="rc-hero-con">con</span><span class="rc-hero-db">-db</span></p>
+         <p class="rc-hero-sub">mmap CON corpus</p>
+       </div>
+     </div>
+     <p class="rc-hero-tagline">LMDB via Heed. Indexes, xxHash3 exact match, and bindings for Rust, C, C++, Python, and Fortran.</p>
+     <pre class="rc-hero-conline" aria-hidden="true">ConCorpus::open("/tmp/corpus")&#10;Select::new().require_symbol("Cu")</pre>
+   </div>
+#+END_EXPORT
+
+* readcon-db
+
+Rare-event codes already checkpoint on CON. This crate keeps thousands of
+those frames in one mmap tree: ingest CON text, filter without loading every
+atom, decode a hit with [[https://lode-org.github.io/readcon-core/][readcon-core]].
+
+#+BEGIN_EXPORT rst
+:doc:`/tutorials/getting-started` · :doc:`/tutorials/tutorial` · :doc:`/howto/howto` · :doc:`/explanation/architecture` ·
+:doc:`/explanation/faq`
+
+.. code-block:: bash
+
+   cargo add readcon-db
+   pip install readcon-db
+
+.. important::
+
+   *New here?* :doc:`/tutorials/getting-started` then :doc:`/tutorials/tutorial`
+
+   *Many writers / HPC shards?* :doc:`/howto/campaign`
+
+   *Language API?* :doc:`/howto/howto` · :doc:`/reference/rust`
+
+.. grid:: 1 1 2 2
+   :gutter: 2
+
+   .. grid-item-card:: Tutorial: first corpus
+      :link: tutorials/tutorial
+      :link-type: doc
+
+      Open a directory, ingest a fixture, select copper, print the hash.
+
+   .. grid-item-card:: How-to by language
+      :link: howto/howto
+      :link-type: doc
+
+      The same open / ingest / select path in Rust, Python, C, and Fortran.
+
+   .. grid-item-card:: Architecture
+      :link: explanation/architecture
+      :link-type: doc
+
+      mmap, SWMR, secondary indexes, xxHash3, hourglass ABI.
+
+   .. grid-item-card:: Campaign ops
+      :link: howto/campaign
+      :link-type: doc
+
+      Shards, drain, join, compact. One writer per LMDB env.
+
+Site map
+========
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Tutorials
+
+   tutorials/getting-started
+   tutorials/tutorial
+
+.. toctree::
+   :maxdepth: 1
+   :caption: How-to guides
+
+   howto/howto
+   howto/topology
+   howto/install
+   howto/campaign
+   howto/workflows
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Explanation
+
+   explanation/faq
+   explanation/overview
+   explanation/architecture
+   explanation/design
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Reference
+
+   reference/rust
+   reference/c
+   reference/python
+   reference/fortran
+   reference/citation
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Project meta
+
+   contributing/index
+   changelog
+#+END_EXPORT

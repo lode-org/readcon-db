@@ -1,0 +1,106 @@
+#+OPTIONS: toc:nil num:nil
+
+* Workflows
+:PROPERTIES:
+:CUSTOM_ID: workflows
+:END:
+** MPI: one rank packs, the rest receive
+:PROPERTIES:
+:CUSTOM_ID: mpi-one-rank-packs-the-rest-receive
+:END:
+When every rank needs the *same* frame, do not open LMDB on every rank. Rank 0 of the communicator the host already owns (=lmp->world=, an mpi4py =Comm=, a Fortran INTEGER handle) packs RCSO; =MPI_Bcast= on *that* handle; workers unpack with no corpus. The library does not call =MPI_Init= and does not name the process-wide world communicator.
+
+#+begin_src C
+#include "readcon-db-mpi.h"
+rkrdb_bcast_packed_frame(lmp->world, 0, dir, traj, frame, &buf, &n);
+rkrdb_bcast_packed_frames(lmp->world, 0, dir, trajs, frames, nkeys, &buf, &n);
+#+end_src
+
+#+begin_src python
+from readcon_db import bcast_packed_frame, bcast_packed_frames
+blob = bcast_packed_frame(lmp.world, dir, traj, frame)  # mpi4py Comm
+batch = bcast_packed_frames(lmp.world, dir, [(traj, 0), (traj, 1)])
+#+end_src
+
+The other legal path: every rank =open_readonly= (shared mmap) when ranks touch *different* keys.
+
+Many frames on one collective: =rkrdb_bcast_packed_frames= / Python =bcast_packed_frames= (RCSB envelope). Grain is a NEB band or dump window, not one EndStep per image.
+
+Node-local ingest, then drain to the PFS (Frontier =/mnt/bb=, Aurora =/tmp=): one writer per shard id, or unique dest per node when shard ids overlap, then =join-drained=. Full sequence, refuses, and C/Fortran shard-directory opens: @@rst::doc:`/howto/campaign`@@.
+
+#+begin_src sh
+readcon-db shard-init /mnt/bb/$USER/campaign --shards 64
+readcon-db shard-ingest /mnt/bb/$USER/campaign --shard $S --start-id $T \
+    --units '{"length":"angstrom","energy":"eV","time":"fs"}' run.con
+# ranks close
+# One writer per shard id can drain to a shared dest.
+# Overlapping shard ids (more writers than shards): unique dest per node, then join-drained.
+readcon-db drain /mnt/bb/$USER/campaign /lustre/orion/proj/campaign/node_$SLURM_NODEID
+readcon-db join-drained /lustre/orion/proj/campaign_single \
+    /lustre/orion/proj/campaign/node_*
+#+end_src
+
+** H5MD interchange
+:PROPERTIES:
+:CUSTOM_ID: h5md-interchange
+:END:
+Cooked =[T][N][3]= export (CON stays authority in the corpus):
+
+#+begin_src python
+from readcon_db import ConCorpus
+db = ConCorpus("/lustre/orion/proj/campaign_single", readonly=True)
+db.export_h5md(traj_id=1, path="traj.h5")
+#+end_src
+
+Dest must not exist (=File= ="x"=). A write failure removes the dest.
+
+Time on the file is dest =ps=: CON =header.time()=, or =i * timestep=, else the frame index. A v3.1 frame with =time= or =timestep= and no =units.time= is an error. =velocity_time_unit= supplies that missing clock unit and overrides the D10 velocity rule for a file that breaks it. A present =units.time= still scales the clock. v1, v2, and v3.0 clocks with no =units.time= are read as =fs=. Optional force and velocity groups are dest =kJ mol-1 Angstrom-1= and =Angstrom ps-1=. Velocities follow D10: v1, v2, and v3.0 use =(amu*angstrom^2/eV)^0.5= whatever the label says; v3.1 uses =units.time= and fails if that key is missing. =readcon-db compact-join= is the single-root join (=open_existing=).
+
+** CON-native (default)
+:PROPERTIES:
+:CUSTOM_ID: con-native-default
+:END:
+Optimizers → *CON files* → =readcon-db= ingest → =select= / =get_frame= / C/=readcon= decode. No ASE on this path.
+
+#+begin_src sh
+readcon-db ingest-dir /data/corpus /data/neb_runs
+readcon-db select /data/corpus --symbol Cu --require-forces \
+  --energy-min -50 --energy-max 0
+#+end_src
+
+Metadata predicates use secondary indexes documented in @@rst::doc:`/explanation/architecture`@@ (=idx_energy=, =idx_flags= alongside =idx_natoms= / =idx_symbol=).
+
+** XYZ and other formats
+:PROPERTIES:
+:CUSTOM_ID: xyz-and-other-formats
+:END:
+Use *readcon-core chemfiles ingress* (=read_chemfiles=, =read_chemfiles_nth=, Rust/C =rkr_read_chemfiles*=) to obtain =ConFrame=s, write CON if needed, then ingest. Chemfiles converts format units on read (GRO nm → Å) and stamps line-2 =units= as Å / ps / amu; use =skip= / =step= / =read_step= rather than loading every frame. Do *not* use ASE as the XYZ reader for this stack. Peer docs: [[https://lode-org.github.io/readcon-core/][readcon-core]].
+
+** Optional XYZ /export/
+:PROPERTIES:
+:CUSTOM_ID: optional-xyz-export
+:END:
+=export_extxyz= / CLI =dedup-export= / =compact-export-extxyz= only for external tools that demand XYZ on disk. Dest must not exist (=create_new=; a write failure removes the dest). =Lattice= is the same triclinic =[3][3]= as H5MD (=boxl=+angles or =lattice_vectors=). =pbc= is CON =header.pbc()= (=T=/=F=, default =T T T=). Implementation does not call ASE. =compact-export-extxyz --sharded= joins through a temp dest that is removed.
+
+** ASE =.db= comparison (measurement only)
+:PROPERTIES:
+:CUSTOM_ID: ase-.db-comparison-measurement-only
+:END:
+This is a measurement recipe, not a product path. Do not store =Atoms= in ASE =.db= as the interchange.
+
+Legacy =examples/benchmarks/bench_ase_db.py= Cu2 stand-ins are unequal workloads (lightweight ASE rows vs full CON parse+index). Do not use those numbers.
+
+** Fair ASE.db vs readcon-db campaign
+:PROPERTIES:
+:CUSTOM_ID: fair-ase.db-vs-readcon-db-campaign
+:END:
+Use *=examples/benchmarks/fair_campaign.py=*: builds a multi-frame CON ladder from a real fixture, loads *the same frames* into ASE =.db= (via readcon geometry → =Atoms=) and *readcon-db*, records insert/extract/competitive select/8-reader timings, and checks *hit-count agreement* for symbol =Cu= and =natoms= range. Live results: JSON =ase_fair_campaign_{run}.json= and markdown table.
+
+#+begin_src sh
+# venv with ase + maturin-developed readcon / readcon_db
+python examples/benchmarks/fair_campaign.py --out /tmp/fair_out --run-id 1
+python examples/benchmarks/test_fair_select_parity.py
+python paper/cpc/scripts/gen_fair_table.py --check
+#+end_src
+
+Legacy =bench_ase_db.py= Cu2 timings are *unequal-workload* artifacts only. Interchange axis (parse CON): campaign JSON field =interchange= (readcon vs =ase.io.read=).

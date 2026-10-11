@@ -1,0 +1,18 @@
+lj dimer
+{"con_spec_version":3,"sections":["velocities"],"units":{"energy":"eV","length":"angstrom","mass":"amu","time":"fs"}}
+20.000000 20.000000 20.000000
+90.000000 90.000000 90.000000
+0 0
+1 0
+1
+2
+12.000000
+C
+Coordinates of Component 1
+0.000000 0.000000 0.000000 0 0
+1.500000 0.000000 0.000000 0 1
+
+C
+Velocities of Component 1
+0.010880 -0.009412 0.007151 0 0
+-0.012837 0.045540 -0.002009 0 1

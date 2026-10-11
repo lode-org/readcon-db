@@ -1,0 +1,146 @@
+#+OPTIONS: toc:nil num:nil
+
+* Install
+:PROPERTIES:
+:CUSTOM_ID: install
+:END:
+** Rust (crates.io)
+:PROPERTIES:
+:CUSTOM_ID: rust-crates.io
+:END:
+#+begin_src sh
+cargo add readcon-db
+# library + CLI binary from the same crate:
+cargo install readcon-db --locked
+#+end_src
+
+Requires [[https://crates.io/crates/readcon-core][readcon-core]] *^0.14* (pulled automatically).
+
+** Python (PyPI)
+:PROPERTIES:
+:CUSTOM_ID: python-pypi
+:END:
+#+begin_src sh
+pip install readcon-db
+python -c "import readcon_db"
+#+end_src
+
+Install [[https://pypi.org/project/readcon/][readcon]] (core) as well when you need CON parse/write outside the corpus API.
+
+** From source (developers)
+:PROPERTIES:
+:CUSTOM_ID: from-source-developers
+:END:
+#+begin_src sh
+git clone https://github.com/lode-org/readcon-db
+cd readcon-db
+cargo test --locked
+cargo build --release   # libreadcon_db + CLI readcon-db
+#+end_src
+
+=readcon-core= comes from crates.io (=^0.14=). To develop against a local core tree, add an *untracked* =.cargo/config.toml=:
+
+#+begin_src toml
+[patch.crates-io]
+readcon-core = { path = "../readcon-core" }
+#+end_src
+
+Python extension from a checkout:
+
+#+begin_src sh
+pip install maturin
+maturin develop --release --features python --manifest-path python/pyproject.toml
+#+end_src
+
+** C / C++ (no cbindgen)
+:PROPERTIES:
+:CUSTOM_ID: c-c-no-cbindgen
+:END:
+=include/readcon-db.h= is hand-written and shipped. Optional =include/readcon-db-mpi.h= takes the caller's =MPI_Comm= (not linked into the library). CMake FetchContent, Meson wrap, and =pkg-config= do *not* run cbindgen.
+
+CMake:
+
+#+begin_src cmake
+include(FetchContent)
+FetchContent_Declare(
+  readcon-db
+  URL https://github.com/lode-org/readcon-db/releases/download/v0.1.8/readcon-db-cxx-0.1.8.tar.gz
+  URL_HASH SHA256=<sha256 from the .sha256 sidecar on the GitHub Release>
+)
+FetchContent_MakeAvailable(readcon-db)
+target_link_libraries(app PRIVATE readcon-db::shared)
+#+end_src
+
+From a checkout:
+
+#+begin_src sh
+cmake -S . -B build -DCMAKE_INSTALL_PREFIX=$PWD/prefix
+cmake --build build && cmake --install build
+export PKG_CONFIG_PATH=$PWD/prefix/lib/pkgconfig
+pkg-config --cflags --libs readcon-db
+#+end_src
+
+Meson: =dependency('readcon-db')= with a wrap pointing at =readcon-db-cxx-$VERSION.tar.gz= (see =packaging/wrapdb/=).
+
+A process that uses both C APIs must link the *shared* objects (=libreadcon_db.so= and =libreadcon_core.so=). Do not static-link =libreadcon_db.a= together with =libreadcon_core.a=: the db archive already contains the Rust core and rust-std, and the duplicate symbols fail at link.
+
+** Prebuilt C ABI (no local cargo)
+:PROPERTIES:
+:CUSTOM_ID: prebuilt-c-abi-no-local-cargo
+:END:
+Unpack =readcon-db-clib-$VERSION-$target.tar.gz= from the GitHub Release, then =export READCON_DB_LIB= / =PKG_CONFIG_PATH=. Attach assets to an already-published tag with Actions → *C ABI library tarball* → ~tag=vX.Y.Z~.
+
+#+begin_src sh
+VER=0.1.8
+TARGET=x86_64-unknown-linux-gnu
+curl -fsSL -O "https://github.com/lode-org/readcon-db/releases/download/v${VER}/readcon-db-clib-${VER}-${TARGET}.tar.gz"
+tar -xzf "readcon-db-clib-${VER}-${TARGET}.tar.gz"
+PREFIX="$PWD/readcon-db-clib-${VER}-${TARGET}"
+export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+export LD_LIBRARY_PATH="$PREFIX/lib:${LD_LIBRARY_PATH:-}"
+export READCON_DB_LIB="$PREFIX/lib/libreadcon_db.so"
+pkg-config --cflags --libs readcon-db
+#+end_src
+
+The cxx tarball still needs rustc/cargo. The clib tarball is the Fortran / C path that does not.
+
+** Fortran
+:PROPERTIES:
+:CUSTOM_ID: fortran
+:END:
+=fortran/ReadConDb= (=bind(C)= against the C ABI). Notes: =fortran/README.md=. Smoke after unpacking the clib prefix:
+
+#+begin_src sh
+cd fortran/ReadConDb
+fpm build --flag "$(pkg-config --cflags readcon-db)" \
+  --link-flag "$(pkg-config --libs readcon-db) -ldl -lpthread -lm"
+#+end_src
+
+From a checkout (after a release build of the cdylib):
+
+#+begin_src sh
+cd fortran/ReadConDb && fpm build --flag "-I../../include" \
+  --link-flag "-L../../target/release -lreadcon_db -ldl -lpthread -lm"
+#+end_src
+
+Campaign shard/drain/join is the =readcon-db= CLI (in =bin/= of the clib tarball when the Release build produced it). See @@rst::doc:`/howto/campaign`@@.
+
+** Documentation
+:PROPERTIES:
+:CUSTOM_ID: documentation
+:END:
+- Landing page: [[https://lode-org.github.io/readcon-db/]]
+- Full docs: [[https://lode-org.github.io/readcon-db/docs/]]
+- Design notes: @@rst::doc:`/explanation/design`@@
+
+#+begin_src sh
+pixi r -e docs docbld
+#+end_src
+
+=pixi.lock= pins Sphinx, Furo, and MyST to the same set Pages publishes. Refresh with =pixi lock= after editing =pixi.toml= =[feature.docs]=.
+
+** Static marketing page
+:PROPERTIES:
+:CUSTOM_ID: static-marketing-page
+:END:
+Open =website/index.html= (or serve =website/=). Logos under =assets/logo/=.

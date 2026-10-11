@@ -37,7 +37,7 @@ text = db.get_frame_text(*keys[0])  # still CON
 
 Stay in CON for analysis that uses `readcon` / C / Fortran APIs. Secondary
 indexes (`idx_natoms`, `idx_symbol`, `idx_energy`, `idx_flags`) are documented in
-[`docs/design.md`](../../docs/design.md) and in the companion
+[`docs/orgmode/explanation/design.org`](../../docs/orgmode/explanation/design.org) and in the companion
 [readcon-core](https://github.com/lode-org/readcon-core) README ecosystem table.
 
 ## B. Only if an external tool requires XYZ on disk

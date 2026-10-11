@@ -1,0 +1,170 @@
+#+OPTIONS: toc:nil num:nil
+
+* C and C++ API
+:PROPERTIES:
+:CUSTOM_ID: c-and-c-api
+:END:
+Header: [[https://github.com/lode-org/readcon-db/blob/main/include/readcon-db.h][=include/readcon-db.h=]].
+
+** ABI stamp
+:PROPERTIES:
+:CUSTOM_ID: abi-stamp
+:END:
+=readcon-db.h= carries the stamp of the library it describes, in the same shape as =readcon-core='s =rkr_abi_*=:
+
+#+begin_src C
+#define RKRDB_ABI_VERSION_MAJOR 1
+#define RKRDB_ABI_VERSION_MINOR 1
+#define RKRDB_ABI_LAYOUT_REVISION 1
+
+uint32_t rkrdb_abi_version_major(void);
+uint32_t rkrdb_abi_version_minor(void);
+uint32_t rkrdb_abi_layout_revision(void);
+const char *rkrdb_abi_stamp(void);   /* "readcon-db/abi-1.1/layout-1" */
+int rkrdb_abi_compatible(uint32_t major, uint32_t minor, uint32_t layout_revision);
+#+end_src
+
+The macros hold the stamp of the header a caller compiled against; the functions report the stamp of the library actually loaded. =rkrdb_abi_compatible= returns nonzero when the loaded library serves a caller built against that triple: equal major, equal layout revision, and a library minor at least the caller's. A host that opens =libreadcon_db.so= at run time checks it once:
+
+#+begin_src C
+if (!rkrdb_abi_compatible(RKRDB_ABI_VERSION_MAJOR, RKRDB_ABI_VERSION_MINOR,
+                          RKRDB_ABI_LAYOUT_REVISION)) {
+  fprintf(stderr, "loaded %s, built against %d.%d layout %d\n", rkrdb_abi_stamp(),
+          RKRDB_ABI_VERSION_MAJOR, RKRDB_ABI_VERSION_MINOR, RKRDB_ABI_LAYOUT_REVISION);
+  abort();
+}
+#+end_src
+
+The numbers live in =src/ffi.rs= and are repeated in =include/readcon-db.h=, which is hand-written. The =abi_header_carries_the_stamp= unit test fails when the two disagree. They do not follow the package version, and a release that changes no exported symbol leaves them where they are.
+
+- =RKRDB_ABI_VERSION_MAJOR=: increment for a change an old caller cannot survive: removing or renaming an exported function, changing a signature, or changing the meaning of an argument or status code. Reset the minor to 0.
+- =RKRDB_ABI_VERSION_MINOR=: increment for an additive change that leaves every old call valid, such as a new exported function or a new status code.
+- =RKRDB_ABI_LAYOUT_REVISION=: increment when the size or field order of an exported record changes, or an existing field changes type, or the buffer formats =rkrdb_pack_frame= writes change. A caller and a library with different layout revisions never match.
+
+#+begin_src C
+#include "readcon-db.h"
+
+size_t id;
+rkrdb_open("/tmp/corpus", &id);
+uint32_t n;
+rkrdb_append_trajectory(id, 1, "run.con", &n);
+rkrdb_append_trajectory_units(id, 1, "run.con",
+    "{\"length\":\"A\",\"energy\":\"ev\"}", &n);
+rkrdb_extend_trajectory_units(id, 1, "more.con",
+    "{\"length\":\"A\",\"energy\":\"ev\"}", &n);
+rkrdb_set_units(id, 1, "{\"length\":\"nm\",\"energy\":\"eV\"}", &n);
+char ubuf[256];
+rkrdb_frame_units(id, 1, 0, ubuf, sizeof ubuf);
+double t[64]; uint32_t nt = 0;
+rkrdb_h5md_times(id, 1, t, 64, &nt);
+uint32_t nf = 0, na = 0;
+rkrdb_h5md_shape(id, 1, &nf, &na);
+double xyz[4096];
+rkrdb_h5md_positions(id, 1, xyz, 4096, &nf, &na);
+double edges[64], frc[4096], vel[4096];
+rkrdb_h5md_edges(id, 1, edges, 64);
+rkrdb_h5md_forces(id, 1, frc, 4096);
+rkrdb_set_velocity_time_unit(id, "fs"); /* NULL clears; D10 override */
+rkrdb_h5md_velocities(id, 1, vel, 4096);
+int32_t z[256]; uint32_t nz = 0;
+rkrdb_h5md_species(id, 1, z, 256, &nz);
+uint32_t npos = 0, nfrc = 0, nvel = 0; uint8_t has_f = 0, has_v = 0;
+rkrdb_get_positions(id, 1, 0, xyz, 256, &npos);
+rkrdb_get_forces(id, 1, 0, frc, 256, &nfrc, &has_f);
+rkrdb_get_velocities(id, 1, 0, vel, 256, &nvel, &has_v);
+rkrdb_cook_frame(id, 1, 0);
+rkrdb_recook_all(id);
+rkrdb_select_basic(id, 1, "Cu", 1, 100000, 0);
+/* Metadata filters: flags bit0=forces, bit1=velocities, bit2=energy present */
+rkrdb_select_meta(id, /*traj*/ -1, "Cu", 1, 100000,
+                  /*energy*/ -50.0, 0.0, /*use_energy_range*/ 1,
+                  /*flags*/ 1u /* forces */, /*limit*/ 0);
+int m = rkrdb_result_count(id);
+uint64_t traj; uint32_t frame;
+rkrdb_result_key(id, 0, &traj, &frame);
+uint8_t hash[16];
+rkrdb_frame_hash(id, traj, frame, hash);
+rkrdb_select_hash(id, hash);
+rkrdb_close(id);
+rkrdb_open_readonly("/tmp/corpus", &id);
+rkrdb_close(id);
+#+end_src
+
+Status: =RKRDB_OK= (0), =RKRDB_ERR= (-1), =RKRDB_NOT_FOUND= (-2), =RKRDB_NULL= (-3).
+
+H5MD velocities follow D10 and are written as =Angstrom ps-1=. v1, v2, and v3.0 frames use =(amu*angstrom^2/eV)^0.5= whatever the time label says. v3.1 frames use =units.time= and fail when a velocities section has no =units.time=. =rkrdb_set_velocity_time_unit= (C++ =Corpus::set_velocity_time_unit=) overrides that rule for a file that breaks it. Pass =fs= when the file really stored Angstrom/fs. The simulation clock uses =units.time= when that key is present. A v3.1 frame with =time= or =timestep= and no =units.time= is an error, and the same override supplies that missing clock unit. A present =units.time= still scales the clock. v1, v2, and v3.0 clocks with no =units.time= are read as =fs=.
+
+Link =libreadcon_db= from =cargo build --release= (=cdylib= / =staticlib=), or unpack the prebuilt =readcon-db-clib-$VERSION-$target.tar.gz= Release asset and =pkg-config --libs readcon-db=. See @@rst::doc:`/howto/install`@@.
+
+C++ RAII:
+
+#+begin_src cpp
+#include "readcon-db.h"
+readcon_db::Corpus db("/tmp/corpus");
+readcon_db::Corpus ro("/tmp/corpus", /*readonly=*/true);
+db.append_trajectory(1, "run.con", "{\"length\":\"A\",\"energy\":\"ev\"}");
+db.extend_trajectory(1, "more.con", "{\"length\":\"A\",\"energy\":\"ev\"}");
+db.set_units(1, "{\"length\":\"nm\",\"energy\":\"eV\"}");
+char ubuf[256];
+db.frame_units(1, 0, ubuf, sizeof ubuf);
+uint32_t nf = 0, na = 0;
+db.h5md_shape(1, &nf, &na);
+double t[64];
+db.h5md_times(1, t, 64);
+double xyz[4096], edges[64], frc[4096], vel[4096];
+db.h5md_positions(1, xyz, 4096, &nf, &na);
+db.h5md_edges(1, edges, 64);
+db.h5md_forces(1, frc, 4096);
+db.set_velocity_time_unit("fs");
+db.h5md_velocities(1, vel, 4096);
+int32_t z[256];
+db.h5md_species(1, z, 256);
+bool has_f = false, has_v = false;
+db.get_positions(1, 0, xyz, 256);
+db.get_forces(1, 0, frc, 256, &has_f);
+db.get_velocities(1, 0, vel, 256, &has_v);
+db.cook_frame(1, 0);
+db.recook_all();
+db.select_basic(1, "Cu", 1, 100000, 0);
+db.select_meta(-1, "Cu", 1, 100000, -50.0, 0.0, 1, 1u, 0);
+#+end_src
+
+** MPI: pack on root, Bcast on the caller communicator
+:PROPERTIES:
+:CUSTOM_ID: mpi-pack-on-root-bcast-on-the-caller-communicator
+:END:
+Optional header [[https://github.com/lode-org/readcon-db/blob/main/include/readcon-db-mpi.h][=include/readcon-db-mpi.h=]] (not linked into =libreadcon_db=). Pass the communicator the host already uses. LAMMPS pair/fix code passes =lmp->world= or a sub-comm; a plugin must not call =MPI_Init= if the host already did.
+
+#+begin_src C
+#include "readcon-db-mpi.h"   /* needs <mpi.h> */
+
+uint8_t *buf = NULL;
+int nbytes = 0;
+/* comm is lmp->world, a Dup, a Split — not substituted by this helper */
+int st = rkrdb_bcast_packed_frame(comm, /*root*/ 0, "/scratch/corpus",
+                                  /*traj*/ 1, /*frame*/ 0, &buf, &nbytes);
+uint32_t natoms = 0;
+double xyz[3 * 4096];
+rkrdb_unpack_positions(buf, (size_t)nbytes, xyz, 4096, &natoms);
+free(buf);
+#+end_src
+
+Many frames, one Bcast:
+
+#+begin_src C
+int st = rkrdb_bcast_packed_frames(comm, 0, dir, trajs, frames, nkeys, &buf, &nbytes);
+uint32_t nfr = 0;
+rkrdb_unpack_batch_nframes(buf, (size_t)nbytes, &nfr);
+uint32_t natoms = 0;
+double xyz[3 * 4096];
+rkrdb_unpack_batch_item(buf, (size_t)nbytes, 0, xyz, 4096, &natoms);
+free(buf);
+#+end_src
+
+C++ =readcon_db::Corpus::pack_frame= (~buf == NULL~ size query) / =pack_frames= / =unpack_batch_nframes= / =unpack_batch_item= / =unpack_positions=. C =rkrdb_pack_frame= / =rkrdb_pack_frames= also size-query when ~buf == NULL~. Fortran INTEGER comms: =rkrdb_bcast_packed_frame_f= and =rkrdb_bcast_packed_frames_f= (=MPI_Comm_f2c= of the =MPI_Fint=). Standalone driver: =examples/mpi_bcast_frame.c= (=MPI_Initialized= + =MPI_Comm_dup=).
+
+** Cooked SoA (RCSO)
+:PROPERTIES:
+:CUSTOM_ID: cooked-soa-rcso
+:END:
+See =docs/orgmode/cooked-soa.org=. Tier is opt-in; CON text remains authority. Bindings expose cook / delete / has-valid / positions / forces / velocities.

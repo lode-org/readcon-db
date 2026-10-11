@@ -299,7 +299,7 @@ pkg-config --cflags --libs readcon-db
 
 The CLI (\`bin/readcon-db\`) is included when the build produced it.
 Campaign ops (shard-init / shard-ingest / drain / join-drained) use that
-binary; see \`docs/source/campaign.md\`.
+binary; see \`docs/orgmode/howto/campaign.org\`.
 
 ## Fortran (fpm)
 

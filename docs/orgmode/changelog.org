@@ -1,0 +1,7 @@
+#+OPTIONS: toc:nil num:nil
+
+* Changelog
+:PROPERTIES:
+:CUSTOM_ID: changelog
+:END:
+See the repository root [[https://github.com/lode-org/readcon-db/blob/main/CHANGELOG.md][CHANGELOG.md]].

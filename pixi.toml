@@ -14,7 +14,7 @@ sphinx-copybutton = ">=0.5.2, <1"
 sphinx-design = ">=0.6, <1"
 myst-parser = ">=2"
 [feature.docs.tasks]
-docbld = { cmd = "sphinx-build -b html docs/source docs/_build/html", description = "Sphinx HTML (locked docs env)" }
+docbld = { cmd = "bash scripts/build-docs.sh", description = "Org to rst, then Sphinx HTML" }
 lock-refresh = { cmd = "pixi lock", description = "Refresh pixi.lock for locked docs installs" }
 
 [environments]

@@ -9,5 +9,8 @@ __pycache__/
 .pytest_cache/
 docs/.venv/
 docs/_build/
+# rst is generated from docs/orgmode by docs/export.el
+docs/source/*.rst
+docs/source/**/*.rst
 _site/
 .pixi/

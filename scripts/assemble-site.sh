@@ -22,8 +22,8 @@ if ! grep -Fq 'rc-hero' "$DEST/index.html"; then
   echo "Shibuya index must include the CON-frame hero (rc-hero)" >&2
   exit 1
 fi
-if [[ ! -f "$DEST/getting-started.html" || ! -f "$DEST/docs/getting-started.html" ]]; then
-  echo "missing getting-started.html at / or /docs/" >&2
+if [[ ! -f "$DEST/tutorials/getting-started.html" || ! -f "$DEST/docs/tutorials/getting-started.html" ]]; then
+  echo "missing tutorials/getting-started.html at / or /docs/" >&2
   exit 1
 fi
 
