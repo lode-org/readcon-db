@@ -1,0 +1,5 @@
+work/
+harness/target/
+data/scale/
+**/__pycache__/
+**/*.pyc

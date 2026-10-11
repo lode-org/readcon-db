@@ -1,0 +1,11 @@
+[package]
+name = "cpc-eval-harness"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Correctness and timing harness for the readcon-db CPC evaluation"
+
+[dependencies]
+readcon-core = "=0.16.2"
+readcon-db = { path = "../.." }
+serde_json = "1"

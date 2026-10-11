@@ -1,0 +1,61 @@
+{
+  "files": [
+    {
+      "file": "hcn_hnc_neb.con",
+      "n_frames": 157,
+      "sha256": "2d5a875120e5acad62937dfa121c613b5f0ad0d5a7207a5f1ff2709df3062b43"
+    },
+    {
+      "file": "cu_adatom_neb.con",
+      "n_frames": 159,
+      "sha256": "58a36d30a9a22d9b9c6931fa0cf0e3b9f5969341e442e48255f64e124c1e4e35"
+    },
+    {
+      "file": "pt_h_neb.con",
+      "n_frames": 83,
+      "sha256": "fe524ead0fc30b8c33a5797da914442ea68f6d61ea674052453aad4cfc343ef6"
+    },
+    {
+      "file": "pt_adatom_dimer.con",
+      "n_frames": 71,
+      "sha256": "3a7e7bd4c0bfc84cd6ea00137175f08b8c5a85e4016c4c690aeb1e03ac30ffc0"
+    },
+    {
+      "file": "akmc_trace.con",
+      "n_frames": 24000,
+      "sha256": "7f8851e65fb0bb96390584503933a9369cfcc4165b158889e54a4a640617d969",
+      "kmc": [
+        {
+          "system": "hcn-hnc",
+          "steps": 4000,
+          "frames": 8000,
+          "hops": 0,
+          "state_a_eV": 0.6391848986312896,
+          "state_b_eV": 0.631645692364255,
+          "saddle_eV": 197.58597239845244,
+          "state_bytes_equal": false
+        },
+        {
+          "system": "cu-adatom",
+          "steps": 4000,
+          "frames": 8000,
+          "hops": 0,
+          "state_a_eV": 4.138136676204976,
+          "state_b_eV": 4.138136676204953,
+          "saddle_eV": 5.227932553191833,
+          "state_bytes_equal": false
+        },
+        {
+          "system": "pt-h",
+          "steps": 4000,
+          "frames": 8000,
+          "hops": 1664,
+          "state_a_eV": 3.203901240363519,
+          "state_b_eV": 3.236445540802699,
+          "saddle_eV": 3.2373465411115023,
+          "state_bytes_equal": false
+        }
+      ]
+    }
+  ]
+}
