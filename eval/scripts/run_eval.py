@@ -299,6 +299,18 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--sizes", default="1000,10000,100000,1000000")
     parser.add_argument("--repeats", type=int, default=30)
+    parser.add_argument(
+        "--ase-full-through",
+        type=int,
+        default=10**12,
+        help="Frame counts at or below this get ase.db on every repeat",
+    )
+    parser.add_argument(
+        "--ase-repeats-above",
+        type=int,
+        default=30,
+        help="How many leading repeats include ase.db once the frame count is above --ase-full-through",
+    )
     args = parser.parse_args()
     if not HARNESS.is_file():
         raise SystemExit("build eval/harness in release mode first")
@@ -366,8 +378,12 @@ def main():
         ase_alloc = []
         rdb_apparent = []
         ase_apparent = []
+        rdb_fail_alloc = []
+        rdb_fail_apparent = []
         for rep in range(args.repeats):
-            order = rotate(SYSTEMS, rep)
+            use_ase = n_frames <= args.ase_full_through or rep < args.ase_repeats_above
+            base = SYSTEMS if use_ase else ("readcon-db", "con-directory")
+            order = rotate(base, rep)
             qord = rotate(QUERIES, rep)
             stores = {}
             print(f"  repeat {rep} order={','.join(order)}", flush=True)
@@ -403,6 +419,9 @@ def main():
                         ase_apparent.append(int(data["apparent_bytes"]))
                 else:
                     print(f"    ingest {system} failed: {data.get('error')}", flush=True)
+                    if system == "readcon-db" and data.get("allocated_bytes") not in ("", None):
+                        rdb_fail_alloc.append(int(data["allocated_bytes"]))
+                        rdb_fail_apparent.append(int(data.get("apparent_bytes") or 0))
             for query in qord:
                 for system in order:
                     store = stores.get(system)
@@ -435,6 +454,8 @@ def main():
                     cleanup(system, store)
         if rdb_alloc:
             size_rows.append(median_size(n_frames, "readcon-db", rdb_apparent, rdb_alloc, "median over ingests; apparent size is the LMDB map"))
+        elif rdb_fail_alloc:
+            size_rows.append(median_size(n_frames, "readcon-db", rdb_fail_apparent, rdb_fail_alloc, "ingest did not finish; median allocated bytes at failure"))
         if ase_alloc:
             size_rows.append(median_size(n_frames, "ase.db", ase_apparent, ase_alloc, "median over ingests"))
         # Flush after each size so a later size cannot erase earlier rows.
@@ -548,6 +569,16 @@ def write_summary(ingest_rows, query_rows):
             add_summary(summary, "ingest_s", n_frames, system, "", "", seconds)
             add_summary(summary, "frames_per_s", n_frames, system, "", "", rates)
             add_summary(summary, "mb_per_s", n_frames, system, "", "", bws)
+            fail_seconds = [
+                float(row["seconds"])
+                for row in ingest_rows
+                if (not row["ok"])
+                and int(row["n_frames"]) == n_frames
+                and row["system"] == system
+                and row.get("seconds") not in ("", None)
+            ]
+            if fail_seconds:
+                add_summary(summary, "ingest_fail_s", n_frames, system, "", "", fail_seconds)
         for query in QUERIES:
             for cache in ("cold", "warm"):
                 for system in SYSTEMS:

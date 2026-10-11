@@ -299,9 +299,24 @@ pub fn ingest(con: &Path, dest: &Path, oracle: &Value) -> Result<Value, String> 
 
     let db = ConCorpus::open(dest).map_err(|e| scrub(&e.to_string()))?;
     let t0 = Instant::now();
-    let n = db
-        .append_trajectory_path(1, con)
-        .map_err(|e| scrub(&e.to_string()))?;
+    let n = match db.append_trajectory_path(1, con) {
+        Ok(n) => n,
+        Err(e) => {
+            let seconds = t0.elapsed().as_secs_f64();
+            let sizes = corpus_sizes(dest).unwrap_or((0, 0));
+            return Ok(json!({
+                "ok": false,
+                "error": scrub(&e.to_string()),
+                "seconds": seconds,
+                "frames": 0,
+                "raw_bytes": raw_bytes,
+                "frames_per_s": 0.0,
+                "mb_per_s": 0.0,
+                "apparent_bytes": sizes.0,
+                "allocated_bytes": sizes.1,
+            }));
+        }
+    };
     let keys = db
         .select(&Select::new().exact_composition(formula))
         .map_err(|e| scrub(&e.to_string()))?;
