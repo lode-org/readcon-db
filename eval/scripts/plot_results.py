@@ -24,6 +24,7 @@ FIG = RESULTS / "figures"
 COLORS = {
     "readcon-db": "#0072B2",
     "ase.db": "#E69F00",
+    "ase.db-txn": "#D55E00",
     "con-directory": "#009E73",
 }
 STORES = [
@@ -32,9 +33,10 @@ STORES = [
     ("zstd", "zstd"),
     ("readcon-db", "readcon-db"),
     ("ase.db", "ase.db"),
+    ("ase.db-txn", "ase.db one connection"),
     ("con_directory", "CON directory"),
 ]
-STORE_COLORS = ["#4D4D4D", "#999999", "#BDBDBD", "#0072B2", "#E69F00", "#009E73"]
+STORE_COLORS = ["#4D4D4D", "#999999", "#BDBDBD", "#0072B2", "#E69F00", "#D55E00", "#009E73"]
 
 
 def read_csv(name: str) -> list[dict]:
@@ -97,7 +99,7 @@ def style_log_ax(ax, ylabel):
 
 def plot_rate(summary, kind, ylabel, filename):
     fig, ax = plt.subplots(figsize=(5.2, 3.6))
-    for system in ("readcon-db", "ase.db"):
+    for system in ("readcon-db", "ase.db", "ase.db-txn"):
         xs, ys, lo, hi = series(summary, kind, system)
         if xs.size == 0:
             continue
@@ -152,13 +154,13 @@ def plot_disk(size_rows):
         return
     fig, ax = plt.subplots(figsize=(7.2, 3.8))
     x = np.arange(len(frames))
-    width = 0.12
+    width = 0.11
     for i, (store, label) in enumerate(STORES):
         heights = []
         for n in frames:
             match = [row for row in size_rows if int(row["n_frames"]) == n and row["store"] == store]
             heights.append(float(match[0]["allocated_bytes"]) if match else np.nan)
-        ax.bar(x + (i - 2.5) * width, heights, width, label=label, color=STORE_COLORS[i])
+        ax.bar(x + (i - 3) * width, heights, width, label=label, color=STORE_COLORS[i])
     ax.set_xticks(x)
     ax.set_xticklabels([f"{n:.0e}" for n in frames])
     ax.set_yscale("log")

@@ -29,6 +29,7 @@ HARNESS = EVAL / "harness" / "target" / "release" / "cpc-eval-harness"
 RESULTS = EVAL / "results"
 WORK = EVAL / "work"
 SYSTEMS = ("readcon-db", "ase.db", "con-directory")
+INGEST_SYSTEMS = ("readcon-db", "ase.db", "ase.db-txn")
 QUERIES = ("composition", "energy", "fmax")
 
 ENV = os.environ.copy()
@@ -249,22 +250,22 @@ def ingest_one(system: str, scale: Path, oracle: Path, n_frames: int, timeout: f
             timeout,
         )
         return data, dest
-    if system == "ase.db":
-        db = WORK / f"ase-{n_frames}.db"
-        data = call(
-            [
-                sys.executable,
-                rel(EVAL / "scripts" / "bench_ase.py"),
-                "ingest",
-                "--con",
-                rel(scale / "all.con"),
-                "--db",
-                rel(db),
-                "--oracle",
-                rel(oracle),
-            ],
-            timeout,
-        )
+    if system in ("ase.db", "ase.db-txn"):
+        db = WORK / (f"ase-txn-{n_frames}.db" if system == "ase.db-txn" else f"ase-{n_frames}.db")
+        argv = [
+            sys.executable,
+            rel(EVAL / "scripts" / "bench_ase.py"),
+            "ingest",
+            "--con",
+            rel(scale / "all.con"),
+            "--db",
+            rel(db),
+            "--oracle",
+            rel(oracle),
+        ]
+        if system == "ase.db-txn":
+            argv.append("--transaction")
+        data = call(argv, timeout)
         return data, db
     return {"ok": True, "seconds": None}, scale / "files"
 
@@ -320,7 +321,7 @@ def query_one(system: str, store: Path, oracle: Path, only: str, n_frames: int, 
 def cleanup(system: str, store: Path):
     if system == "readcon-db" and store.exists():
         subprocess.run(["rm", "-rf", str(store)], check=False)
-    elif system == "ase.db" and store.exists():
+    elif system in ("ase.db", "ase.db-txn") and store.exists():
         store.unlink(missing_ok=True)
 
 
@@ -332,6 +333,7 @@ def main():
     parser.add_argument("--append", action="store_true")
     parser.add_argument("--child-timeout", type=float, default=90)
     parser.add_argument("--dedup", action="store_true")
+    parser.add_argument("--ingest-only", action="store_true")
     parser.add_argument(
         "--ase-full-through",
         type=int,
@@ -351,29 +353,37 @@ def main():
     RESULTS.mkdir(parents=True, exist_ok=True)
     WORK.mkdir(parents=True, exist_ok=True)
 
-    hw = hardware()
-    hw["repeats"] = args.repeats
-    (RESULTS / "hardware.json").write_text(json.dumps(hw, indent=2) + "\n")
-    correctness = call(
-        [
-            str(HARNESS),
-            "correctness",
-            "--work",
-            rel(WORK / "correctness"),
-            "--out",
-            rel(RESULTS / "correctness.json"),
-        ],
-        args.child_timeout,
-    )
-    print(
-        f"correctness pass={correctness.get('n_pass')} fail={correctness.get('n_fail')}",
-        flush=True,
-    )
+    if not args.ingest_only:
+        hw = hardware()
+        hw["repeats"] = args.repeats
+        (RESULTS / "hardware.json").write_text(json.dumps(hw, indent=2) + "\n")
+        correctness = call(
+            [
+                str(HARNESS),
+                "correctness",
+                "--work",
+                rel(WORK / "correctness"),
+                "--out",
+                rel(RESULTS / "correctness.json"),
+            ],
+            args.child_timeout,
+        )
+        print(
+            f"correctness pass={correctness.get('n_pass')} fail={correctness.get('n_fail')}",
+            flush=True,
+        )
 
-    ingest_rows = load_rows(RESULTS / "ingest_repeats.csv") if args.append else []
-    query_rows = load_rows(RESULTS / "query_repeats.csv") if args.append else []
-    size_rows = load_rows(RESULTS / "sizes.csv") if args.append else []
+    keep_existing = args.append or args.ingest_only
+    ingest_rows = load_rows(RESULTS / "ingest_repeats.csv") if keep_existing else []
+    query_rows = load_rows(RESULTS / "query_repeats.csv") if keep_existing else []
+    size_rows = load_rows(RESULTS / "sizes.csv") if keep_existing else []
     repeat_ids = list(range(args.repeat_start, args.repeat_start + args.repeats))
+    if args.ingest_only:
+        ingest_rows = [
+            row
+            for row in ingest_rows
+            if not (int(row["n_frames"]) in sizes and int(row["repeat"]) in repeat_ids)
+        ]
 
     for n_frames in sizes:
         scale = EVAL / "data" / "scale" / f"n{n_frames}"
@@ -412,9 +422,12 @@ def main():
         )
 
         for rep in repeat_ids:
-            use_ase = n_frames <= args.ase_full_through or rep < args.ase_repeats_above
-            base = SYSTEMS if use_ase else ("readcon-db", "con-directory")
-            order = rotate(base, rep)
+            if args.ingest_only:
+                order = rotate(INGEST_SYSTEMS, rep)
+            else:
+                use_ase = n_frames <= args.ase_full_through or rep < args.ase_repeats_above
+                base = SYSTEMS if use_ase else ("readcon-db", "con-directory")
+                order = rotate(base, rep)
             qord = rotate(QUERIES, rep)
             stores = {}
             wall0 = time.perf_counter()
@@ -444,33 +457,34 @@ def main():
                 )
                 if not ok:
                     print(f"    ingest {system} failed: {data.get('error')}", flush=True)
-            for query in qord:
-                for system in order:
-                    store = stores.get(system)
-                    if store is None or (system != "con-directory" and not ingest_ok(ingest_rows, rep, n_frames, system)):
-                        continue
-                    data = query_one(system, store, oracle_path, query, n_frames, args.child_timeout)
-                    if not data.get("ok"):
+            if not args.ingest_only:
+                for query in qord:
+                    for system in order:
+                        store = stores.get(system)
+                        if store is None or (system != "con-directory" and not ingest_ok(ingest_rows, rep, n_frames, system)):
+                            continue
+                        data = query_one(system, store, oracle_path, query, n_frames, args.child_timeout)
+                        if not data.get("ok"):
+                            for cache in ("cold", "warm"):
+                                query_rows.append(fail_query(rep, n_frames, system, query, cache, data.get("error", "")))
+                            print(f"    query {system} {query} failed: {data.get('error')}", flush=True)
+                            continue
                         for cache in ("cold", "warm"):
-                            query_rows.append(fail_query(rep, n_frames, system, query, cache, data.get("error", "")))
-                        print(f"    query {system} {query} failed: {data.get('error')}", flush=True)
-                        continue
-                    for cache in ("cold", "warm"):
-                        block = data[cache][query]
-                        query_rows.append(
-                            {
-                                "repeat": rep,
-                                "n_frames": n_frames,
-                                "system": system,
-                                "query": query,
-                                "cache": cache,
-                                "seconds": block["seconds"],
-                                "hits": block["hits"],
-                                "index_sum": block["index_sum"],
-                                "ok": True,
-                                "error": "",
-                            }
-                        )
+                            block = data[cache][query]
+                            query_rows.append(
+                                {
+                                    "repeat": rep,
+                                    "n_frames": n_frames,
+                                    "system": system,
+                                    "query": query,
+                                    "cache": cache,
+                                    "seconds": block["seconds"],
+                                    "hits": block["hits"],
+                                    "index_sum": block["index_sum"],
+                                    "ok": True,
+                                    "error": "",
+                                }
+                            )
             for system, store in stores.items():
                 if system != "con-directory":
                     cleanup(system, store)
@@ -593,6 +607,8 @@ def refresh_db_sizes(size_rows, ingest_rows):
             continue
         if system == "readcon-db":
             note = "median file size over ingests; the map ceiling is 2 GiB and is not the file size"
+        elif system == "ase.db-txn":
+            note = "median over ingests; writes held in one ASE connection"
         else:
             note = "median over ingests"
         size_rows.append(median_size(n_frames, system, apparent, allocated, note))
@@ -633,7 +649,7 @@ def write_summary(ingest_rows, query_rows):
     summary = []
     sizes = sorted({int(row["n_frames"]) for row in ingest_rows} | {int(row["n_frames"]) for row in query_rows})
     for n_frames in sizes:
-        for system in ("readcon-db", "ase.db"):
+        for system in ("readcon-db", "ase.db", "ase.db-txn"):
             seconds = [
                 float(row["seconds"])
                 for row in ingest_rows
@@ -680,6 +696,7 @@ def write_summary(ingest_rows, query_rows):
                 paired_ratio(summary, query_rows, n_frames, query, cache, "readcon-db", "ase.db")
                 paired_ratio(summary, query_rows, n_frames, query, cache, "readcon-db", "con-directory")
         paired_ingest(summary, ingest_rows, n_frames, "readcon-db", "ase.db")
+        paired_ingest(summary, ingest_rows, n_frames, "readcon-db", "ase.db-txn")
     write_csv(
         RESULTS / "summary.csv",
         summary,

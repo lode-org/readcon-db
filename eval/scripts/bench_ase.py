@@ -89,7 +89,7 @@ def select_checked(db, query: str, expect_n: int, expect_sum: int) -> float:
     return time.perf_counter() - t0
 
 
-def do_ingest(con: Path, db_path: Path, oracle: dict) -> dict:
+def do_ingest(con: Path, db_path: Path, oracle: dict, transaction: bool) -> dict:
     if db_path.exists():
         db_path.unlink()
     # ASE's Lock waits forever, doubling the sleep, if a previous process
@@ -104,9 +104,18 @@ def do_ingest(con: Path, db_path: Path, oracle: dict) -> dict:
     t0 = time.perf_counter()
     db = connect(str(db_path))
     n = 0
-    for frame in readcon.iter_con(str(con)):
-        db.write(frame_to_atoms(frame), frame_index=n)
-        n += 1
+    frames = readcon.iter_con(str(con))
+    if transaction:
+        # Holding the connection batches commits. ASE still commits every
+        # 5000 writes inside the block, then once more on the way out.
+        with db:
+            for frame in frames:
+                db.write(frame_to_atoms(frame), frame_index=n)
+                n += 1
+    else:
+        for frame in frames:
+            db.write(frame_to_atoms(frame), frame_index=n)
+            n += 1
     seconds_check = select_checked(db, comp, expect_n, expect_sum)
     # select_checked has its own timer; the ingest timer is still running.
     del seconds_check
@@ -174,6 +183,7 @@ def main():
     ing.add_argument("--con", type=Path, required=True)
     ing.add_argument("--db", type=Path, required=True)
     ing.add_argument("--oracle", type=Path, required=True)
+    ing.add_argument("--transaction", action="store_true")
     qry = sub.add_parser("query")
     qry.add_argument("--db", type=Path, required=True)
     qry.add_argument("--oracle", type=Path, required=True)
@@ -182,7 +192,7 @@ def main():
     oracle = load_oracle(args.oracle)
     if args.cmd == "ingest":
         args.db.parent.mkdir(parents=True, exist_ok=True)
-        result = do_ingest(args.con, args.db, oracle)
+        result = do_ingest(args.con, args.db, oracle, args.transaction)
     else:
         result = do_query(args.db, oracle, args.only)
     print(json.dumps(result))
