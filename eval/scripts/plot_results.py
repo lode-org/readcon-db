@@ -61,8 +61,8 @@ def summary_lookup(rows):
 
 def err_from(row):
     med = float(row["median"])
-    lo = float(row["ci_lo"])
-    hi = float(row["ci_hi"])
+    lo = float(row["minimum"])
+    hi = float(row["maximum"])
     return med, max(med - lo, 0.0), max(hi - med, 0.0)
 
 

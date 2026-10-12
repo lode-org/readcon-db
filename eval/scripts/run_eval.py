@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Paired, interleaved repeats of ingest and queries.
+"""Five paired, interleaved repeats of ingest and queries.
 
 Thread environment variables are pinned to 1 before any child starts.
 Each timed child checks hit counts and index sums before it returns a time.
+The summary of each series is the median, the minimum, and the maximum.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from pathlib import Path
 
 import zstandard
 
-from stats import bootstrap_median
+from stats import spread
 
 ROOT = Path(__file__).resolve().parents[2]
 EVAL = ROOT / "eval"
@@ -176,7 +177,8 @@ def hardware() -> dict:
         "zstandard": zstandard.__version__,
         "threads": {k: ENV[k] for k in ENV if k.endswith("_THREADS") or k.endswith("_NUM_THREADS")},
         "page_cache_drop": try_drop_caches(),
-        "bootstrap": {"seed": 20261011, "resamples": 10000, "interval": "percentile 2.5 to 97.5 of the median"},
+        "repeats": 5,
+        "summary": "median, minimum, and maximum of the paired interleaved repeats",
         "megabyte": "1e6 bytes",
         "repeats_are_paired_and_interleaved": True,
     }
@@ -192,7 +194,7 @@ def write_csv(path: Path, rows: list[dict], fieldnames: list[str]):
 
 
 def add_summary(rows, kind, n_frames, system, query, cache, values):
-    stat = bootstrap_median(values)
+    stat = spread(values)
     rows.append(
         {
             "kind": kind,
@@ -201,11 +203,17 @@ def add_summary(rows, kind, n_frames, system, query, cache, values):
             "query": query,
             "cache": cache,
             "n": stat["n"],
-            "median": "" if stat["median"] is None else f"{stat['median']:.8g}",
-            "ci_lo": "" if stat["ci_lo"] is None else f"{stat['ci_lo']:.8g}",
-            "ci_hi": "" if stat["ci_hi"] is None else f"{stat['ci_hi']:.8g}",
+            "median": fmt(stat["median"]),
+            "minimum": fmt(stat["minimum"]),
+            "maximum": fmt(stat["maximum"]),
         }
     )
+
+
+def fmt(value):
+    if value is None:
+        return ""
+    return f"{value:.8g}"
 
 
 def ingest_one(system: str, scale: Path, oracle: Path, n_frames: int):
@@ -298,7 +306,7 @@ def cleanup(system: str, store: Path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--sizes", default="1000,10000,100000,1000000")
-    parser.add_argument("--repeats", type=int, default=30)
+    parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument(
         "--ase-full-through",
         type=int,
@@ -319,6 +327,7 @@ def main():
     WORK.mkdir(parents=True, exist_ok=True)
 
     hw = hardware()
+    hw["repeats"] = args.repeats
     (RESULTS / "hardware.json").write_text(json.dumps(hw, indent=2) + "\n")
     correctness = call(
         [
@@ -364,10 +373,10 @@ def main():
         oracle = json.loads(oracle_path.read_text())
         raw_b, gz_b, zst_b = compress_sizes(scale / "all.con")
         dir_app, dir_alloc = tree_bytes(scale / "files")
-        size_rows.append({"n_frames": n_frames, "store": "raw_con", "apparent_bytes": raw_b, "allocated_bytes": raw_b, "note": "multi-frame CON"})
-        size_rows.append({"n_frames": n_frames, "store": "gzip", "apparent_bytes": gz_b, "allocated_bytes": gz_b, "note": "gzip level 6"})
-        size_rows.append({"n_frames": n_frames, "store": "zstd", "apparent_bytes": zst_b, "allocated_bytes": zst_b, "note": "zstd level 3"})
-        size_rows.append({"n_frames": n_frames, "store": "con_directory", "apparent_bytes": dir_app, "allocated_bytes": dir_alloc, "note": "chunk files"})
+        size_rows.append(fixed_size(n_frames, "raw_con", raw_b, raw_b, "multi-frame CON"))
+        size_rows.append(fixed_size(n_frames, "gzip", gz_b, gz_b, "gzip level 6"))
+        size_rows.append(fixed_size(n_frames, "zstd", zst_b, zst_b, "zstd level 3"))
+        size_rows.append(fixed_size(n_frames, "con_directory", dir_app, dir_alloc, "chunk files"))
         print(
             f"n{n_frames} oracle frames={oracle['n_frames']} formula={oracle['composition']['formula']} "
             f"comp={oracle['composition']['n']} energy={oracle['energy']['n']} fmax={oracle['fmax']['n']}",
@@ -460,6 +469,7 @@ def main():
             size_rows.append(median_size(n_frames, "ase.db", ase_apparent, ase_alloc, "median over ingests"))
         # Flush after each size so a later size cannot erase earlier rows.
         dump_tables(ingest_rows, query_rows, size_rows)
+        write_summary(ingest_rows, query_rows)
 
     dedup_path = EVAL / "data" / "campaign" / "akmc_trace.con"
     if dedup_path.is_file() and dedup_path.stat().st_size > 0:
@@ -503,14 +513,28 @@ def fail_query(rep, n_frames, system, query, cache, error):
     }
 
 
+def fixed_size(n_frames, store, apparent, allocated, note):
+    return {
+        "n_frames": n_frames,
+        "store": store,
+        "apparent_bytes": apparent,
+        "allocated_bytes": allocated,
+        "allocated_minimum": allocated,
+        "allocated_maximum": allocated,
+        "note": note,
+    }
+
+
 def median_size(n_frames, store, apparent, allocated, note):
-    ap = bootstrap_median(apparent)
-    al = bootstrap_median(allocated)
+    ap = spread(apparent)
+    al = spread(allocated)
     return {
         "n_frames": n_frames,
         "store": store,
         "apparent_bytes": round(ap["median"]),
         "allocated_bytes": round(al["median"]),
+        "allocated_minimum": round(al["minimum"]),
+        "allocated_maximum": round(al["maximum"]),
         "note": note,
     }
 
@@ -529,7 +553,7 @@ def dump_tables(ingest_rows, query_rows, size_rows):
     write_csv(
         RESULTS / "sizes.csv",
         size_rows,
-        ["n_frames", "store", "apparent_bytes", "allocated_bytes", "note"],
+        ["n_frames", "store", "apparent_bytes", "allocated_bytes", "allocated_minimum", "allocated_maximum", "note"],
     )
 
 
@@ -600,7 +624,7 @@ def write_summary(ingest_rows, query_rows):
     write_csv(
         RESULTS / "summary.csv",
         summary,
-        ["kind", "n_frames", "system", "query", "cache", "n", "median", "ci_lo", "ci_hi"],
+        ["kind", "n_frames", "system", "query", "cache", "n", "median", "minimum", "maximum"],
     )
 
 

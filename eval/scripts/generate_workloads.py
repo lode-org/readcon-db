@@ -95,12 +95,11 @@ def stamp(frame, energy, frame_index, kind, neb_bead=None, neb_band=None):
         frame.set_neb_band(int(neb_band))
     meta = plain(dict(frame.metadata))
     meta["pbc"] = [True, True, True]
-    # from_ase leaves the user line empty. The writer then starts the file
-    # with a newline, and the streaming iterator skips that newline, so the
-    # JSON line is read as the user line and the box line is parsed as three
-    # floats that are not there. A non-empty user line keeps the header aligned.
-    # Postbox lines are likewise non-empty so a later blank line is only the
-    # force-section separator.
+    # Workaround, not a fix. from_ase leaves the user line empty, which is
+    # legal CON. readcon.iter_con drops that leading newline
+    # (readcon-core PyConFrameIterator::__next__). See
+    # eval/bugs/empty-user-line.md. A non-empty user line keeps the bytes
+    # on the path that the streaming reader accepts.
     return readcon.ConFrame(
         list(frame.cell),
         list(frame.angles),

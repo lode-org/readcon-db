@@ -18,9 +18,10 @@ those states. eOn is not required. Scale corpora repeat that ensemble out to
 the requested frame counts, with fresh EMT single points once the search tape
 is exhausted.
 
-Timings (`scripts/run_eval.py`): paired, interleaved repeats of ingest and of
+Timings (`scripts/run_eval.py`): five paired, interleaved repeats of ingest and of
 composition, energy-range, and max-force queries against `ase.db` (SQLite) and
-a directory of CON files scanned with readcon-core. Thread caps are set to 1.
+a directory of CON files scanned with readcon-core. Each series is summarized
+by its median, minimum, and maximum. Thread caps are set to 1.
 
 ## Run
 
@@ -29,7 +30,7 @@ From the repository root, with the release profile:
 ```bash
 python3 eval/scripts/generate_workloads.py --sizes 1000,10000,100000,1000000
 cargo build --release --manifest-path eval/harness/Cargo.toml
-python3 eval/scripts/run_eval.py --repeats 30
+python3 eval/scripts/run_eval.py --repeats 5
 python3 eval/scripts/plot_results.py
 ```
 
