@@ -28,11 +28,16 @@ by its median, minimum, and maximum. Thread caps are set to 1.
 From the repository root, with the release profile:
 
 ```bash
-python3 eval/scripts/generate_workloads.py --sizes 1000,10000,100000,1000000
+python3 eval/scripts/generate_workloads.py --sizes 1000,10000
 cargo build --release --manifest-path eval/harness/Cargo.toml
-python3 eval/scripts/run_eval.py --repeats 5
+python3 eval/scripts/run_eval.py --sizes 1000,10000 --repeats 5 --child-timeout 90
 python3 eval/scripts/plot_results.py
 ```
+
+A full interleaved repeat at 100000 frames does not finish in two minutes, because
+`ase.db` ingest is about two hundred frames per second. One million frames does
+not fit in the 2 GiB LMDB map (`MDB_MAP_FULL`). Those sizes are not in the
+timed table.
 
 Numbers land in `eval/results/`. `eval/RESULTS.md` states them.
 Scale CON trees under `eval/data/scale/` are rebuilt by the generator and are

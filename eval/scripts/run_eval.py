@@ -16,6 +16,7 @@ import os
 import platform
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import zstandard
@@ -56,11 +57,26 @@ def rotate(items, shift):
     return items[k:] + items[:k]
 
 
-def call(argv: list[str]) -> dict:
-    proc = subprocess.run(argv, cwd=ROOT, env=ENV, text=True, capture_output=True)
-    lines = [line for line in proc.stdout.splitlines() if line.strip()]
+def call(argv: list[str], timeout: float) -> dict:
+    # The child runs in its own group so a timeout can stop it.
+    proc = subprocess.Popen(
+        argv,
+        cwd=ROOT,
+        env=ENV,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, 9)
+        proc.communicate()
+        return {"ok": False, "error": f"timeout after {timeout:.0f}s"}
+    lines = [line for line in (stdout or "").splitlines() if line.strip()]
     if not lines:
-        return {"ok": False, "error": scrub(proc.stderr) or "no output"}
+        return {"ok": False, "error": scrub(stderr or "") or "no output"}
     try:
         data = json.loads(lines[-1])
     except json.JSONDecodeError:
@@ -68,7 +84,7 @@ def call(argv: list[str]) -> dict:
     if proc.returncode != 0:
         data["ok"] = False
         if "error" not in data:
-            data["error"] = scrub(proc.stderr) or "child failed"
+            data["error"] = scrub(stderr or "") or "child failed"
     return data
 
 
@@ -216,7 +232,7 @@ def fmt(value):
     return f"{value:.8g}"
 
 
-def ingest_one(system: str, scale: Path, oracle: Path, n_frames: int):
+def ingest_one(system: str, scale: Path, oracle: Path, n_frames: int, timeout: float):
     if system == "readcon-db":
         dest = WORK / f"rdb-{n_frames}"
         data = call(
@@ -229,7 +245,8 @@ def ingest_one(system: str, scale: Path, oracle: Path, n_frames: int):
                 rel(dest),
                 "--oracle",
                 rel(oracle),
-            ]
+            ],
+            timeout,
         )
         return data, dest
     if system == "ase.db":
@@ -245,13 +262,14 @@ def ingest_one(system: str, scale: Path, oracle: Path, n_frames: int):
                 rel(db),
                 "--oracle",
                 rel(oracle),
-            ]
+            ],
+            timeout,
         )
         return data, db
     return {"ok": True, "seconds": None}, scale / "files"
 
 
-def query_one(system: str, store: Path, oracle: Path, only: str, n_frames: int):
+def query_one(system: str, store: Path, oracle: Path, only: str, n_frames: int, timeout: float):
     if system == "readcon-db":
         fadvise(store / "data.mdb")
         return call(
@@ -264,7 +282,8 @@ def query_one(system: str, store: Path, oracle: Path, only: str, n_frames: int):
                 rel(oracle),
                 "--only",
                 only,
-            ]
+            ],
+            timeout,
         )
     if system == "ase.db":
         fadvise(store)
@@ -279,7 +298,8 @@ def query_one(system: str, store: Path, oracle: Path, only: str, n_frames: int):
                 rel(oracle),
                 "--only",
                 only,
-            ]
+            ],
+            timeout,
         )
     fadvise_tree(store)
     return call(
@@ -292,7 +312,8 @@ def query_one(system: str, store: Path, oracle: Path, only: str, n_frames: int):
             rel(oracle),
             "--only",
             only,
-        ]
+        ],
+        timeout,
     )
 
 
@@ -305,8 +326,12 @@ def cleanup(system: str, store: Path):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--sizes", default="1000,10000,100000,1000000")
+    parser.add_argument("--sizes", default="1000,10000")
     parser.add_argument("--repeats", type=int, default=5)
+    parser.add_argument("--repeat-start", type=int, default=0)
+    parser.add_argument("--append", action="store_true")
+    parser.add_argument("--child-timeout", type=float, default=90)
+    parser.add_argument("--dedup", action="store_true")
     parser.add_argument(
         "--ase-full-through",
         type=int,
@@ -337,16 +362,18 @@ def main():
             rel(WORK / "correctness"),
             "--out",
             rel(RESULTS / "correctness.json"),
-        ]
+        ],
+        args.child_timeout,
     )
     print(
         f"correctness pass={correctness.get('n_pass')} fail={correctness.get('n_fail')}",
         flush=True,
     )
 
-    ingest_rows = []
-    query_rows = []
-    size_rows = []
+    ingest_rows = load_rows(RESULTS / "ingest_repeats.csv") if args.append else []
+    query_rows = load_rows(RESULTS / "query_repeats.csv") if args.append else []
+    size_rows = load_rows(RESULTS / "sizes.csv") if args.append else []
+    repeat_ids = list(range(args.repeat_start, args.repeat_start + args.repeats))
 
     for n_frames in sizes:
         scale = EVAL / "data" / "scale" / f"n{n_frames}"
@@ -365,7 +392,8 @@ def main():
                     rel(scale / "all.con"),
                     "--out",
                     rel(oracle_path),
-                ]
+                ],
+                args.child_timeout,
             )
             if made.get("ok") is False or "n_frames" not in made and not oracle_path.is_file():
                 print(f"oracle failed for n{n_frames}: {made.get('error')}", flush=True)
@@ -373,34 +401,29 @@ def main():
         oracle = json.loads(oracle_path.read_text())
         raw_b, gz_b, zst_b = compress_sizes(scale / "all.con")
         dir_app, dir_alloc = tree_bytes(scale / "files")
-        size_rows.append(fixed_size(n_frames, "raw_con", raw_b, raw_b, "multi-frame CON"))
-        size_rows.append(fixed_size(n_frames, "gzip", gz_b, gz_b, "gzip level 6"))
-        size_rows.append(fixed_size(n_frames, "zstd", zst_b, zst_b, "zstd level 3"))
-        size_rows.append(fixed_size(n_frames, "con_directory", dir_app, dir_alloc, "chunk files"))
+        upsert_fixed(size_rows, n_frames, "raw_con", raw_b, raw_b, "multi-frame CON")
+        upsert_fixed(size_rows, n_frames, "gzip", gz_b, gz_b, "gzip level 6")
+        upsert_fixed(size_rows, n_frames, "zstd", zst_b, zst_b, "zstd level 3")
+        upsert_fixed(size_rows, n_frames, "con_directory", dir_app, dir_alloc, "chunk files")
         print(
             f"n{n_frames} oracle frames={oracle['n_frames']} formula={oracle['composition']['formula']} "
             f"comp={oracle['composition']['n']} energy={oracle['energy']['n']} fmax={oracle['fmax']['n']}",
             flush=True,
         )
 
-        rdb_alloc = []
-        ase_alloc = []
-        rdb_apparent = []
-        ase_apparent = []
-        rdb_fail_alloc = []
-        rdb_fail_apparent = []
-        for rep in range(args.repeats):
+        for rep in repeat_ids:
             use_ase = n_frames <= args.ase_full_through or rep < args.ase_repeats_above
             base = SYSTEMS if use_ase else ("readcon-db", "con-directory")
             order = rotate(base, rep)
             qord = rotate(QUERIES, rep)
             stores = {}
+            wall0 = time.perf_counter()
             print(f"  repeat {rep} order={','.join(order)}", flush=True)
             for position, system in enumerate(order):
                 if system == "con-directory":
                     stores[system] = scale / "files"
                     continue
-                data, store = ingest_one(system, scale, oracle_path, n_frames)
+                data, store = ingest_one(system, scale, oracle_path, n_frames, args.child_timeout)
                 stores[system] = store
                 ok = bool(data.get("ok"))
                 ingest_rows.append(
@@ -419,24 +442,14 @@ def main():
                         "error": "" if ok else scrub(str(data.get("error", ""))),
                     }
                 )
-                if ok:
-                    if system == "readcon-db":
-                        rdb_alloc.append(int(data["allocated_bytes"]))
-                        rdb_apparent.append(int(data["apparent_bytes"]))
-                    elif system == "ase.db":
-                        ase_alloc.append(int(data["allocated_bytes"]))
-                        ase_apparent.append(int(data["apparent_bytes"]))
-                else:
+                if not ok:
                     print(f"    ingest {system} failed: {data.get('error')}", flush=True)
-                    if system == "readcon-db" and data.get("allocated_bytes") not in ("", None):
-                        rdb_fail_alloc.append(int(data["allocated_bytes"]))
-                        rdb_fail_apparent.append(int(data.get("apparent_bytes") or 0))
             for query in qord:
                 for system in order:
                     store = stores.get(system)
                     if store is None or (system != "con-directory" and not ingest_ok(ingest_rows, rep, n_frames, system)):
                         continue
-                    data = query_one(system, store, oracle_path, query, n_frames)
+                    data = query_one(system, store, oracle_path, query, n_frames, args.child_timeout)
                     if not data.get("ok"):
                         for cache in ("cold", "warm"):
                             query_rows.append(fail_query(rep, n_frames, system, query, cache, data.get("error", "")))
@@ -461,32 +474,32 @@ def main():
             for system, store in stores.items():
                 if system != "con-directory":
                     cleanup(system, store)
-        if rdb_alloc:
-            size_rows.append(median_size(n_frames, "readcon-db", rdb_apparent, rdb_alloc, "median over ingests; apparent size is the LMDB map"))
-        elif rdb_fail_alloc:
-            size_rows.append(median_size(n_frames, "readcon-db", rdb_fail_apparent, rdb_fail_alloc, "ingest did not finish; median allocated bytes at failure"))
-        if ase_alloc:
-            size_rows.append(median_size(n_frames, "ase.db", ase_apparent, ase_alloc, "median over ingests"))
-        # Flush after each size so a later size cannot erase earlier rows.
-        dump_tables(ingest_rows, query_rows, size_rows)
-        write_summary(ingest_rows, query_rows)
+            wall = time.perf_counter() - wall0
+            refresh_db_sizes(size_rows, ingest_rows)
+            dump_tables(ingest_rows, query_rows, size_rows)
+            write_summary(ingest_rows, query_rows)
+            print(f"  repeat {rep} n{n_frames} wall {wall:.1f}s", flush=True)
+            if wall > 120:
+                print(f"  repeat {rep} n{n_frames} exceeded 120s", flush=True)
 
-    dedup_path = EVAL / "data" / "campaign" / "akmc_trace.con"
-    if dedup_path.is_file() and dedup_path.stat().st_size > 0:
-        dedup = call(
-            [
-                str(HARNESS),
-                "dedup",
-                "--con",
-                rel(dedup_path),
-                "--dest",
-                rel(WORK / "dedup-corpus"),
-            ]
-        )
-        (RESULTS / "dedup.json").write_text(json.dumps(dedup, indent=2) + "\n")
-        print(f"dedup ok={dedup.get('ok')} unique={dedup.get('n_unique_hashes')} frames={dedup.get('n_frames')}", flush=True)
-    else:
-        print("no aKMC trace to measure", flush=True)
+    if args.dedup:
+        dedup_path = EVAL / "data" / "campaign" / "akmc_trace.con"
+        if dedup_path.is_file() and dedup_path.stat().st_size > 0:
+            dedup = call(
+                [
+                    str(HARNESS),
+                    "dedup",
+                    "--con",
+                    rel(dedup_path),
+                    "--dest",
+                    rel(WORK / "dedup-corpus"),
+                ],
+                args.child_timeout,
+            )
+            (RESULTS / "dedup.json").write_text(json.dumps(dedup, indent=2) + "\n")
+            print(f"dedup ok={dedup.get('ok')} unique={dedup.get('n_unique_hashes')} frames={dedup.get('n_frames')}", flush=True)
+        else:
+            print("no aKMC trace to measure", flush=True)
     write_summary(ingest_rows, query_rows)
     print("wrote results", flush=True)
 
@@ -537,6 +550,52 @@ def median_size(n_frames, store, apparent, allocated, note):
         "allocated_maximum": round(al["maximum"]),
         "note": note,
     }
+
+
+def load_rows(path: Path) -> list[dict]:
+    if not path.is_file():
+        return []
+    with path.open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    for row in rows:
+        if "ok" in row:
+            row["ok"] = str(row["ok"]).lower() == "true"
+        for key in ("repeat", "n_frames", "position"):
+            if key in row and row[key] not in ("", None):
+                row[key] = int(row[key])
+    return rows
+
+
+def upsert_fixed(rows, n_frames, store, apparent, allocated, note):
+    row = fixed_size(n_frames, store, apparent, allocated, note)
+    for i, old in enumerate(rows):
+        if int(old["n_frames"]) == int(n_frames) and old["store"] == store:
+            rows[i] = row
+            return
+    rows.append(row)
+
+
+def refresh_db_sizes(size_rows, ingest_rows):
+    kept = [row for row in size_rows if row["store"] not in ("readcon-db", "ase.db")]
+    size_rows[:] = kept
+    pairs = sorted({(int(row["n_frames"]), row["system"]) for row in ingest_rows})
+    for n_frames, system in pairs:
+        apparent = []
+        allocated = []
+        for row in ingest_rows:
+            if not row["ok"] or int(row["n_frames"]) != n_frames or row["system"] != system:
+                continue
+            if row.get("apparent_bytes") in ("", None) or row.get("allocated_bytes") in ("", None):
+                continue
+            apparent.append(float(row["apparent_bytes"]))
+            allocated.append(float(row["allocated_bytes"]))
+        if not apparent:
+            continue
+        if system == "readcon-db":
+            note = "median file size over ingests; the map ceiling is 2 GiB and is not the file size"
+        else:
+            note = "median over ingests"
+        size_rows.append(median_size(n_frames, system, apparent, allocated, note))
 
 
 def dump_tables(ingest_rows, query_rows, size_rows):
