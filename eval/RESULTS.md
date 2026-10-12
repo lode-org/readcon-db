@@ -42,8 +42,8 @@ corpus. That is a workaround for the reader bug in
 
 ## Correctness
 
-Nine checks, eight pass, one fail. The failure is listed under bugs and was
-not fixed.
+Nine checks, nine pass. The hash-index check failed before the unit-change
+fix and passes on this tree.
 
 | check | pass |
 | --- | --- |
@@ -55,7 +55,7 @@ not fixed.
 | rebuild_from_text | yes |
 | reindex_twice | yes |
 | numeric_cache_ignored | yes |
-| hash_index_survives_rewrite_of_duplicate | no |
+| hash_index_survives_rewrite_of_duplicate | yes |
 
 Identical bytes share one hash-index entry and each frame still keeps its own
 text. A one-digit coordinate change produces a new digest; both digests remain
@@ -164,18 +164,21 @@ state and its saddle, and both Pt–H states plus that saddle.
 
 Figure: `eval/results/figures/dedup.pdf`.
 
-## Bugs left as they are
+## Bugs
 
-1. Rewriting one copy of a duplicated frame deletes the hash-index entry even
-   though another frame still holds those bytes. After `set_trajectory_units`
-   on trajectory 1, trajectory 2 is still stored and `find_by_hash` returns
-   nothing. `reindex` restores the entry to trajectory 2, frame 0. This is the
-   failed correctness check.
-2. Python `ConCorpus.select` always applies `natoms_range`, including the
+`set_trajectory_units` used to delete the `frame_by_hash` posting even when
+another frame still stored those bytes. The posting now moves to a frame that
+still has the digest, or is removed when none does. A sole frame's old digest
+is dropped and its new digest is posted. The eval check and the library
+regression tests cover both cases.
+
+These two are unchanged:
+
+1. Python `ConCorpus.select` always applies `natoms_range`, including the
    default `0` to `u32::MAX` (`src/python.rs`). Every Python query therefore
    walks `idx_natoms`. The timed readcon-db queries use the Rust `Select` API
    and do not add that predicate.
-3. `readcon.iter_con` (`PyConFrameIterator::__next__` in readcon-core
+2. `readcon.iter_con` (`PyConFrameIterator::__next__` in readcon-core
    `src/python.rs`) skips a leading newline, so an empty user line shifts the
    header and the parse fails. `read_con` on one such frame keeps the empty
    user line. Two concatenated frames also break `count_frames` and velocity

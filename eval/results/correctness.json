@@ -41,12 +41,12 @@
       "pass": true
     },
     {
-      "detail": "after rewriting traj 1, identical traj 2 still stored=true, find_by_hash returns None (expected the surviving key), after reindex Some(FrameKey { traj_id: 2, frame_idx: 0 })",
+      "detail": "after rewriting traj 1, identical traj 2 still stored=true, find_by_hash returns Some(FrameKey { traj_id: 2, frame_idx: 0 }) (expected the surviving key), after reindex Some(FrameKey { traj_id: 2, frame_idx: 0 })",
       "name": "hash_index_survives_rewrite_of_duplicate",
-      "pass": false
+      "pass": true
     }
   ],
   "n_checks": 9,
-  "n_fail": 1,
-  "n_pass": 8
+  "n_fail": 0,
+  "n_pass": 9
 }
