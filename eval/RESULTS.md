@@ -66,18 +66,32 @@ periodicity mask.
 ## Ingest
 
 The clock starts before `append_trajectory_path` (or the ASE write loop) and
-stops after a composition check. The directory of CON files has no ingest
-step. System order rotates on each repeat.
+stops after a composition check. These five repeats were run again for ingest
+only. Queries above are the earlier five repeats. System order rotates on
+each repeat.
+
+`ase.db` commits every `write`. `ase.db-txn` holds the connection with
+`with db:`, which is the batch write ASE documents. Inside that block ASE
+still commits every 5000 rows, so 1000 frames is one commit and 10000 frames
+is two commits, plus the commit when the block ends.
+
+The CON directory has no write loop and no per-row commit. Its files are
+64-frame chunks (16 files at 1000 frames, 157 at 10000). A composition scan
+of those chunks and of the one concatenated file agree: warm time is 0.014 s
+at 1000 frames and 0.14 s at 10000 frames either way. There is no second
+directory ingest.
 
 | frames | system | seconds | frames/s | MB/s |
 | --- | --- | --- | --- | --- |
-| 1000 | readcon-db | 0.03252 (0.02893–0.03839) | 30748 (26051–34562) | 33.46 (28.35–37.61) |
-| 1000 | ase.db | 4.918 (4.702–5.710) | 203.4 (175.1–212.7) | 0.2213 (0.1906–0.2314) |
-| 10000 | readcon-db | 0.3017 (0.2818–0.3508) | 33150 (28507–35480) | 36.21 (31.14–38.76) |
-| 10000 | ase.db | 51.76 (49.83–55.98) | 193.2 (178.6–200.7) | 0.2110 (0.1951–0.2192) |
+| 1000 | readcon-db | 0.03289 (0.02963–0.03320) | 30403 (30124–33746) | 33.08 (32.78–36.72) |
+| 1000 | ase.db | 5.034 (4.671–5.813) | 198.7 (172.0–214.1) | 0.2162 (0.1872–0.2330) |
+| 1000 | ase.db-txn | 0.6461 (0.6192–0.6769) | 1548 (1477–1615) | 1.684 (1.608–1.757) |
+| 10000 | readcon-db | 0.3113 (0.2875–0.3313) | 32123 (30186–34785) | 35.09 (32.97–38.00) |
+| 10000 | ase.db | 48.41 (45.51–50.74) | 206.6 (197.1–219.7) | 0.2256 (0.2153–0.2400) |
+| 10000 | ase.db-txn | 5.985 (5.884–6.286) | 1671 (1591–1700) | 1.825 (1.738–1.857) |
 
-Each cell is median (minimum–maximum). The sum of recorded child times in one
-repeat is 5.0–6.1 s at 1000 frames and 52.6–58.8 s at 10000 frames.
+Each cell is median (minimum–maximum). A repeat's wall time, including both
+ASE writes, was 6.1–7.2 s at 1000 frames and 52.7–57.8 s at 10000 frames.
 
 Figures: `eval/results/figures/ingest_throughput.pdf`,
 `eval/results/figures/ingest_bandwidth.pdf`. Error bars run from the minimum
@@ -127,9 +141,11 @@ The 2 GiB value is the map ceiling, not the file.
 | zstd level 3 | 270863 | 3312800 |
 | CON directory | 1134592 | 11501568 |
 | readcon-db | 2723840 | 27340800 |
-| ase.db | 966656 (962560–970752) | 8921088 (8912896–8929280) |
+| ase.db | 966656 (962560–974848) | 8929280 (8921088–8953856) |
+| ase.db-txn | 958464 (954368–974848) | 8912896 (8904704–8945664) |
 
-readcon-db is about 2.5 times the raw CON text (text plus indexes). ase.db is
+readcon-db is 2.50 times the raw CON text (2723840/1088101 and
+27340800/10923745): the stored text plus indexes. Both ase.db files are
 smaller than the raw text. zstd level 3 is smaller than gzip level 6 at 1000
 frames and larger at 10000 frames.
 

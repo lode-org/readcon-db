@@ -590,7 +590,7 @@ def upsert_fixed(rows, n_frames, store, apparent, allocated, note):
 
 
 def refresh_db_sizes(size_rows, ingest_rows):
-    kept = [row for row in size_rows if row["store"] not in ("readcon-db", "ase.db")]
+    kept = [row for row in size_rows if row["store"] not in ("readcon-db", "ase.db", "ase.db-txn")]
     size_rows[:] = kept
     pairs = sorted({(int(row["n_frames"]), row["system"]) for row in ingest_rows})
     for n_frames, system in pairs:
