@@ -92,6 +92,11 @@ def select_checked(db, query: str, expect_n: int, expect_sum: int) -> float:
 def do_ingest(con: Path, db_path: Path, oracle: dict) -> dict:
     if db_path.exists():
         db_path.unlink()
+    # ASE's Lock waits forever, doubling the sleep, if a previous process
+    # died and left database.lock behind.
+    lock = db_path.with_name(db_path.name + ".lock")
+    if lock.exists():
+        lock.unlink()
     raw_bytes = con.stat().st_size
     comp = formula_query(oracle["composition"]["formula"])
     expect_n = int(oracle["composition"]["n"])
