@@ -1,0 +1,328 @@
+{
+  "zstd_version": [
+    1,
+    5,
+    7
+  ],
+  "cpu": "Intel(R) Xeon(R) Processor",
+  "python": "3.12.3",
+  "generate_seconds": 4.849934163000171,
+  "force_to_accel": 0.009648533215665327,
+  "ke_to_ev": 103.64269652680505,
+  "md": {
+    "n_atoms": 256,
+    "n_frames": 600,
+    "counts": [
+      205,
+      51
+    ],
+    "dt_fs": 5.0,
+    "temperature_K": 400.0,
+    "energy_first_eV": -327.89272247428715,
+    "energy_last_eV": -327.85134545987387,
+    "energy_rel_span": 0.00025094302818335425,
+    "rms_step_A_min": 0.009074298994879016,
+    "rms_step_A_max": 0.01981799756917337
+  },
+  "neb": {
+    "n_atoms": 107,
+    "n_frames": 19,
+    "symbols": [
+      "Al"
+    ],
+    "barrier_eV": 0.8604855508298215,
+    "endpoint_fmax": [
+      8.005525843287826e-07,
+      8.005525851886536e-07
+    ],
+    "saddle_index": 9,
+    "energies_eV": [
+      -143.0375323883842,
+      -143.0116163275353,
+      -142.93014451959522,
+      -142.8044988871091,
+      -142.6545256652122,
+      -142.50590201251038,
+      -142.3724225298316,
+      -142.26726777415115,
+      -142.2002223973886,
+      -142.17704683755437,
+      -142.2011667150065,
+      -142.26831827093906,
+      -142.37314698533737,
+      -142.50625791013698,
+      -142.65466383522926,
+      -142.80453819517544,
+      -142.93015175870806,
+      -143.01161562544272,
+      -143.0375323883842
+    ]
+  },
+  "n_frames_total": 619,
+  "n_unique_frames": 619,
+  "raw_con_bytes": 35611626,
+  "per_traj_raw": {
+    "md": {
+      "n_atoms": 256,
+      "n_frames": 600,
+      "symbols": [
+        "Cu",
+        "Ni"
+      ],
+      "raw_con_bytes": 35297084,
+      "raw_con_per_frame": 58828
+    },
+    "neb": {
+      "n_atoms": 107,
+      "n_frames": 19,
+      "symbols": [
+        "Al"
+      ],
+      "raw_con_bytes": 314542,
+      "raw_con_per_frame": 16554
+    }
+  },
+  "text_payload": {
+    "plain": 35611626,
+    "zstd-l3": 15364807,
+    "zstd-dict-l3": 15079644,
+    "dict_bytes": 32768,
+    "train_frames": 39,
+    "train_raw_bytes": 1998489,
+    "train_dict_compressed_bytes": 817212,
+    "held_md_frames": 568,
+    "held_md_raw_bytes": 33414486,
+    "held_md_dict_compressed_bytes": 14201804,
+    "held_neb_frames": 12,
+    "held_neb_raw_bytes": 198651,
+    "held_neb_dict_compressed_bytes": 60628,
+    "pack_seconds": 0.4931006389999766
+  },
+  "stores": {
+    "plain": {
+      "lmdb": {
+        "page_size": 4096,
+        "last_pgno": 9102,
+        "used_bytes": 37285888,
+        "file_bytes": 37285888
+      },
+      "value_bytes": 35611626,
+      "latency": {
+        "warm_ns_per_frame_median_of_5": 2510.9208400646203,
+        "warm_ns_per_frame_min": 2444.1017770597737,
+        "warm_us_per_frame": 2.51092084006462,
+        "cold_us_p50": 2.692,
+        "cold_us_p90": 2.853,
+        "checksum": 897388,
+        "n_frames": 619
+      }
+    },
+    "zstd-l3": {
+      "lmdb": {
+        "page_size": 4096,
+        "last_pgno": 4243,
+        "used_bytes": 17383424,
+        "file_bytes": 17383424
+      },
+      "value_bytes": 15364807,
+      "latency": {
+        "warm_ns_per_frame_median_of_5": 49657.256865912765,
+        "warm_ns_per_frame_min": 49481.411954765754,
+        "warm_us_per_frame": 49.657256865912764,
+        "cold_us_p50": 51.417,
+        "cold_us_p90": 52.09,
+        "checksum": 897388,
+        "n_frames": 619
+      }
+    },
+    "zstd-dict-l3": {
+      "lmdb": {
+        "page_size": 4096,
+        "last_pgno": 4245,
+        "used_bytes": 17391616,
+        "file_bytes": 17391616
+      },
+      "value_bytes": 15112412,
+      "latency": {
+        "warm_ns_per_frame_median_of_5": 65859.7576736672,
+        "warm_ns_per_frame_min": 65642.92891760905,
+        "warm_us_per_frame": 65.8597576736672,
+        "cold_us_p50": 66.977,
+        "cold_us_p90": 68.127,
+        "checksum": 897388,
+        "n_frames": 619
+      }
+    },
+    "soa-c1": {
+      "lmdb": {
+        "page_size": 4096,
+        "last_pgno": 3053,
+        "used_bytes": 12509184,
+        "file_bytes": 12509184
+      },
+      "value_bytes": 10179186,
+      "locator_bytes": 9904,
+      "latency": {
+        "warm_ns_per_frame_median_of_5": 20403.07592891761,
+        "warm_ns_per_frame_min": 19126.327948303715,
+        "warm_us_per_frame": 20.40307592891761,
+        "cold_us_p50": 20.862,
+        "cold_us_p90": 21.314,
+        "checksum": 801635,
+        "n_frames": 619,
+        "cold_note": "chunk cache cleared before every cold get"
+      },
+      "chunk": 1,
+      "xor": false,
+      "per_traj": {
+        "md": {
+          "raw_soa_bytes": 11059200,
+          "stored_chunk_bytes": 10099928,
+          "n_frames": 600
+        },
+        "neb": {
+          "raw_soa_bytes": 97584,
+          "stored_chunk_bytes": 79258,
+          "n_frames": 19
+        }
+      }
+    },
+    "soa-c8": {
+      "lmdb": {
+        "page_size": 4096,
+        "last_pgno": 2509,
+        "used_bytes": 10280960,
+        "file_bytes": 10280960
+      },
+      "value_bytes": 10047701,
+      "locator_bytes": 9904,
+      "latency": {
+        "warm_ns_per_frame_median_of_5": 123165.20678513731,
+        "warm_ns_per_frame_min": 118961.7802907916,
+        "warm_us_per_frame": 123.16520678513731,
+        "cold_us_p50": 119.449,
+        "cold_us_p90": 132.873,
+        "checksum": 801635,
+        "n_frames": 619,
+        "cold_note": "chunk cache cleared before every cold get"
+      },
+      "chunk": 8,
+      "xor": false,
+      "per_traj": {
+        "md": {
+          "raw_soa_bytes": 11059200,
+          "stored_chunk_bytes": 9972255,
+          "n_frames": 600
+        },
+        "neb": {
+          "raw_soa_bytes": 97584,
+          "stored_chunk_bytes": 75446,
+          "n_frames": 19
+        }
+      }
+    },
+    "soa-c8-xor": {
+      "lmdb": {
+        "page_size": 4096,
+        "last_pgno": 2407,
+        "used_bytes": 9863168,
+        "file_bytes": 9863168
+      },
+      "value_bytes": 9607818,
+      "locator_bytes": 9904,
+      "latency": {
+        "warm_ns_per_frame_median_of_5": 142919.37802907915,
+        "warm_ns_per_frame_min": 138444.93699515346,
+        "warm_us_per_frame": 142.91937802907916,
+        "cold_us_p50": 143.37,
+        "cold_us_p90": 170.683,
+        "checksum": 801635,
+        "n_frames": 619,
+        "cold_note": "chunk cache cleared before every cold get"
+      },
+      "chunk": 8,
+      "xor": true,
+      "per_traj": {
+        "md": {
+          "raw_soa_bytes": 11059200,
+          "stored_chunk_bytes": 9531597,
+          "n_frames": 600
+        },
+        "neb": {
+          "raw_soa_bytes": 97584,
+          "stored_chunk_bytes": 76221,
+          "n_frames": 19
+        }
+      }
+    },
+    "soa-c32": {
+      "lmdb": {
+        "page_size": 4096,
+        "last_pgno": 2410,
+        "used_bytes": 9875456,
+        "file_bytes": 9875456
+      },
+      "value_bytes": 9776728,
+      "locator_bytes": 9904,
+      "latency": {
+        "warm_ns_per_frame_median_of_5": 564206.873990307,
+        "warm_ns_per_frame_min": 558560.6526655897,
+        "warm_us_per_frame": 564.206873990307,
+        "cold_us_p50": 600.638,
+        "cold_us_p90": 666.663,
+        "checksum": 801635,
+        "n_frames": 619,
+        "cold_note": "chunk cache cleared before every cold get"
+      },
+      "chunk": 32,
+      "xor": false,
+      "per_traj": {
+        "md": {
+          "raw_soa_bytes": 11059200,
+          "stored_chunk_bytes": 9703961,
+          "n_frames": 600
+        },
+        "neb": {
+          "raw_soa_bytes": 97584,
+          "stored_chunk_bytes": 72767,
+          "n_frames": 19
+        }
+      }
+    },
+    "soa-c32-xor": {
+      "lmdb": {
+        "page_size": 4096,
+        "last_pgno": 2300,
+        "used_bytes": 9424896,
+        "file_bytes": 9424896
+      },
+      "value_bytes": 9304176,
+      "locator_bytes": 9904,
+      "latency": {
+        "warm_ns_per_frame_median_of_5": 607714.3909531502,
+        "warm_ns_per_frame_min": 598531.6995153474,
+        "warm_us_per_frame": 607.7143909531502,
+        "cold_us_p50": 629.224,
+        "cold_us_p90": 682.842,
+        "checksum": 801635,
+        "n_frames": 619,
+        "cold_note": "chunk cache cleared before every cold get"
+      },
+      "chunk": 32,
+      "xor": true,
+      "per_traj": {
+        "md": {
+          "raw_soa_bytes": 11059200,
+          "stored_chunk_bytes": 9231665,
+          "n_frames": 600
+        },
+        "neb": {
+          "raw_soa_bytes": 97584,
+          "stored_chunk_bytes": 72511,
+          "n_frames": 19
+        }
+      }
+    }
+  },
+  "corpus_sha256_16": "165c617a7ce72f4b"
+}

@@ -1,0 +1,136 @@
+{
+  "levels": {
+    "1": {
+      "payload_bytes": 15225017,
+      "compress_seconds": 0.09693802699985099,
+      "decompress_seconds": 0.03509755900017808,
+      "decompress_us_per_frame": 56.70041841708898,
+      "compress_MiB_per_s": 367.3648732303448,
+      "per_traj": {
+        "md": {
+          "raw_bytes": 35297084,
+          "zstd_bytes": 15129210,
+          "ratio_raw_over_zstd": 2.3330421086097686
+        },
+        "neb": {
+          "raw_bytes": 314542,
+          "zstd_bytes": 95807,
+          "ratio_raw_over_zstd": 3.2830795244606343
+        }
+      }
+    },
+    "3": {
+      "payload_bytes": 15364188,
+      "compress_seconds": 0.17050505800011706,
+      "decompress_seconds": 0.03348716699997567,
+      "decompress_us_per_frame": 54.09881583194777,
+      "compress_MiB_per_s": 208.8596456767608,
+      "per_traj": {
+        "md": {
+          "raw_bytes": 35297084,
+          "zstd_bytes": 15267023,
+          "ratio_raw_over_zstd": 2.311982106793184
+        },
+        "neb": {
+          "raw_bytes": 314542,
+          "zstd_bytes": 97165,
+          "ratio_raw_over_zstd": 3.23719446302681
+        }
+      }
+    },
+    "9": {
+      "payload_bytes": 15694514,
+      "compress_seconds": 0.7763964089999718,
+      "decompress_seconds": 0.0383077480000793,
+      "decompress_us_per_frame": 61.8865072699181,
+      "compress_MiB_per_s": 45.86783965921369,
+      "per_traj": {
+        "md": {
+          "raw_bytes": 35297084,
+          "zstd_bytes": 15598784,
+          "ratio_raw_over_zstd": 2.2628099728799373
+        },
+        "neb": {
+          "raw_bytes": 314542,
+          "zstd_bytes": 95730,
+          "ratio_raw_over_zstd": 3.2857202548835267
+        }
+      }
+    }
+  },
+  "heldout_no_tag": {
+    "md_plain": {
+      "frames": 568,
+      "raw_bytes": 33414486,
+      "zstd_bytes": 14458979
+    },
+    "md_dict": {
+      "frames": 568,
+      "raw_bytes": 33414486,
+      "zstd_bytes": 14201236
+    },
+    "neb_plain": {
+      "frames": 12,
+      "raw_bytes": 198651,
+      "zstd_bytes": 61682
+    },
+    "neb_dict": {
+      "frames": 12,
+      "raw_bytes": 198651,
+      "zstd_bytes": 60616
+    }
+  },
+  "soa_raw_lmdb": {
+    "lmdb": {
+      "page_size": 4096,
+      "last_pgno": 3045,
+      "used_bytes": 12476416,
+      "file_bytes": 12476416
+    },
+    "value_bytes": 11156784,
+    "latency": {
+      "warm_ns_per_frame_median_of_5": 1108.9935379644587,
+      "warm_ns_per_frame_min": 1097.5831987075928,
+      "warm_us_per_frame": 1.1089935379644587,
+      "cold_us_p50": 1.138,
+      "cold_us_p90": 1.551,
+      "checksum": 801635,
+      "n_frames": 619
+    }
+  },
+  "bitshuffle": {
+    "c1": {
+      "raw_soa_bytes": 11156784,
+      "byte_shuffle_zstd_bytes": 10173615,
+      "bitshuffle_zstd_bytes": 9960517
+    },
+    "c32": {
+      "raw_soa_bytes": 11156784,
+      "byte_shuffle_zstd_bytes": 9776548,
+      "bitshuffle_zstd_bytes": 9596413
+    }
+  },
+  "tiny_con": {
+    "raw_bytes": 1408,
+    "zstd_l3_bytes": 425,
+    "expands": false
+  },
+  "zstd_l1_lmdb": {
+    "value_bytes": 15225636,
+    "lmdb": {
+      "page_size": 4096,
+      "last_pgno": 4243,
+      "used_bytes": 17383424,
+      "file_bytes": 17383424
+    },
+    "latency": {
+      "warm_ns_per_frame_median_of_5": 53057.098546042005,
+      "warm_ns_per_frame_min": 52707.87399030694,
+      "warm_us_per_frame": 53.057098546042006,
+      "cold_us_p50": 53.471,
+      "cold_us_p90": 66.203,
+      "checksum": 897388,
+      "n_frames": 619
+    }
+  }
+}
