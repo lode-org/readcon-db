@@ -16,6 +16,19 @@ def test_append_trajectory_str(tmp_path):
     assert len(keys) == n
 
 
+def test_extend_trajectory_str(tmp_path):
+    head = (FIXTURE / "highprec_a.con").read_text()
+    tail = (FIXTURE / "highprec_b.con").read_text()
+    db = ConCorpus(str(tmp_path / "corpus"))
+    assert db.append_trajectory_str(1, head, source="run.con") == 1
+    assert db.extend_trajectory_str(1, tail, source="run.con") == 2
+    assert db.get_frame_text(1, 0) == head
+    assert db.get_frame_text(1, 1) == tail
+    assert db.frame_hash(1, 0) == ConCorpus.hash_con_text(head)
+    assert db.frame_hash(1, 1) == ConCorpus.hash_con_text(tail)
+    assert len(db.select(traj_id=1)) == 2
+
+
 def test_append_trajectory_frames(tmp_path):
     import readcon
 

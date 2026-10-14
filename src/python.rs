@@ -431,6 +431,14 @@ impl PyConCorpus {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// Append CON text after the live frame count, or create the trajectory.
+    #[pyo3(signature = (traj_id, text, source="memory"))]
+    fn extend_trajectory_str(&self, traj_id: u64, text: &str, source: &str) -> PyResult<u32> {
+        self.inner
+            .extend_trajectory_str(traj_id, text, source)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
     /// Ingest already-parsed `readcon` frames, committing 64 frames at a time.
     ///
     /// `readcon.write_con_string` turns each group into CON text. A
