@@ -37,10 +37,22 @@ jobs:
           set -euo pipefail
           T=$(mktemp -d)
           for i in 1 2 3; do cat resources/test/tiny_cuh2.con resources/test/tiny_multi_cuh2.con resources/test/sulfolene.con resources/test/tiny_cuh2_forces.con; done > "$T/mix.con"
+          F="$T/mix.con resources/test/tiny_cuh2.con resources/test/sulfolene.con resources/test/tiny_multi_cuh2.con"
           for p in 1 2 3 4; do
-            for b in 1 4096; do
-              out=$(${{ matrix.launcher }} $p target/debug/examples/mpi_ingest_check "$T/mix.con" "$T/o$p-$b" $b)
-              echo "$out"
-              echo "$out" | grep -q 'match=true'
+            for mode in single sharded; do
+              for b in 1 4096; do
+                out=$(${{ matrix.launcher }} $p target/debug/examples/mpi_ingest_check $mode "$T/o$p-$mode-$b" $b 3 $F)
+                echo "$out"
+                echo "$out" | grep -q 'match=true'
+              done
             done
+          done
+      - name: C wrapper on a split communicator
+        run: |
+          set -euo pipefail
+          cargo build --features mpi --lib
+          ${{ matrix.cc }} -Iinclude tests/mpi-c/ingest_smoke.c -Ltarget/debug -lreadcon_db -Wl,-rpath,$PWD/target/debug -o ingest_smoke
+          for p in 1 2 3 4; do
+            T=$(mktemp -d)
+            ${{ matrix.launcher }} $p ./ingest_smoke "$T/db" resources/test/tiny_multi_cuh2.con resources/test/sulfolene.con | grep -q '^rc=0'
           done

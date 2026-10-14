@@ -1,8 +1,13 @@
-//! `mpirun -n P mpi_ingest_check <file.con> <outdir>`: ingest with P ranks
-//! into `<outdir>/mpi`, ingest serially into `<outdir>/serial` (rank 0),
-//! and print the sha256 of both canonical dumps plus the ingest wall time.
+//! `mpirun -n P mpi_ingest_check <single|sharded> <outdir> <batch> <n_shards> <file.con>...`
+//!
+//! Ingests the files (traj ids 1, 2, ...) with P ranks into `<outdir>/mpi`,
+//! repeats the ingest serially on rank 0 into `<outdir>/serial`, and prints
+//! the sha256 of both canonical dumps plus the wall times.
+use std::path::PathBuf;
+
 use mpi::traits::*;
-use readcon_db::ConCorpus;
+use readcon_db::mpi_ingest;
+use readcon_db::{ConCorpus, ShardedConCorpus};
 use sha2::{Digest, Sha256};
 
 fn hex(b: &[u8]) -> String {
@@ -13,25 +18,75 @@ fn main() {
     let universe = mpi::initialize().expect("MPI init");
     let world = universe.world();
     let a: Vec<String> = std::env::args().collect();
-    let (file, out) = (&a[1], std::path::Path::new(&a[2]));
-    let batch: usize = a
-        .get(3)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(readcon_db::mpi_ingest::DEFAULT_BATCH_FRAMES);
-    let corpus = (world.rank() == 0).then(|| ConCorpus::open(out.join("mpi")).unwrap());
+    let sharded = a[1] == "sharded";
+    let out = PathBuf::from(&a[2]);
+    let batch: usize = a[3].parse().unwrap();
+    let n_shards: u32 = a[4].parse().unwrap();
+    let files: Vec<(u64, PathBuf)> = a[5..]
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (i as u64 + 1, PathBuf::from(f)))
+        .collect();
     world.barrier();
     let t = std::time::Instant::now();
-    let n = readcon_db::mpi_ingest::append_trajectory_path(&world, corpus.as_ref(), 7, file, batch)
-        .unwrap();
+    let counts = if sharded {
+        mpi_ingest::append_trajectory_paths_sharded(
+            &world,
+            out.join("mpi"),
+            n_shards,
+            &files,
+            batch,
+        )
+    } else {
+        mpi_ingest::append_trajectory_paths(&world, out.join("mpi"), &files, batch)
+    }
+    .unwrap();
     world.barrier();
     let dt = t.elapsed().as_secs_f64();
-    if let Some(c) = corpus {
-        let mpi_sha = hex(&Sha256::digest(c.canonical_dump().unwrap()));
+    if world.rank() != 0 {
+        return;
+    }
+    let (mpi_dump, ser_dump, ds) = if sharded {
+        let mpi_dump = ShardedConCorpus::open_existing(out.join("mpi"))
+            .unwrap()
+            .canonical_dump()
+            .unwrap();
+        let mut s = ShardedConCorpus::open(out.join("serial"), n_shards).unwrap();
+        let t0 = std::time::Instant::now();
+        for (id, f) in &files {
+            s.append_trajectory_path(*id, f).unwrap();
+        }
+        (
+            mpi_dump,
+            s.canonical_dump().unwrap(),
+            t0.elapsed().as_secs_f64(),
+        )
+    } else {
+        let mpi_dump = ConCorpus::open(out.join("mpi"))
+            .unwrap()
+            .canonical_dump()
+            .unwrap();
         let s = ConCorpus::open(out.join("serial")).unwrap();
         let t0 = std::time::Instant::now();
-        s.append_trajectory_path(7, file).unwrap();
-        let ds = t0.elapsed().as_secs_f64();
-        let ser_sha = hex(&Sha256::digest(s.canonical_dump().unwrap()));
-        println!("ranks={} frames={n} mpi_s={dt:.3} serial_s={ds:.3} mpi_sha256={mpi_sha} serial_sha256={ser_sha} match={}", world.size(), mpi_sha == ser_sha);
-    }
+        for (id, f) in &files {
+            s.append_trajectory_path(*id, f).unwrap();
+        }
+        (
+            mpi_dump,
+            s.canonical_dump().unwrap(),
+            t0.elapsed().as_secs_f64(),
+        )
+    };
+    let (m, s) = (
+        hex(&Sha256::digest(&mpi_dump)),
+        hex(&Sha256::digest(&ser_dump)),
+    );
+    let n: u32 = counts.iter().sum();
+    println!(
+        "mode={} ranks={} files={} frames={n} mpi_s={dt:.3} serial_s={ds:.3} mpi_sha256={m} serial_sha256={s} match={}",
+        a[1],
+        world.size(),
+        files.len(),
+        m == s
+    );
 }
