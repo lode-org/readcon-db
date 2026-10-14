@@ -78,7 +78,7 @@ Foreign trajectories: **`readcon.read_chemfiles("traj.xyz")` → frames → inge
 - **No SQL engine** — explicit indexes + in-process intersection, with **ASE.db-competitive screening fields** (mass, volume, PBC, reserved metadata, charge/magmom; see [design matrix](docs/orgmode/explanation/design.org)).
 - **Decode via readcon-core** — CON semantics never fork.
 - **Metadata indexes** — finite `energy` bins; flags for forces, velocities, energy presence.
-- **xxHash3-128** on the CON text. A new `frames` value is `0xFD 0x01` plus one zstd level-1 frame of that UTF-8, written outside the LMDB transaction. Untagged UTF-8 still reads as a 0.1.8 span. `readcon-db migrate` rewrites legacy values once and will not wrap a tagged value again. `--no-compress` on `ingest`, `ingest-dir`, and `shard-ingest` stores the UTF-8. There is no dictionary. Both MPI ingest routes send the stored bytes. The hash is the decompressed text.
+- **xxHash3-128** on the CON text. A new `frames` value is `0xFD 0x01` plus one zstd level-1 frame of that UTF-8, written outside the LMDB transaction. An aligned run of 64 frames shares one `0xFD 0x03` zstd frame when that group is shorter than the per-frame values, and the other keys store a `0xFD 0x02` redirect. Untagged UTF-8 still reads as a 0.1.8 span. `readcon-db migrate` rewrites legacy values once and leaves an already packed value unchanged. `--no-compress` on `ingest`, `ingest-dir`, and `shard-ingest` stores the UTF-8. There is no dictionary. Both MPI ingest routes send the stored bytes. The hash is the decompressed text.
 - **Many readers, one writer** (LMDB). Same-frame MPI: rank 0 of the
   **caller communicator** packs RCSO and `MPI_Bcast` on that handle
   (`include/readcon-db-mpi.h`, Python `bcast_packed_frame` /
