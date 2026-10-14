@@ -7,7 +7,12 @@
 //! lower global index in the same LMDB env sends no blob.
 //!
 //! Records then move to the rank that owns the destination env with
-//! `MPI_Alltoallv`, in batches of global frames:
+//! `MPI_Alltoallv`, in batches of global frames. The payload of a first
+//! occurrence is the tagged zstd frame of the CON text (or the raw UTF-8
+//! when that frame does not shrink). The owner then packs each aligned run
+//! of 64 frames into one zstd group when that is shorter, and writes the
+//! group. xxh3-128 was taken on the UTF-8. A later duplicate of those bytes
+//! in the same env receives a copy.
 //!
 //! - single writer: rank 0 owns the one corpus;
 //! - sharded: shard `s = traj_id % n_shards` is owned by rank `s % P`.
@@ -163,7 +168,8 @@ struct Local {
     first: usize,
     hashes: Vec<[u8; 16]>,
     enc: Vec<Vec<u8>>,
-    blobs: Vec<String>,
+    /// Tagged zstd bytes, or raw UTF-8 when the tagged frame does not shrink.
+    stored: Vec<Vec<u8>>,
 }
 
 fn take<'a>(k: usize, p: &mut &'a [u8]) -> &'a [u8] {
@@ -181,7 +187,7 @@ fn parse_local(tabs: &[FileTab], range: std::ops::Range<usize>) -> Result<Local>
         first: range.start,
         hashes: vec![],
         enc: vec![],
-        blobs: vec![],
+        stored: vec![],
     };
     let mut g = range.start;
     while g < range.end {
@@ -209,10 +215,10 @@ fn parse_local(tabs: &[FileTab], range: std::ops::Range<usize>) -> Result<Local>
                 traj_id: t.traj_id,
                 frame_idx: i as u32,
             };
-            let (h, enc) = ConCorpus::encode_frame_keys(fk, &frame, blob);
+            let (h, enc, stored) = ConCorpus::encode_frame_keys(fk, &frame, blob)?;
             out.hashes.push(h);
             out.enc.push(enc);
-            out.blobs.push(blob.to_owned());
+            out.stored.push(stored);
         }
         g = t.g0 + b;
     }
@@ -235,6 +241,77 @@ const INPUT_MAP_FACTOR: usize = 3;
 
 /// Where a trajectory's frames are written: (owner rank, env id).
 type Route<'a> = &'a dyn Fn(TrajId) -> (usize, u32);
+
+struct Held {
+    fk: FrameKey,
+    enc: Vec<u8>,
+    stored: Vec<u8>,
+}
+
+fn pack_held(mut rows: Vec<Held>) -> Result<Vec<Held>> {
+    let texts: Vec<(u32, String)> = rows
+        .iter()
+        .map(|r| Ok((r.fk.frame_idx, crate::frame_codec::load_frame(&r.stored)?)))
+        .collect::<Result<_>>()?;
+    let view: Vec<(u32, &str)> = texts.iter().map(|(i, s)| (*i, s.as_str())).collect();
+    let packed = crate::frame_codec::pack_aligned(&view)?;
+    for (row, stored) in rows.iter_mut().zip(packed) {
+        row.stored = stored;
+    }
+    Ok(rows)
+}
+
+/// Emit every aligned group that is fully present, in buffer order.
+/// A short tail stays buffered until its trajectory's last frame has arrived.
+fn drain_ready(buf: &mut Vec<Held>, n_of: &HashMap<TrajId, u32>) -> Result<Vec<Held>> {
+    let mut ready = Vec::new();
+    loop {
+        if buf.is_empty() {
+            break;
+        }
+        let fk = buf[0].fk;
+        let n = *n_of
+            .get(&fk.traj_id)
+            .ok_or_else(|| Error::Message(format!("missing traj {}", fk.traj_id)))?;
+        let start = fk.frame_idx / crate::frame_codec::GROUP_LEN * crate::frame_codec::GROUP_LEN;
+        if fk.frame_idx != start {
+            return Err(Error::Message(
+                "frame group does not start on an aligned index".into(),
+            ));
+        }
+        let end = (start + crate::frame_codec::GROUP_LEN).min(n);
+        let need = (end - start) as usize;
+        if buf.len() < need {
+            break;
+        }
+        let last = buf[need - 1].fk;
+        if last.traj_id != fk.traj_id || last.frame_idx + 1 != end {
+            break;
+        }
+        let group: Vec<Held> = buf.drain(..need).collect();
+        ready.extend(pack_held(group)?);
+    }
+    Ok(ready)
+}
+
+fn flush_ready(
+    envs: &mut HashMap<u32, ConCorpus>,
+    bufs: &mut HashMap<u32, Vec<Held>>,
+    id: u32,
+    n_of: &HashMap<TrajId, u32>,
+) -> Result<()> {
+    let ready = match bufs.get_mut(&id) {
+        Some(buf) => drain_ready(buf, n_of)?,
+        None => return Ok(()),
+    };
+    if ready.is_empty() {
+        return Ok(());
+    }
+    let rows = ready.into_iter().map(|r| (r.fk, r.enc, r.stored)).collect();
+    envs.get(&id)
+        .ok_or_else(|| Error::Message(format!("missing env {id}")))?
+        .put_encoded(rows)
+}
 
 fn engine<C: Communicator>(
     comm: &C,
@@ -320,7 +397,9 @@ fn engine<C: Communicator>(
         .map(|g| first_of[g])
         .collect();
 
-    let mut kept: HashMap<usize, String> = HashMap::new();
+    let mut kept: HashMap<usize, Vec<u8>> = HashMap::new();
+    let n_of: HashMap<TrajId, u32> = tabs.iter().map(|t| (t.traj_id, t.n() as u32)).collect();
+    let mut bufs: HashMap<u32, Vec<Held>> = HashMap::new();
     let mut b0 = 0usize;
     while b0 < n {
         let b1 = (b0 + batch).min(n);
@@ -332,13 +411,13 @@ fn engine<C: Communicator>(
             m.extend_from_slice(&(g as u64).to_le_bytes());
             m.extend_from_slice(&(local.enc[i].len() as u32).to_le_bytes());
             m.extend_from_slice(&local.enc[i]);
-            let blob: &[u8] = if first_of[g] == g {
-                local.blobs[i].as_bytes()
+            let stored: &[u8] = if first_of[g] == g {
+                &local.stored[i]
             } else {
                 &[]
             };
-            m.extend_from_slice(&(blob.len() as u32).to_le_bytes());
-            m.extend_from_slice(blob);
+            m.extend_from_slice(&(stored.len() as u32).to_le_bytes());
+            m.extend_from_slice(stored);
         }
         let scounts: Vec<i32> = out.iter().map(|m| m.len() as i32).collect();
         let mut rcounts = vec![0i32; size];
@@ -359,16 +438,16 @@ fn engine<C: Communicator>(
             comm.all_to_all_varcount_into(&sp, &mut rp);
         }
         // Decode in source order (= global order) and insert per env.
-        let mut rows: Vec<(u32, FrameKey, &[u8], String)> = Vec::new();
+        let mut rows: Vec<(u32, Held)> = Vec::new();
         let mut p = &recv[..];
         while !p.is_empty() {
             let g = u64::from_le_bytes(take(8, &mut p).try_into().unwrap()) as usize;
             let el = u32::from_le_bytes(take(4, &mut p).try_into().unwrap()) as usize;
-            let enc = take(el, &mut p);
+            let enc = take(el, &mut p).to_vec();
             let bl = u32::from_le_bytes(take(4, &mut p).try_into().unwrap()) as usize;
             let raw = take(bl, &mut p);
-            let blob = if first_of[g] == g {
-                let s = String::from_utf8(raw.to_vec()).unwrap_or_default();
+            let stored = if first_of[g] == g {
+                let s = raw.to_vec();
                 if referenced.contains(&g) {
                     kept.insert(g, s.clone());
                 }
@@ -379,29 +458,37 @@ fn engine<C: Communicator>(
             let t = &tabs[file_of(&tabs, g)];
             rows.push((
                 env_of[g].1,
-                FrameKey {
-                    traj_id: t.traj_id,
-                    frame_idx: (g - t.g0) as u32,
+                Held {
+                    fk: FrameKey {
+                        traj_id: t.traj_id,
+                        frame_idx: (g - t.g0) as u32,
+                    },
+                    enc,
+                    stored,
                 },
-                enc,
-                blob,
             ));
         }
-        let mut ids: Vec<u32> = rows.iter().map(|r| r.0).collect();
-        ids.dedup();
-        ids.sort_unstable();
-        ids.dedup();
-        let put = ids.iter().try_for_each(|id| {
-            let sel: Vec<(FrameKey, &[u8], String)> = rows
-                .iter()
-                .filter(|r| r.0 == *id)
-                .map(|r| (r.1, r.2, r.3.clone()))
-                .collect();
-            envs[id].put_encoded(sel)
-        });
+        for (id, held) in rows {
+            bufs.entry(id).or_default().push(held);
+        }
+        let ids: Vec<u32> = bufs.keys().copied().collect();
+        let put = ids
+            .iter()
+            .try_for_each(|id| flush_ready(&mut envs, &mut bufs, *id, &n_of));
         collective(comm, put)?;
         b0 = b1;
     }
+    let ids: Vec<u32> = bufs.keys().copied().collect();
+    let tail = ids.iter().try_for_each(|id| {
+        flush_ready(&mut envs, &mut bufs, *id, &n_of)?;
+        if bufs.get(id).is_some_and(|b| !b.is_empty()) {
+            return Err(Error::Message(
+                "MPI ingest left an unfinished frame group".into(),
+            ));
+        }
+        Ok(())
+    });
+    collective(comm, tail)?;
     let meta = tabs.iter().try_for_each(|t| {
         let (owner, env) = route(t.traj_id);
         if owner == rank {
