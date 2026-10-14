@@ -87,6 +87,22 @@ impl ShardedConCorpus {
         })
     }
 
+    /// Canonical dumps of every shard with data, in shard order, each
+    /// prefixed by its shard id. See [`ConCorpus::canonical_dump`].
+    pub fn canonical_dump(&mut self) -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        for sid in 0..self.n_shards {
+            if !self.shard_has_data(sid) {
+                continue;
+            }
+            let d = self.shard_mut(sid)?.canonical_dump()?;
+            out.extend_from_slice(&sid.to_le_bytes());
+            out.extend_from_slice(&(d.len() as u64).to_le_bytes());
+            out.extend_from_slice(&d);
+        }
+        Ok(out)
+    }
+
     pub fn n_shards(&self) -> u32 {
         self.n_shards
     }

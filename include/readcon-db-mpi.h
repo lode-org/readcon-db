@@ -25,6 +25,58 @@
 extern "C" {
 #endif
 
+/*
+ * Shared tail of every broadcast helper. `root` has packed `nbytes` into
+ * `buf` (or set a negative RKRDB_* code); the others allocate and receive.
+ * Failures are collective: every rank returns the same code and owns no
+ * buffer. Same contract as readcon-core's MPI shim.
+ */
+static inline int rkrdb_mpi_bcast_blob(MPI_Comm comm, int root, int rank,
+                                       int nbytes, uint8_t *buf,
+                                       uint8_t **out_buf, int *out_nbytes) {
+  int have_buf = 0;
+  int all_have = 0;
+
+  if (MPI_Bcast(&nbytes, 1, MPI_INT, root, comm) != MPI_SUCCESS) {
+    free(buf);
+    return RKRDB_ERR;
+  }
+  if (nbytes < 0) {
+    free(buf);
+    return nbytes;
+  }
+
+  if (rank != root) {
+    if (nbytes == 0)
+      buf = NULL;
+    else {
+      buf = (uint8_t *)malloc((size_t)nbytes);
+    }
+  }
+
+  have_buf = (nbytes == 0 || buf != NULL) ? 1 : 0;
+  if (MPI_Allreduce(&have_buf, &all_have, 1, MPI_INT, MPI_MIN, comm) !=
+      MPI_SUCCESS) {
+    free(buf);
+    return RKRDB_ERR;
+  }
+  if (!all_have) {
+    free(buf);
+    return RKRDB_ERR;
+  }
+
+  if (nbytes > 0) {
+    if (MPI_Bcast(buf, nbytes, MPI_BYTE, root, comm) != MPI_SUCCESS) {
+      free(buf);
+      return RKRDB_ERR;
+    }
+  }
+
+  *out_buf = buf;
+  *out_nbytes = nbytes;
+  return RKRDB_OK;
+}
+
 /**
  * Pack one frame on `root` of `comm` and MPI_Bcast the RCSO blob on `comm`.
  *
@@ -43,8 +95,6 @@ static inline int rkrdb_bcast_packed_frame(MPI_Comm comm, int root,
   int rank = 0;
   int nbytes = 0;
   uint8_t *buf = NULL;
-  int have_buf = 0;
-  int all_have = 0;
 
   if (out_buf == NULL || out_nbytes == NULL)
     return RKRDB_NULL;
@@ -85,44 +135,8 @@ static inline int rkrdb_bcast_packed_frame(MPI_Comm comm, int root,
     }
   }
 
-  if (MPI_Bcast(&nbytes, 1, MPI_INT, root, comm) != MPI_SUCCESS) {
-    free(buf);
-    return RKRDB_ERR;
-  }
-  if (nbytes < 0) {
-    free(buf);
-    return nbytes;
-  }
-
-  if (rank != root) {
-    if (nbytes == 0)
-      buf = NULL;
-    else {
-      buf = (uint8_t *)malloc((size_t)nbytes);
-    }
-  }
-
-  have_buf = (nbytes == 0 || buf != NULL) ? 1 : 0;
-  if (MPI_Allreduce(&have_buf, &all_have, 1, MPI_INT, MPI_MIN, comm) !=
-      MPI_SUCCESS) {
-    free(buf);
-    return RKRDB_ERR;
-  }
-  if (!all_have) {
-    free(buf);
-    return RKRDB_ERR;
-  }
-
-  if (nbytes > 0) {
-    if (MPI_Bcast(buf, nbytes, MPI_BYTE, root, comm) != MPI_SUCCESS) {
-      free(buf);
-      return RKRDB_ERR;
-    }
-  }
-
-  *out_buf = buf;
-  *out_nbytes = nbytes;
-  return RKRDB_OK;
+  return rkrdb_mpi_bcast_blob(comm, root, rank, nbytes, buf, out_buf,
+                              out_nbytes);
 }
 
 /**
@@ -138,8 +152,6 @@ static inline int rkrdb_bcast_packed_frames(MPI_Comm comm, int root,
   int rank = 0;
   int nbytes = 0;
   uint8_t *buf = NULL;
-  int have_buf = 0;
-  int all_have = 0;
 
   if (out_buf == NULL || out_nbytes == NULL)
     return RKRDB_NULL;
@@ -179,43 +191,8 @@ static inline int rkrdb_bcast_packed_frames(MPI_Comm comm, int root,
     }
   }
 
-  if (MPI_Bcast(&nbytes, 1, MPI_INT, root, comm) != MPI_SUCCESS) {
-    free(buf);
-    return RKRDB_ERR;
-  }
-  if (nbytes < 0) {
-    free(buf);
-    return nbytes;
-  }
-
-  if (rank != root) {
-    if (nbytes == 0)
-      buf = NULL;
-    else
-      buf = (uint8_t *)malloc((size_t)nbytes);
-  }
-
-  have_buf = (nbytes == 0 || buf != NULL) ? 1 : 0;
-  if (MPI_Allreduce(&have_buf, &all_have, 1, MPI_INT, MPI_MIN, comm) !=
-      MPI_SUCCESS) {
-    free(buf);
-    return RKRDB_ERR;
-  }
-  if (!all_have) {
-    free(buf);
-    return RKRDB_ERR;
-  }
-
-  if (nbytes > 0) {
-    if (MPI_Bcast(buf, nbytes, MPI_BYTE, root, comm) != MPI_SUCCESS) {
-      free(buf);
-      return RKRDB_ERR;
-    }
-  }
-
-  *out_buf = buf;
-  *out_nbytes = nbytes;
-  return RKRDB_OK;
+  return rkrdb_mpi_bcast_blob(comm, root, rank, nbytes, buf, out_buf,
+                              out_nbytes);
 }
 
 /**
@@ -241,6 +218,31 @@ static inline int rkrdb_bcast_packed_frames_f(MPI_Fint comm_f, int root,
   return rkrdb_bcast_packed_frames(MPI_Comm_f2c(comm_f), root, corpus_dir,
                                    traj_ids, frame_idxs, nkeys, out_buf,
                                    out_nbytes);
+}
+
+/*
+ * Exported by libreadcon_db built with the `mpi` feature (Rust side takes
+ * the Fortran handle so the library does not hard-link one MPI ABI).
+ * Collective parallel ingest of `n_files` CON files in order. With
+ * `n_shards == 0` rank 0 writes the single corpus at `dir`; otherwise
+ * shard `traj_id % n_shards` under the sharded root `dir` is written by
+ * rank `shard % size`. The result equals the serial ingest of the same
+ * files in the same order. Returns 0 on every rank or a negative code on
+ * every rank.
+ */
+int rkrdb_mpi_ingest_paths_f(MPI_Fint comm_f, const char *dir,
+                             uint32_t n_shards, size_t n_files,
+                             const uint64_t *traj_ids, const char *const *paths,
+                             size_t batch_frames, uint32_t *out_counts);
+
+static inline int rkrdb_mpi_ingest_paths(MPI_Comm comm, const char *dir,
+                                         uint32_t n_shards, size_t n_files,
+                                         const uint64_t *traj_ids,
+                                         const char *const *paths,
+                                         size_t batch_frames,
+                                         uint32_t *out_counts) {
+  return rkrdb_mpi_ingest_paths_f(MPI_Comm_c2f(comm), dir, n_shards, n_files,
+                                  traj_ids, paths, batch_frames, out_counts);
 }
 
 #ifdef __cplusplus
