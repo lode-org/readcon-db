@@ -3,6 +3,7 @@
 ## Unreleased
 #### Features
 - (**identity**) opt-in canonical hash for frames that differ by atom-id order
+- `rkrdb_extend_trajectory_str` appends CON text after the live frame count. A span that does not parse is not written, and earlier frames stay as stored.
 #### Build system
 - (**reader**) require readcon-core 0.21.0 for atom-id correspondence
 
