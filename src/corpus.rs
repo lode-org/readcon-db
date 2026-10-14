@@ -331,6 +331,18 @@ impl ConCorpus {
         mut body: impl FnMut(&mut RwTxn<'_>) -> Result<T>,
     ) -> Result<T> {
         let _guard = self.write_guard();
+        // Grow before the transaction when the payload clearly cannot fit,
+        // so a large serial write does not fill the map and redo its work.
+        // Pages written also carry index keys and B-tree overhead, hence 2x.
+        let need = self
+            .used_bytes()
+            .saturating_add(input_bytes.saturating_mul(2));
+        let cur = self.map_size();
+        if need > cur {
+            let want = align_map(need.max(cur.saturating_mul(2)));
+            // SAFETY: the write guard is held and no transaction is open.
+            unsafe { self.env.resize(want)? };
+        }
         let mut last = Error::Message("LMDB map stayed full after growing it".into());
         for _ in 0..MAP_GROW_RETRIES {
             let mut wtxn = match self.env.write_txn() {
@@ -924,17 +936,17 @@ impl ConCorpus {
                     .collect()
             }
         }
-        let input_bytes = rows
-            .iter()
-            .fold(0usize, |n, (_, _, blob)| n.saturating_add(blob.len()));
-        self.with_write(input_bytes, |wtxn| {
-            for (fk, enc, blob) in &rows {
+        // Decode once and move each blob in, so a MapFull retry neither
+        // re-parses nor copies the payload.
+        let prepared = rows
+            .into_iter()
+            .map(|(fk, enc, blob)| {
                 let mut r = Rd(enc);
                 let hash: [u8; 16] = r.take(16)?.try_into().unwrap();
                 let natoms_k: [u8; 16] = r.take(16)?.try_into().unwrap();
-                let p = PreparedIndexPuts {
-                    fk: *fk,
-                    blob: blob.clone(),
+                Ok(PreparedIndexPuts {
+                    fk,
+                    blob,
                     hash,
                     natoms_k,
                     symbol_keys: r.list()?,
@@ -947,8 +959,12 @@ impl ConCorpus {
                     pbc_k: r.fixed::<13>()?.pop(),
                     flag_keys: r.fixed::<13>()?,
                     meta_keys: r.fixed::<21>()?,
-                };
-                self.put_index_puts(wtxn, &p)?;
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        self.with_write(prepared_bytes(&prepared), |wtxn| {
+            for p in &prepared {
+                self.put_index_puts(wtxn, p)?;
             }
             Ok(())
         })
