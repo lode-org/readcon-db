@@ -1174,9 +1174,11 @@ mod tests {
             &src,
             r#"{"con_spec_version":3,"con_spec_minor":1,"sections":["velocities"],"units":{"length":"angstrom","energy":"eV","mass":"amu"}}"#,
         );
-        db.append_trajectory_str(1, &text, "v31-notime").unwrap();
-        let err = db.collect_h5md(1).unwrap_err();
-        assert!(err.to_string().contains("no units.time"), "{err}");
+        // readcon-core 0.17 rejects this header at parse time, before export.
+        let err = db
+            .append_trajectory_str(1, &text, "v31-notime")
+            .unwrap_err();
+        assert!(err.to_string().contains("requires units.time"), "{err}");
     }
 
     #[test]

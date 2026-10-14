@@ -646,6 +646,185 @@ impl ConCorpus {
         Ok(out)
     }
 
+    /// Fail with `TrajExists` if `traj_id` already has metadata.
+    #[cfg(feature = "mpi")]
+    pub(crate) fn check_traj_free(&self, traj_id: TrajId) -> Result<()> {
+        let rtxn = self.env.read_txn()?;
+        let tid_key = traj_id.to_be_bytes();
+        if let Some(existing) = self.traj_meta.get(&rtxn, &tid_key[..])? {
+            let meta: TrajMeta = serde_json::from_str(existing)?;
+            return Err(Error::TrajExists(traj_id, meta.n_frames));
+        }
+        Ok(())
+    }
+
+    /// Derive one frame's index keys on any rank and encode them without the
+    /// blob. Returns the 16-byte content hash and the encoded keys.
+    #[cfg(feature = "mpi")]
+    pub(crate) fn encode_frame_keys(
+        fk: FrameKey,
+        frame: &ConFrame,
+        blob: &str,
+    ) -> ([u8; 16], Vec<u8>) {
+        let p = Self::build_index_puts(fk, frame, blob.to_owned());
+        let mut v = Vec::with_capacity(160);
+        fn put(v: &mut Vec<u8>, b: &[u8]) {
+            v.extend_from_slice(&(b.len() as u32).to_le_bytes());
+            v.extend_from_slice(b);
+        }
+        fn list<T: AsRef<[u8]>>(v: &mut Vec<u8>, xs: &[T]) {
+            v.extend_from_slice(&(xs.len() as u32).to_le_bytes());
+            for x in xs {
+                put(v, x.as_ref());
+            }
+        }
+        v.extend_from_slice(&p.hash);
+        v.extend_from_slice(&p.natoms_k);
+        list(&mut v, &p.symbol_keys);
+        list(&mut v, &p.elem_count_keys);
+        list(&mut v, p.formula_k.as_slice());
+        list(&mut v, p.energy_k.as_slice());
+        list(&mut v, p.fmax_k.as_slice());
+        list(&mut v, p.mass_k.as_slice());
+        list(&mut v, p.volume_k.as_slice());
+        list(&mut v, p.pbc_k.as_slice());
+        list(&mut v, &p.flag_keys);
+        list(&mut v, &p.meta_keys);
+        (p.hash, v)
+    }
+
+    /// Insert frames from encoded keys plus blobs, in slice order, in one
+    /// write transaction. Same puts as the serial path.
+    #[cfg(feature = "mpi")]
+    pub(crate) fn put_encoded(&self, rows: Vec<(FrameKey, &[u8], String)>) -> Result<()> {
+        struct Rd<'a>(&'a [u8]);
+        impl<'a> Rd<'a> {
+            fn take(&mut self, n: usize) -> Result<&'a [u8]> {
+                if self.0.len() < n {
+                    return Err(Error::Message("truncated MPI frame record".into()));
+                }
+                let (a, b) = self.0.split_at(n);
+                self.0 = b;
+                Ok(a)
+            }
+            fn u32(&mut self) -> Result<usize> {
+                Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()) as usize)
+            }
+            fn list(&mut self) -> Result<Vec<Vec<u8>>> {
+                let n = self.u32()?;
+                (0..n)
+                    .map(|_| {
+                        let l = self.u32()?;
+                        Ok(self.take(l)?.to_vec())
+                    })
+                    .collect()
+            }
+            fn fixed<const N: usize>(&mut self) -> Result<Vec<[u8; N]>> {
+                self.list()?
+                    .into_iter()
+                    .map(|x| {
+                        x.try_into()
+                            .map_err(|_| Error::Message("bad MPI key width".into()))
+                    })
+                    .collect()
+            }
+        }
+        let mut wtxn = self.env.write_txn()?;
+        for (fk, enc, blob) in rows {
+            let mut r = Rd(enc);
+            let hash: [u8; 16] = r.take(16)?.try_into().unwrap();
+            let natoms_k: [u8; 16] = r.take(16)?.try_into().unwrap();
+            let p = PreparedIndexPuts {
+                fk,
+                blob,
+                hash,
+                natoms_k,
+                symbol_keys: r.list()?,
+                elem_count_keys: r.list()?,
+                formula_k: r.list()?.pop(),
+                energy_k: r.fixed::<20>()?.pop(),
+                fmax_k: r.fixed::<20>()?.pop(),
+                mass_k: r.fixed::<20>()?.pop(),
+                volume_k: r.fixed::<20>()?.pop(),
+                pbc_k: r.fixed::<13>()?.pop(),
+                flag_keys: r.fixed::<13>()?,
+                meta_keys: r.fixed::<21>()?,
+            };
+            self.put_index_puts(&mut wtxn, &p)?;
+        }
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    /// Write trajectory metadata after an MPI ingest (serial `commit_prepared` tail).
+    #[cfg(feature = "mpi")]
+    pub(crate) fn put_traj_meta(
+        &self,
+        traj_id: TrajId,
+        n_frames: u32,
+        source: String,
+    ) -> Result<()> {
+        let mut wtxn = self.env.write_txn()?;
+        let meta = TrajMeta {
+            n_frames,
+            source,
+            ..Default::default()
+        };
+        self.traj_meta.put(
+            &mut wtxn,
+            &traj_id.to_be_bytes()[..],
+            &serde_json::to_string(&meta)?,
+        )?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    /// Every table in LMDB key order as length-prefixed (name, key, value)
+    /// records. LMDB page layout can differ between equal corpora; this dump
+    /// cannot, so its digest is the determinism check for parallel ingest.
+    pub fn canonical_dump(&self) -> Result<Vec<u8>> {
+        let rtxn = self.env.read_txn()?;
+        let mut out = Vec::new();
+        let mut tables: Vec<(&str, Database<Bytes, Bytes>)> = vec![
+            ("frames", self.frames.remap_types()),
+            ("traj_meta", self.traj_meta.remap_types()),
+            ("idx_natoms", self.idx_natoms.remap_types()),
+            ("idx_symbol", self.idx_symbol.remap_types()),
+            ("idx_energy", self.idx_energy.remap_types()),
+            ("idx_flags", self.idx_flags.remap_types()),
+            ("idx_elem_count", self.idx_elem_count.remap_types()),
+            ("idx_formula", self.idx_formula.remap_types()),
+            ("idx_fmax", self.idx_fmax.remap_types()),
+            ("idx_mass", self.idx_mass.remap_types()),
+            ("idx_volume", self.idx_volume.remap_types()),
+            ("idx_pbc", self.idx_pbc.remap_types()),
+            ("idx_meta", self.idx_meta.remap_types()),
+            ("frame_by_hash", self.frame_by_hash),
+            ("hash_by_frame", self.hash_by_frame),
+            ("frames_soa", self.frames_soa),
+        ];
+        if let Some(d) = self.idx_topo {
+            tables.push(("idx_topo", d.remap_types()));
+        }
+        if let Some(d) = self.topo_by_frame {
+            tables.push(("topo_by_frame", d));
+        }
+        for (name, db) in tables {
+            for part in [name.as_bytes()] {
+                out.extend_from_slice(&(part.len() as u64).to_le_bytes());
+                out.extend_from_slice(part);
+            }
+            for kv in db.iter(&rtxn)? {
+                let (k, v) = kv?;
+                for part in [k, v] {
+                    out.extend_from_slice(&(part.len() as u64).to_le_bytes());
+                    out.extend_from_slice(part);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Short exclusive commit: traj_meta guard + puts only (no parse / no ConFrameWriter).
     fn commit_prepared(
         &self,

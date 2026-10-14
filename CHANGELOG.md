@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Optional `mpi` feature with `mpi_ingest::append_trajectory_path`, a parallel ingest over a caller-supplied communicator.
+- `ConCorpus::canonical_dump` for comparing corpora independent of LMDB page layout.
+
+### Changed
+
+- Pin readcon-core 0.17.0.
+
 ## v0.1.8 - 2026-10-09
 
 ### Fixed
