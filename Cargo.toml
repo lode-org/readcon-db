@@ -20,20 +20,25 @@ crate-type = ["lib", "cdylib", "staticlib"]
 default = []
 python = ["dep:pyo3"]
 capi = []
+# Parallel ingest over a caller-supplied communicator (rsmpi). Needs an MPI
+# implementation and libclang at build time. See src/mpi_ingest.rs.
+mpi = ["dep:mpi"]
 
 [dependencies]
 heed = "0.21"
 # The pinned writer provides exact numeric CON and JSON round trips.
-readcon-core = "=0.16.2"
+readcon-core = "=0.17.0"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 pyo3 = { version = "0.28", features = ["extension-module"], optional = true }
+mpi = { version = "0.8", optional = true, default-features = false }
 
 [dev-dependencies]
 tempfile = "3"
+sha2 = "0.10"
 
 [package.metadata.docs.rs]
 all-features = false
@@ -60,3 +65,8 @@ asset = [
 [[example]]
 name = "bench_corpus_ops"
 path = "examples/bench_corpus_ops.rs"
+
+[[example]]
+name = "mpi_ingest_check"
+path = "examples/mpi_ingest_check.rs"
+required-features = ["mpi"]

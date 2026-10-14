@@ -1,0 +1,46 @@
+name: MPI ingest
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  mpi:
+    name: ${{ matrix.mpi }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mpi: mpich
+            packages: mpich libmpich-dev
+            cc: mpicc.mpich
+            launcher: mpiexec.mpich -n
+          - mpi: openmpi
+            packages: openmpi-bin libopenmpi-dev
+            cc: mpicc.openmpi
+            launcher: mpiexec.openmpi --oversubscribe -n
+    env:
+      MPICC: ${{ matrix.cc }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install one MPI implementation
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.packages }} libclang-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Default build pulls no MPI
+        run: cargo tree -e normal --prefix none | grep -E '^mpi(-sys)? ' && exit 1 || true
+      - name: Build the ingest check
+        run: cargo build --features mpi --example mpi_ingest_check
+      - name: Canonical dump identical to serial on 1 to 4 ranks
+        run: |
+          set -euo pipefail
+          T=$(mktemp -d)
+          for i in 1 2 3; do cat resources/test/tiny_cuh2.con resources/test/tiny_multi_cuh2.con resources/test/sulfolene.con resources/test/tiny_cuh2_forces.con; done > "$T/mix.con"
+          for p in 1 2 3 4; do
+            for b in 1 4096; do
+              out=$(${{ matrix.launcher }} $p target/debug/examples/mpi_ingest_check "$T/mix.con" "$T/o$p-$b" $b)
+              echo "$out"
+              echo "$out" | grep -q 'match=true'
+            done
+          done

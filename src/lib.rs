@@ -11,6 +11,8 @@ mod export_h5md;
 mod export_xyz;
 mod frame_scalars;
 mod keys;
+#[cfg(feature = "mpi")]
+pub mod mpi_ingest;
 mod select;
 mod shard;
 mod topology;
