@@ -3,6 +3,7 @@ use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use heed::types::{Bytes, Str, Unit};
 use heed::{CompactionOption, Database, Env, EnvFlags, EnvOpenOptions, RwTxn};
@@ -41,6 +42,9 @@ pub const MAP_SIZE_ENV: &str = "READCON_DB_MAP_SIZE";
 /// Map sizes are rounded up to a multiple of this (1 MiB, a multiple of
 /// every LMDB page size in use).
 const MAP_ALIGN: usize = 1 << 20;
+/// How many times a write transaction may grow the map and start over
+/// after `MDB_MAP_FULL`. Each attempt at least doubles the map.
+const MAP_GROW_RETRIES: u32 = 8;
 
 /// Parse a map size such as `8G`, `512M` or `1073741824`.
 pub fn parse_map_size(s: &str) -> Option<usize> {
@@ -144,6 +148,11 @@ struct PreparedIndexPuts {
 pub struct ConCorpus {
     path: PathBuf,
     env: Env,
+    /// Shared by read transactions, exclusive for a write transaction or a
+    /// resize. LMDB requires that this process hold no transaction while the
+    /// map grows, so the write guard stays held across the abort and the
+    /// `resize` call.
+    txn_gate: RwLock<()>,
     frames: Database<Bytes, Str>,
     traj_meta: Database<Bytes, Str>,
     idx_natoms: Database<Bytes, Unit>,
@@ -218,6 +227,35 @@ fn ingest_thread_count() -> usize {
     }
 }
 
+/// A read transaction plus the shared lock that keeps a resize from starting
+/// while it is open. `txn` is declared first so it is dropped first.
+struct HeldRead<'a> {
+    txn: heed::RoTxn<'a>,
+    _guard: RwLockReadGuard<'a, ()>,
+}
+
+impl<'a> std::ops::Deref for HeldRead<'a> {
+    type Target = heed::RoTxn<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.txn
+    }
+}
+
+fn heed_map_full(err: &heed::Error) -> bool {
+    matches!(err, heed::Error::Mdb(heed::MdbError::MapFull))
+}
+
+fn is_map_full(err: &Error) -> bool {
+    matches!(err, Error::Heed(e) if heed_map_full(e))
+}
+
+fn prepared_bytes(prepared: &[PreparedIndexPuts]) -> usize {
+    prepared
+        .iter()
+        .fold(0usize, |n, p| n.saturating_add(p.blob.len()))
+}
+
 impl ConCorpus {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         Self::open_with(path, false, None)
@@ -247,20 +285,96 @@ impl ConCorpus {
         self.env.info().map_size
     }
 
+    fn read_guard(&self) -> RwLockReadGuard<'_, ()> {
+        self.txn_gate.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn write_guard(&self) -> RwLockWriteGuard<'_, ()> {
+        self.txn_gate.write().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Read transaction. The guard is held until the transaction is dropped,
+    /// so a resize (which takes the write side) waits for it.
+    fn read_txn(&self) -> Result<HeldRead<'_>> {
+        let guard = self.read_guard();
+        let txn = self.env.read_txn()?;
+        Ok(HeldRead { txn, _guard: guard })
+    }
+
+    fn used_bytes(&self) -> usize {
+        fs::metadata(self.path.join("data.mdb"))
+            .map(|m| m.len() as usize)
+            .unwrap_or(0)
+    }
+
+    /// Grow after `MDB_MAP_FULL`. Caller holds the write side of [`Self::txn_gate`]
+    /// and has dropped every transaction.
+    fn grow_after_map_full(&self, input_bytes: usize) -> Result<()> {
+        let cur = self.map_size();
+        let used_plus = self.used_bytes().saturating_add(input_bytes);
+        let mut want = align_map(cur.saturating_mul(2).max(used_plus));
+        if want <= cur {
+            want = align_map(cur.saturating_add(MAP_ALIGN));
+        }
+        // SAFETY: the write guard is held and the failed transaction was dropped,
+        // so this process has no open transaction.
+        unsafe { self.env.resize(want)? };
+        Ok(())
+    }
+
+    /// Run `body` in one write transaction. On `MDB_MAP_FULL`, abort it, grow
+    /// the map, and retry the whole transaction up to [`MAP_GROW_RETRIES`]
+    /// times. `input_bytes` is the payload size used when choosing the new map.
+    fn with_write<T>(
+        &self,
+        input_bytes: usize,
+        mut body: impl FnMut(&mut RwTxn<'_>) -> Result<T>,
+    ) -> Result<T> {
+        let _guard = self.write_guard();
+        let mut last = Error::Message("LMDB map stayed full after growing it".into());
+        for _ in 0..MAP_GROW_RETRIES {
+            let mut wtxn = match self.env.write_txn() {
+                Ok(txn) => txn,
+                Err(e) if heed_map_full(&e) => {
+                    last = Error::Heed(e);
+                    self.grow_after_map_full(input_bytes)?;
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
+            match body(&mut wtxn) {
+                Ok(value) => match wtxn.commit() {
+                    Ok(()) => return Ok(value),
+                    // `commit` consumes the transaction. LMDB frees it even
+                    // when the commit fails, so the map can grow immediately.
+                    Err(e) if heed_map_full(&e) => {
+                        last = Error::Heed(e);
+                        self.grow_after_map_full(input_bytes)?;
+                    }
+                    Err(e) => return Err(e.into()),
+                },
+                Err(e) if is_map_full(&e) => {
+                    drop(wtxn);
+                    last = e;
+                    self.grow_after_map_full(input_bytes)?;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last)
+    }
+
     /// Grow the map so at least `extra_bytes` fit beyond the pages already
     /// used. Never shrinks. Returns the resulting map size.
     ///
-    /// LMDB only allows this while this process has no open transaction on
-    /// the env, so call it between writes, before sharing the handle across
-    /// threads. The MPI ingest calls it on each writer rank with the input
-    /// size before its first batch.
+    /// The write side of the transaction lock is held across the resize, so
+    /// no transaction from this process is open. The MPI ingest calls it on
+    /// each writer rank with the input size before its first batch.
     pub fn reserve_map(&self, extra_bytes: usize) -> Result<usize> {
-        let used = fs::metadata(self.path.join("data.mdb"))
-            .map(|m| m.len() as usize)
-            .unwrap_or(0);
-        let want = align_map(used.saturating_add(extra_bytes));
+        let _guard = self.write_guard();
+        let want = align_map(self.used_bytes().saturating_add(extra_bytes));
         if want > self.map_size() {
-            // SAFETY: documented precondition, no transaction is open in this process.
+            // SAFETY: write guard is held and this method opens no transaction.
             unsafe { self.env.resize(want)? };
         }
         Ok(self.map_size())
@@ -365,6 +479,7 @@ impl ConCorpus {
             return Ok(Self {
                 path,
                 env,
+                txn_gate: RwLock::new(()),
                 frames,
                 traj_meta,
                 idx_natoms,
@@ -410,6 +525,7 @@ impl ConCorpus {
         Ok(Self {
             path,
             env,
+            txn_gate: RwLock::new(()),
             frames,
             traj_meta,
             idx_natoms,
@@ -481,7 +597,7 @@ impl ConCorpus {
 
     /// All frame keys in this env (for compaction / export pipelines).
     pub fn list_frame_keys(&self) -> Result<Vec<FrameKey>> {
-        let rtxn = self.env.read_txn()?;
+        let rtxn = self.read_txn()?;
         let mut out = Vec::new();
         let mut iter = self.frames.iter(&rtxn)?;
         while let Some(Ok((k, _))) = iter.next() {
@@ -728,7 +844,7 @@ impl ConCorpus {
     /// Fail with `TrajExists` if `traj_id` already has metadata.
     #[cfg(feature = "mpi")]
     pub(crate) fn check_traj_free(&self, traj_id: TrajId) -> Result<()> {
-        let rtxn = self.env.read_txn()?;
+        let rtxn = self.read_txn()?;
         let tid_key = traj_id.to_be_bytes();
         if let Some(existing) = self.traj_meta.get(&rtxn, &tid_key[..])? {
             let meta: TrajMeta = serde_json::from_str(existing)?;
@@ -808,31 +924,34 @@ impl ConCorpus {
                     .collect()
             }
         }
-        let mut wtxn = self.env.write_txn()?;
-        for (fk, enc, blob) in rows {
-            let mut r = Rd(enc);
-            let hash: [u8; 16] = r.take(16)?.try_into().unwrap();
-            let natoms_k: [u8; 16] = r.take(16)?.try_into().unwrap();
-            let p = PreparedIndexPuts {
-                fk,
-                blob,
-                hash,
-                natoms_k,
-                symbol_keys: r.list()?,
-                elem_count_keys: r.list()?,
-                formula_k: r.list()?.pop(),
-                energy_k: r.fixed::<20>()?.pop(),
-                fmax_k: r.fixed::<20>()?.pop(),
-                mass_k: r.fixed::<20>()?.pop(),
-                volume_k: r.fixed::<20>()?.pop(),
-                pbc_k: r.fixed::<13>()?.pop(),
-                flag_keys: r.fixed::<13>()?,
-                meta_keys: r.fixed::<21>()?,
-            };
-            self.put_index_puts(&mut wtxn, &p)?;
-        }
-        wtxn.commit()?;
-        Ok(())
+        let input_bytes = rows
+            .iter()
+            .fold(0usize, |n, (_, _, blob)| n.saturating_add(blob.len()));
+        self.with_write(input_bytes, |wtxn| {
+            for (fk, enc, blob) in &rows {
+                let mut r = Rd(enc);
+                let hash: [u8; 16] = r.take(16)?.try_into().unwrap();
+                let natoms_k: [u8; 16] = r.take(16)?.try_into().unwrap();
+                let p = PreparedIndexPuts {
+                    fk: *fk,
+                    blob: blob.clone(),
+                    hash,
+                    natoms_k,
+                    symbol_keys: r.list()?,
+                    elem_count_keys: r.list()?,
+                    formula_k: r.list()?.pop(),
+                    energy_k: r.fixed::<20>()?.pop(),
+                    fmax_k: r.fixed::<20>()?.pop(),
+                    mass_k: r.fixed::<20>()?.pop(),
+                    volume_k: r.fixed::<20>()?.pop(),
+                    pbc_k: r.fixed::<13>()?.pop(),
+                    flag_keys: r.fixed::<13>()?,
+                    meta_keys: r.fixed::<21>()?,
+                };
+                self.put_index_puts(wtxn, &p)?;
+            }
+            Ok(())
+        })
     }
 
     /// Write trajectory metadata after an MPI ingest (serial `commit_prepared` tail).
@@ -843,26 +962,27 @@ impl ConCorpus {
         n_frames: u32,
         source: String,
     ) -> Result<()> {
-        let mut wtxn = self.env.write_txn()?;
-        let meta = TrajMeta {
-            n_frames,
-            source,
-            ..Default::default()
-        };
-        self.traj_meta.put(
-            &mut wtxn,
-            &traj_id.to_be_bytes()[..],
-            &serde_json::to_string(&meta)?,
-        )?;
-        wtxn.commit()?;
-        Ok(())
+        let input_bytes = source.len().saturating_add(64);
+        self.with_write(input_bytes, |wtxn| {
+            let meta = TrajMeta {
+                n_frames,
+                source: source.clone(),
+                ..Default::default()
+            };
+            self.traj_meta.put(
+                wtxn,
+                &traj_id.to_be_bytes()[..],
+                &serde_json::to_string(&meta)?,
+            )?;
+            Ok(())
+        })
     }
 
     /// Every table in LMDB key order as length-prefixed (name, key, value)
     /// records. LMDB page layout can differ between equal corpora; this dump
     /// cannot, so its digest is the determinism check for parallel ingest.
     pub fn canonical_dump(&self) -> Result<Vec<u8>> {
-        let rtxn = self.env.read_txn()?;
+        let rtxn = self.read_txn()?;
         let mut out = Vec::new();
         let mut tables: Vec<(&str, Database<Bytes, Bytes>)> = vec![
             ("frames", self.frames.remap_types()),
@@ -912,33 +1032,34 @@ impl ConCorpus {
         source: String,
         replace_meta: bool,
     ) -> Result<u32> {
-        let mut wtxn = self.env.write_txn()?;
-        let tid_key = traj_id.to_be_bytes();
-        if !replace_meta {
-            if let Some(existing) = self.traj_meta.get(&wtxn, &tid_key[..])? {
-                let meta: TrajMeta = serde_json::from_str(existing)?;
-                return Err(Error::TrajExists(traj_id, meta.n_frames));
+        let input_bytes = prepared_bytes(prepared).saturating_add(source.len());
+        self.with_write(input_bytes, |wtxn| {
+            let tid_key = traj_id.to_be_bytes();
+            if !replace_meta {
+                if let Some(existing) = self.traj_meta.get(wtxn, &tid_key[..])? {
+                    let meta: TrajMeta = serde_json::from_str(existing)?;
+                    return Err(Error::TrajExists(traj_id, meta.n_frames));
+                }
             }
-        }
-        for p in prepared {
-            self.put_index_puts(&mut wtxn, p)?;
-        }
-        let n_frames = prepared.last().map(|p| p.fk.frame_idx + 1).unwrap_or(0);
-        let existing: Option<TrajMeta> = if replace_meta {
+            for p in prepared {
+                self.put_index_puts(wtxn, p)?;
+            }
+            let n_frames = prepared.last().map(|p| p.fk.frame_idx + 1).unwrap_or(0);
+            let existing: Option<TrajMeta> = if replace_meta {
+                self.traj_meta
+                    .get(wtxn, &tid_key[..])?
+                    .map(serde_json::from_str)
+                    .transpose()?
+            } else {
+                None
+            };
+            let mut meta = existing.unwrap_or_default();
+            meta.n_frames = n_frames;
+            meta.source = source.clone();
             self.traj_meta
-                .get(&wtxn, &tid_key[..])?
-                .map(serde_json::from_str)
-                .transpose()?
-        } else {
-            None
-        };
-        let mut meta = existing.unwrap_or_default();
-        meta.n_frames = n_frames;
-        meta.source = source;
-        self.traj_meta
-            .put(&mut wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
-        wtxn.commit()?;
-        Ok(n_frames)
+                .put(wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
+            Ok(n_frames)
+        })
     }
 
     pub fn append_trajectory_path(&self, traj_id: TrajId, file: impl AsRef<Path>) -> Result<u32> {
@@ -988,15 +1109,16 @@ impl ConCorpus {
         // Unit conversion retains the binary64 values of every stored field.
         let prepared =
             Self::prepare_trajectory_frames_formatted(traj_id, &frames, 0, FloatFormat::RoundTrip)?;
-        let mut wtxn = self.env.write_txn()?;
-        for p in &old_puts {
-            self.delete_index_puts(&mut wtxn, p)?;
-        }
-        for p in &prepared {
-            self.put_index_puts(&mut wtxn, p)?;
-        }
-        wtxn.commit()?;
-        Ok(keys.len() as u32)
+        let input_bytes = prepared_bytes(&prepared);
+        self.with_write(input_bytes, |wtxn| {
+            for p in &old_puts {
+                self.delete_index_puts(wtxn, p)?;
+            }
+            for p in &prepared {
+                self.put_index_puts(wtxn, p)?;
+            }
+            Ok(keys.len() as u32)
+        })
     }
 
     /// Units object on one frame (after canonicalize on write).
@@ -1069,7 +1191,7 @@ impl ConCorpus {
         source_hint: impl Into<String>,
     ) -> Result<u32> {
         let (start_idx, prior) = {
-            let rtxn = self.env.read_txn()?;
+            let rtxn = self.read_txn()?;
             let tid_key = traj_id.to_be_bytes();
             if let Some(existing) = self.traj_meta.get(&rtxn, &tid_key[..])? {
                 let meta: TrajMeta = serde_json::from_str(existing)?;
@@ -1080,36 +1202,38 @@ impl ConCorpus {
         };
         // Key derivation fully outside exclusive section.
         let prepared = Self::prepare_trajectory_frames(traj_id, frames, start_idx)?;
-        let mut wtxn = self.env.write_txn()?;
-        let tid_key = traj_id.to_be_bytes();
-        let live: Option<TrajMeta> =
-            if let Some(existing) = self.traj_meta.get(&wtxn, &tid_key[..])? {
-                Some(serde_json::from_str(existing)?)
-            } else {
-                None
-            };
-        let live_n = live.as_ref().map(|m| m.n_frames).unwrap_or(0);
-        if live_n != start_idx {
-            return Err(Error::Message(format!(
-                "concurrent extend race on traj {traj_id}: expected start {start_idx}, live {live_n}"
-            )));
-        }
-        for p in &prepared {
-            self.put_index_puts(&mut wtxn, p)?;
-        }
-        let n_frames = prepared
-            .last()
-            .map(|p| p.fk.frame_idx + 1)
-            .unwrap_or(start_idx);
-        let mut meta = live.or(prior).unwrap_or_else(|| TrajMeta {
-            source: source_hint.into(),
-            ..Default::default()
-        });
-        meta.n_frames = n_frames;
-        self.traj_meta
-            .put(&mut wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
-        wtxn.commit()?;
-        Ok(n_frames)
+        let hint = source_hint.into();
+        let input_bytes = prepared_bytes(&prepared).saturating_add(hint.len());
+        self.with_write(input_bytes, |wtxn| {
+            let tid_key = traj_id.to_be_bytes();
+            let live: Option<TrajMeta> =
+                if let Some(existing) = self.traj_meta.get(wtxn, &tid_key[..])? {
+                    Some(serde_json::from_str(existing)?)
+                } else {
+                    None
+                };
+            let live_n = live.as_ref().map(|m| m.n_frames).unwrap_or(0);
+            if live_n != start_idx {
+                return Err(Error::Message(format!(
+                    "concurrent extend race on traj {traj_id}: expected start {start_idx}, live {live_n}"
+                )));
+            }
+            for p in &prepared {
+                self.put_index_puts(wtxn, p)?;
+            }
+            let n_frames = prepared
+                .last()
+                .map(|p| p.fk.frame_idx + 1)
+                .unwrap_or(start_idx);
+            let mut meta = live.or_else(|| prior.clone()).unwrap_or_else(|| TrajMeta {
+                source: hint.clone(),
+                ..Default::default()
+            });
+            meta.n_frames = n_frames;
+            self.traj_meta
+                .put(wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
+            Ok(n_frames)
+        })
     }
 
     /// [`Self::extend_trajectory_frames`] from a CON path: create the
@@ -1166,117 +1290,116 @@ impl ConCorpus {
     /// empty. The engine binary is not required for a matching rebuild.
     pub fn reindex(&self) -> Result<u32> {
         let recorded = self.collected_topo_params()?;
-        let mut wtxn = self.env.write_txn()?;
-        self.clear_secondary(&mut wtxn)?;
-        if let Some(idx) = self.idx_topo {
-            idx.clear(&mut wtxn)?;
-        }
+        self.with_write(0, |wtxn| {
+            self.clear_secondary(wtxn)?;
+            if let Some(idx) = self.idx_topo {
+                idx.clear(wtxn)?;
+            }
 
-        let mut n = 0u32;
-        // Collect keys first (heed iterator + puts on same txn is safer with snapshot list)
-        let mut keys: Vec<Vec<u8>> = Vec::new();
-        {
-            let mut iter = self.frames.iter(&wtxn)?;
-            while let Some(Ok((k, _))) = iter.next() {
-                keys.push(k.to_vec());
-            }
-        }
-        for k in keys {
-            let Some(fk) = FrameKey::from_bytes(&k) else {
-                continue;
-            };
-            let Some(blob) = self.frames.get(&wtxn, &k)? else {
-                continue;
-            };
-            let blob_owned = blob.to_owned();
-            let mut it = ConFrameIterator::new(&blob_owned);
-            let frame = it
-                .next()
-                .ok_or_else(|| Error::Parse("empty blob on reindex".into()))?
-                .map_err(|e| Error::Parse(e.to_string()))?;
-            // index_frame would put frames again — only indexes + hashes
-            let hash = hash_frame_bytes(blob_owned.as_bytes());
-            let hb = hash.to_bytes();
-            let fk_b = fk.to_bytes();
-            self.hash_by_frame.put(&mut wtxn, &fk_b[..], &hb[..])?;
-            if self.frame_by_hash.get(&wtxn, &hb[..])?.is_none() {
-                self.frame_by_hash.put(&mut wtxn, &hb[..], &fk_b[..])?;
-            }
-            let n_atoms = frame.atom_data.len() as u32;
-            self.idx_natoms
-                .put(&mut wtxn, &natoms_key(n_atoms, fk)[..], &())?;
-            let counts = frame_species(&frame);
-            for (sym, cnt) in &counts {
-                self.idx_elem_count
-                    .put(&mut wtxn, &elem_count_key(sym, *cnt, fk)[..], &())?;
-                self.idx_symbol
-                    .put(&mut wtxn, &symbol_key(sym, fk)[..], &())?;
-            }
-            let formula = composition_formula(&counts);
-            if !formula.is_empty() {
-                self.idx_formula
-                    .put(&mut wtxn, &formula_key(&formula, fk)[..], &())?;
-            }
-            if let Some(e) = frame_energy(&frame) {
-                if let Some(ek) = energy_bin_key(e, fk) {
-                    self.idx_energy.put(&mut wtxn, &ek[..], &())?;
+            let mut n = 0u32;
+            // Collect keys first (heed iterator + puts on same txn is safer with snapshot list)
+            let mut keys: Vec<Vec<u8>> = Vec::new();
+            {
+                let mut iter = self.frames.iter(wtxn)?;
+                while let Some(Ok((k, _))) = iter.next() {
+                    keys.push(k.to_vec());
                 }
-                self.idx_flags
-                    .put(&mut wtxn, &flag_key(FLAG_HAS_ENERGY, fk)[..], &())?;
             }
-            if frame_has_forces(&frame) {
-                self.idx_flags
-                    .put(&mut wtxn, &flag_key(FLAG_HAS_FORCES, fk)[..], &())?;
-                if let Some(fm) = frame_fmax(&frame) {
-                    if let Some(fk_fm) = fmax_bin_key(fm, fk) {
-                        self.idx_fmax.put(&mut wtxn, &fk_fm[..], &())?;
+            for k in keys {
+                let Some(fk) = FrameKey::from_bytes(&k) else {
+                    continue;
+                };
+                let Some(blob) = self.frames.get(wtxn, &k)? else {
+                    continue;
+                };
+                let blob_owned = blob.to_owned();
+                let mut it = ConFrameIterator::new(&blob_owned);
+                let frame = it
+                    .next()
+                    .ok_or_else(|| Error::Parse("empty blob on reindex".into()))?
+                    .map_err(|e| Error::Parse(e.to_string()))?;
+                // index_frame would put frames again — only indexes + hashes
+                let hash = hash_frame_bytes(blob_owned.as_bytes());
+                let hb = hash.to_bytes();
+                let fk_b = fk.to_bytes();
+                self.hash_by_frame.put(wtxn, &fk_b[..], &hb[..])?;
+                if self.frame_by_hash.get(wtxn, &hb[..])?.is_none() {
+                    self.frame_by_hash.put(wtxn, &hb[..], &fk_b[..])?;
+                }
+                let n_atoms = frame.atom_data.len() as u32;
+                self.idx_natoms
+                    .put(wtxn, &natoms_key(n_atoms, fk)[..], &())?;
+                let counts = frame_species(&frame);
+                for (sym, cnt) in &counts {
+                    self.idx_elem_count
+                        .put(wtxn, &elem_count_key(sym, *cnt, fk)[..], &())?;
+                    self.idx_symbol.put(wtxn, &symbol_key(sym, fk)[..], &())?;
+                }
+                let formula = composition_formula(&counts);
+                if !formula.is_empty() {
+                    self.idx_formula
+                        .put(wtxn, &formula_key(&formula, fk)[..], &())?;
+                }
+                if let Some(e) = frame_energy(&frame) {
+                    if let Some(ek) = energy_bin_key(e, fk) {
+                        self.idx_energy.put(wtxn, &ek[..], &())?;
+                    }
+                    self.idx_flags
+                        .put(wtxn, &flag_key(FLAG_HAS_ENERGY, fk)[..], &())?;
+                }
+                if frame_has_forces(&frame) {
+                    self.idx_flags
+                        .put(wtxn, &flag_key(FLAG_HAS_FORCES, fk)[..], &())?;
+                    if let Some(fm) = frame_fmax(&frame) {
+                        if let Some(fk_fm) = fmax_bin_key(fm, fk) {
+                            self.idx_fmax.put(wtxn, &fk_fm[..], &())?;
+                        }
                     }
                 }
-            }
-            if frame_has_velocities(&frame) {
-                self.idx_flags
-                    .put(&mut wtxn, &flag_key(FLAG_HAS_VELOCITIES, fk)[..], &())?;
-            }
-            if let Some(m) = frame_total_mass(&frame) {
-                if let Some(k) = mass_bin_key(m, fk) {
-                    self.idx_mass.put(&mut wtxn, &k[..], &())?;
+                if frame_has_velocities(&frame) {
+                    self.idx_flags
+                        .put(wtxn, &flag_key(FLAG_HAS_VELOCITIES, fk)[..], &())?;
                 }
-            }
-            if let Some(v) = frame_cell_volume(&frame) {
-                if let Some(k) = volume_bin_key(v, fk) {
-                    self.idx_volume.put(&mut wtxn, &k[..], &())?;
-                }
-            }
-            if let Some(mask) = frame_pbc_mask(&frame) {
-                self.idx_pbc.put(&mut wtxn, &pbc_key(mask, fk)[..], &())?;
-            }
-            let meta_puts: [(u8, Option<f64>); 7] = [
-                (META_TIME, frame_time(&frame)),
-                (META_TIMESTEP, frame_timestep(&frame)),
-                (META_FRAME_INDEX, frame_frame_index(&frame)),
-                (META_NEB_BEAD, frame_neb_bead(&frame)),
-                (META_NEB_BAND, frame_neb_band(&frame)),
-                (META_CHARGE, frame_charge(&frame)),
-                (META_MAGMOM, frame_magmom(&frame)),
-            ];
-            for (ch, val) in meta_puts {
-                if let Some(x) = val {
-                    if let Some(k) = meta_scalar_key(ch, x, fk) {
-                        self.idx_meta.put(&mut wtxn, &k[..], &())?;
+                if let Some(m) = frame_total_mass(&frame) {
+                    if let Some(k) = mass_bin_key(m, fk) {
+                        self.idx_mass.put(wtxn, &k[..], &())?;
                     }
                 }
+                if let Some(v) = frame_cell_volume(&frame) {
+                    if let Some(k) = volume_bin_key(v, fk) {
+                        self.idx_volume.put(wtxn, &k[..], &())?;
+                    }
+                }
+                if let Some(mask) = frame_pbc_mask(&frame) {
+                    self.idx_pbc.put(wtxn, &pbc_key(mask, fk)[..], &())?;
+                }
+                let meta_puts: [(u8, Option<f64>); 7] = [
+                    (META_TIME, frame_time(&frame)),
+                    (META_TIMESTEP, frame_timestep(&frame)),
+                    (META_FRAME_INDEX, frame_frame_index(&frame)),
+                    (META_NEB_BEAD, frame_neb_bead(&frame)),
+                    (META_NEB_BAND, frame_neb_band(&frame)),
+                    (META_CHARGE, frame_charge(&frame)),
+                    (META_MAGMOM, frame_magmom(&frame)),
+                ];
+                for (ch, val) in meta_puts {
+                    if let Some(x) = val {
+                        if let Some(k) = meta_scalar_key(ch, x, fk) {
+                            self.idx_meta.put(wtxn, &k[..], &())?;
+                        }
+                    }
+                }
+                n += 1;
             }
-            n += 1;
-        }
-        if recorded.is_some() {
-            self.rebuild_idx_topo_from_stored(&mut wtxn)?;
-        }
-        wtxn.commit()?;
-        Ok(n)
+            if recorded.is_some() {
+                self.rebuild_idx_topo_from_stored(wtxn)?;
+            }
+            Ok(n)
+        })
     }
 
     pub fn traj_meta(&self, traj_id: TrajId) -> Result<Option<TrajMeta>> {
-        let rtxn = self.env.read_txn()?;
+        let rtxn = self.read_txn()?;
         let tid_key = traj_id.to_be_bytes();
         match self.traj_meta.get(&rtxn, &tid_key[..])? {
             None => Ok(None),
@@ -1285,7 +1408,7 @@ impl ConCorpus {
     }
 
     fn list_traj_metas(&self) -> Result<Vec<(TrajId, TrajMeta)>> {
-        let rtxn = self.env.read_txn()?;
+        let rtxn = self.read_txn()?;
         let mut out = Vec::new();
         let mut iter = self.traj_meta.iter(&rtxn)?;
         while let Some(Ok((k, v))) = iter.next() {
@@ -1369,7 +1492,7 @@ impl ConCorpus {
         let Some(by) = self.topo_by_frame else {
             return Ok(None);
         };
-        let rtxn = self.env.read_txn()?;
+        let rtxn = self.read_txn()?;
         let fk_b = key.to_bytes();
         match by.get(&rtxn, &fk_b[..])? {
             None => Ok(None),
@@ -1463,18 +1586,22 @@ impl ConCorpus {
         let Some(method) = run_method else {
             return Ok(0);
         };
-        let mut wtxn = self.env.write_txn()?;
-        for (fk, hex) in &pending {
-            self.put_topo_entry(&mut wtxn, idx_topo, topo_by_frame, *fk, hex)?;
-        }
-        for (tid, mut meta) in metas {
-            meta.stamp_topo(opts.cutoff, &opts.graph, opts.hops, &method);
-            let tid_key = tid.to_be_bytes();
-            self.traj_meta
-                .put(&mut wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
-        }
-        wtxn.commit()?;
-        Ok(pending.len() as u32)
+        let input_bytes = pending
+            .iter()
+            .fold(0usize, |n, (_, hex)| n.saturating_add(hex.len()));
+        self.with_write(input_bytes, |wtxn| {
+            for (fk, hex) in &pending {
+                self.put_topo_entry(wtxn, idx_topo, topo_by_frame, *fk, hex)?;
+            }
+            for (tid, meta) in &metas {
+                let mut meta = meta.clone();
+                meta.stamp_topo(opts.cutoff, &opts.graph, opts.hops, &method);
+                let tid_key = tid.to_be_bytes();
+                self.traj_meta
+                    .put(wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
+            }
+            Ok(pending.len() as u32)
+        })
     }
 
     /// Fingerprint `file` with the recorded corpus parameters and look up
@@ -1518,7 +1645,7 @@ impl ConCorpus {
         let Some(idx) = self.idx_topo else {
             return Ok(Vec::new());
         };
-        let rtxn = self.env.read_txn()?;
+        let rtxn = self.read_txn()?;
         for hex in hexes {
             let pref = topo_prefix(&normalize_topo_hex(&hex)?);
             let mut iter = idx.prefix_iter(&rtxn, &pref)?;
@@ -1535,7 +1662,7 @@ impl ConCorpus {
     }
 
     pub fn get_frame_text(&self, key: FrameKey) -> Result<String> {
-        let rtxn = self.env.read_txn()?;
+        let rtxn = self.read_txn()?;
         self.get_frame_text_txn(&rtxn, key)
     }
 
@@ -1549,7 +1676,7 @@ impl ConCorpus {
 
     /// Batch point-gets under **one** read transaction (extract / multi-reader hot path).
     pub fn get_frame_texts(&self, keys: &[FrameKey]) -> Result<Vec<String>> {
-        let rtxn = self.env.read_txn()?;
+        let rtxn = self.read_txn()?;
         let mut out = Vec::with_capacity(keys.len());
         for &key in keys {
             out.push(self.get_frame_text_txn(&rtxn, key)?);
@@ -1563,7 +1690,7 @@ impl ConCorpus {
     /// campaign pays for payload access—not merely `mmap` slice length.
     /// Returns `(sum of lengths, byte checksum)` for observability.
     pub fn touch_trajectory_blobs(&self, traj_id: TrajId, n_frames: u32) -> Result<(u64, u64)> {
-        let rtxn = self.env.read_txn()?;
+        let rtxn = self.read_txn()?;
         let mut total = 0u64;
         let mut checksum = 0u64;
         for frame_idx in 0..n_frames {
@@ -1594,7 +1721,7 @@ impl ConCorpus {
     /// Raw optional cooked SoA bytes for `key` (None if never cooked).
     /// Does **not** read `frames` (CON text).
     pub fn get_cooked_soa_bytes(&self, key: FrameKey) -> Result<Option<Vec<u8>>> {
-        let rtxn = self.env.read_txn()?;
+        let rtxn = self.read_txn()?;
         let fk_b = key.to_bytes();
         Ok(self.frames_soa.get(&rtxn, &fk_b[..])?.map(|b| b.to_vec()))
     }
@@ -1669,11 +1796,12 @@ impl ConCorpus {
     pub fn cook_frame(&self, key: FrameKey) -> Result<usize> {
         let fr = self.get_frame(key)?;
         let bytes = crate::cooked_soa::CookedSoa::encode_frame(&fr)?;
-        let mut wtxn = self.env.write_txn()?;
-        let fk_b = key.to_bytes();
-        self.frames_soa.put(&mut wtxn, &fk_b[..], &bytes[..])?;
-        wtxn.commit()?;
-        Ok(bytes.len())
+        let n = bytes.len();
+        self.with_write(n, |wtxn| {
+            let fk_b = key.to_bytes();
+            self.frames_soa.put(wtxn, &fk_b[..], &bytes[..])?;
+            Ok(n)
+        })
     }
 
     /// Cook all frames that have CON text; returns number of frames cooked.
@@ -1689,11 +1817,11 @@ impl ConCorpus {
 
     /// Drop cooked tier for one key (CON text and indexes untouched).
     pub fn delete_cooked_soa(&self, key: FrameKey) -> Result<()> {
-        let mut wtxn = self.env.write_txn()?;
-        let fk_b = key.to_bytes();
-        let _ = self.frames_soa.delete(&mut wtxn, &fk_b[..])?;
-        wtxn.commit()?;
-        Ok(())
+        self.with_write(0, |wtxn| {
+            let fk_b = key.to_bytes();
+            let _ = self.frames_soa.delete(wtxn, &fk_b[..])?;
+            Ok(())
+        })
     }
 
     /// Ingest path with optional cook-on-write (still stores CON text as authority).
@@ -1716,19 +1844,19 @@ impl ConCorpus {
     }
 
     pub fn frame_hash(&self, key: FrameKey) -> Result<ContentHash> {
-        let rtxn = self.env.read_txn()?;
+        let rtxn = self.read_txn()?;
         let fk_b = key.to_bytes();
         match self.hash_by_frame.get(&rtxn, &fk_b[..])? {
             Some(b) => ContentHash::from_bytes(b).ok_or_else(|| Error::Message("bad hash".into())),
             None => {
-                let text = self.get_frame_text(key)?;
+                let text = self.get_frame_text_txn(&rtxn, key)?;
                 Ok(hash_frame_bytes(text.as_bytes()))
             }
         }
     }
 
     pub fn find_by_hash(&self, hash: ContentHash) -> Result<Option<FrameKey>> {
-        let rtxn = self.env.read_txn()?;
+        let rtxn = self.read_txn()?;
         let hb = hash.to_bytes();
         match self.frame_by_hash.get(&rtxn, &hb[..])? {
             Some(b) => Ok(FrameKey::from_bytes(b)),
@@ -1758,7 +1886,7 @@ impl ConCorpus {
     }
 
     pub fn select(&self, sel: &Select) -> Result<Vec<FrameKey>> {
-        let rtxn = self.env.read_txn()?;
+        let rtxn = self.read_txn()?;
         let mut sets: Vec<BTreeSet<FrameKey>> = Vec::new();
 
         if let Some(h) = sel.content_hash {
@@ -2272,7 +2400,7 @@ impl ConCorpus {
     /// Sorted `database key value` lines for every logical entry.
     /// Values are hex so the dump does not depend on LMDB page layout.
     pub fn sorted_logical_dump(&self) -> Result<Vec<String>> {
-        let rtxn = self.env.read_txn()?;
+        let rtxn = self.read_txn()?;
         let mut lines = Vec::new();
         fn hex(bytes: &[u8]) -> String {
             const DIGITS: &[u8] = b"0123456789abcdef";
@@ -2406,23 +2534,35 @@ mod tests {
     #[test]
     fn small_map_fills_then_reserve_map_grows_it() {
         let dir = tempfile::tempdir().unwrap();
-        let one = std::fs::read_to_string(fixture("sulfolene.con")).unwrap();
-        let text = one.repeat((4 << 20) / one.len() + 1);
         let db = ConCorpus::open_with_map_size(dir.path(), 1 << 20).unwrap();
         assert_eq!(db.map_size(), 1 << 20);
-        let err = db.append_trajectory_str(1, &text, "big").unwrap_err();
-        assert!(format!("{err:?}").contains("MapFull"), "{err:?}");
-        let grown = db.reserve_map(3 * text.len()).unwrap();
-        assert!(grown >= 3 * text.len(), "{grown}");
-        let n = db.append_trajectory_str(1, &text, "big").unwrap();
-        assert!(n > 1);
+        let grown = db.reserve_map(3 << 20).unwrap();
+        assert!(grown >= 3 << 20, "{grown}");
+        assert!(grown >= db.map_size());
+    }
+
+    /// A 1 MiB map ingests 4 MiB through `append_trajectory_path` with no
+    /// `reserve_map`. The write hits `MDB_MAP_FULL`, grows, and retries.
+    #[test]
+    fn serial_path_grows_1mib_map_for_4mib_input() {
+        let one = std::fs::read_to_string(fixture("sulfolene.con")).unwrap();
+        let text = one.repeat((4 << 20) / one.len() + 1);
+        assert!(text.len() >= 4 << 20, "{}", text.len());
+        let src = tempfile::tempdir().unwrap();
+        let file = src.path().join("big.con");
+        std::fs::write(&file, &text).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open_with_map_size(dir.path(), 1 << 20).unwrap();
+        assert_eq!(db.map_size(), 1 << 20);
+        let n = db.append_trajectory_path(1, &file).unwrap();
+        assert!(n > 1, "{n}");
+        assert!(db.map_size() > 1 << 20, "{}", db.map_size());
         drop(db);
-        // Reopening at the default keeps at least twice the used size.
         let used = std::fs::metadata(dir.path().join("data.mdb"))
             .unwrap()
             .len() as usize;
         let db = ConCorpus::open_with_map_size(dir.path(), 1 << 20).unwrap();
-        assert!(db.map_size() >= 2 * used);
+        assert!(db.map_size() >= 2 * used, "{} vs {used}", db.map_size());
         assert_eq!(db.traj_meta(1).unwrap().unwrap().n_frames, n);
     }
 
@@ -3225,12 +3365,15 @@ mod tests {
             }
         }
         // corrupt cooked → fallback
-        let mut wtxn = db.env.write_txn().unwrap();
-        let fk_b = key.to_bytes();
-        db.frames_soa
-            .put(&mut wtxn, &fk_b[..], b"XXXX_not_valid")
-            .unwrap();
-        wtxn.commit().unwrap();
+        {
+            let _gate = db.write_guard();
+            let mut wtxn = db.env.write_txn().unwrap();
+            let fk_b = key.to_bytes();
+            db.frames_soa
+                .put(&mut wtxn, &fk_b[..], b"XXXX_not_valid")
+                .unwrap();
+            wtxn.commit().unwrap();
+        }
         assert!(db.get_cooked_soa(key).unwrap().is_none());
         let pos = db.get_positions(key).unwrap();
         assert_eq!(pos.len(), fr.atom_data.len());
@@ -3282,6 +3425,7 @@ mod tests {
         assert!(!pos_ok.is_empty());
         // Delete authoritative CON blob but leave RCSO (unsupported storage shape).
         {
+            let _gate = db.write_guard();
             let mut wtxn = db.env.write_txn().unwrap();
             let fk_b = key.to_bytes();
             db.frames.delete(&mut wtxn, &fk_b[..]).unwrap();
@@ -3395,12 +3539,15 @@ mod tests {
         let con_x = fr.atom_data[0].x;
         fr.atom_data[0].x = 99.0;
         let poison = crate::cooked_soa::CookedSoa::encode_frame(&fr).unwrap();
-        let mut wtxn = db.env.write_txn().unwrap();
-        let fk_b = key.to_bytes();
-        db.frames_soa
-            .put(&mut wtxn, &fk_b[..], &poison[..])
-            .unwrap();
-        wtxn.commit().unwrap();
+        {
+            let _gate = db.write_guard();
+            let mut wtxn = db.env.write_txn().unwrap();
+            let fk_b = key.to_bytes();
+            db.frames_soa
+                .put(&mut wtxn, &fk_b[..], &poison[..])
+                .unwrap();
+            wtxn.commit().unwrap();
+        }
         assert!(db.has_valid_cooked_soa(key).unwrap());
         let pos = db.get_positions(key).unwrap();
         assert!(
@@ -3426,6 +3573,7 @@ mod tests {
 
     fn seed_topo(db: &ConCorpus, fk: FrameKey, hex: &str) {
         let (idx, by) = db.require_topo_dbs().unwrap();
+        let _gate = db.write_guard();
         let mut wtxn = db.env.write_txn().unwrap();
         db.put_topo_entry(&mut wtxn, idx, by, fk, hex).unwrap();
         wtxn.commit().unwrap();
@@ -3434,6 +3582,7 @@ mod tests {
     fn stamp_traj_topo(db: &ConCorpus, tid: TrajId, method: &str, cutoff: f64) {
         let mut meta = db.traj_meta(tid).unwrap().expect("meta");
         meta.stamp_topo(cutoff, "cutoff", 2, method);
+        let _gate = db.write_guard();
         let mut wtxn = db.env.write_txn().unwrap();
         let tid_key = tid.to_be_bytes();
         db.traj_meta
@@ -3508,6 +3657,7 @@ mod tests {
         stamp_traj_topo(&db, 2, "nauty", 3.0);
         let (idx, _) = db.require_topo_dbs().unwrap();
         {
+            let _gate = db.write_guard();
             let mut wtxn = db.env.write_txn().unwrap();
             idx.clear(&mut wtxn).unwrap();
             wtxn.commit().unwrap();
