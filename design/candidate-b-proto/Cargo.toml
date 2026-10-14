@@ -1,0 +1,16 @@
+[package]
+name = "candidate-b"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Design prototype: lossless numeric CON storage (candidate B). Not part of the library."
+
+[dependencies]
+fpzip-rs = "0.1"
+heed = "0.21"
+pco = "1"
+readcon-core = "=0.17.0"
+readcon-db = { path = "../.." }
+serde_json = "1"
+sha2 = "0.10"
+zstd = { version = "0.13", features = ["zdict_builder"] }
