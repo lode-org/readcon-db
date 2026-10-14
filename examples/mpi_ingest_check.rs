@@ -1,8 +1,9 @@
-//! `mpirun -n P mpi_ingest_check <single|sharded> <outdir> <batch> <n_shards> <file.con>...`
+//! `mpirun -n P mpi_ingest_check <single|sharded> <outdir> <batch> <n_shards> <first_traj_id> <file.con>...`
 //!
-//! Ingests the files (traj ids 1, 2, ...) with P ranks into `<outdir>/mpi`,
-//! repeats the ingest serially on rank 0 into `<outdir>/serial`, and prints
-//! the sha256 of both canonical dumps plus the wall times.
+//! Ingests the files as `first_traj_id`, `first_traj_id + 1`, ... with P ranks
+//! into `<outdir>/mpi`, repeats the ingest serially on rank 0 into
+//! `<outdir>/serial`, and prints the sha256 of both canonical dumps. `outdir`
+//! must be empty: a second run that reuses a traj id returns `TrajExists`.
 use std::path::PathBuf;
 
 use mpi::traits::*;
@@ -22,10 +23,11 @@ fn main() {
     let out = PathBuf::from(&a[2]);
     let batch: usize = a[3].parse().unwrap();
     let n_shards: u32 = a[4].parse().unwrap();
-    let files: Vec<(u64, PathBuf)> = a[5..]
+    let first_id: u64 = a[5].parse().unwrap();
+    let files: Vec<(u64, PathBuf)> = a[6..]
         .iter()
         .enumerate()
-        .map(|(i, f)| (i as u64 + 1, PathBuf::from(f)))
+        .map(|(i, f)| (first_id + i as u64, PathBuf::from(f)))
         .collect();
     world.barrier();
     let t = std::time::Instant::now();
