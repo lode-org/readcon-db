@@ -57,6 +57,10 @@ jobs:
               '  return s == 2 ? 0 : 1;' \
               '}' > "$d/csize.c"
             mpicc.mpich -o "$d/csize" "$d/csize.c"
+            # 4.2.0-5.1 is ch4:ucx. GitHub runners abort MPI_Init_thread in
+            # ibv_create_srq. TCP is enough for this job.
+            echo UCX_TLS=tcp >> "$GITHUB_ENV"
+            export UCX_TLS=tcp
             mpiexec.mpich -n 2 "$d/csize"
           fi
       - uses: dtolnay/rust-toolchain@stable
