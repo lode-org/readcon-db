@@ -1,0 +1,678 @@
+{
+  "codecs": {
+    "blosc2": "2.15.2 zstd level 3, 1 thread",
+    "fpzip": "fpzip-rs 0.1 lossless precision 64",
+    "pcodec": "pco 1.x ChunkConfig::default",
+    "zfp": "1.0.1 reversible",
+    "zstd": "0.13"
+  },
+  "legacy_con_rewrite": [
+    {
+      "bit_exact": 0,
+      "file": "eon36_lj_dimer.convel",
+      "first_mismatch": "len 394 vs 327 first delta at 128 left=\"amu\\\",\\\"time\\\":\\\"fs\\\"}}\\n20.000000 20.000000 20.000000\\n90.000000 9\" right=\"amu\\\",\\\"time\\\":\\\"fs\\\"}}\\n2e1 2e1 2e1\\n9e1 9e1 9e1\\n0 0\\n1 0\\n1\\n2\\n1.2e1\"",
+      "frames": 1
+    },
+    {
+      "bit_exact": 0,
+      "file": "sulfolene.con",
+      "first_mismatch": "len 718 vs 749 first delta at 41 left=\"n_spec_version\\\":2}\\n25.000000 25.000000 25.000000\\n90.000000 9\" right=\"n_spec_version\\\":2}\\n2.5e1 2.5e1 2.5e1\\n9e1 9e1 9e1\\n\\n\\n4\\n2 4 6 1\"",
+      "frames": 1
+    },
+    {
+      "bit_exact": 0,
+      "file": "tiny_cuh2.con",
+      "first_mismatch": "len 499 vs 425 first delta at 43 left=\"n_spec_version\\\":2}\\n15.345600\\t21.702000\\t100.000000\\n90.000000\\t\" right=\"n_spec_version\\\":2}\\n1.53456e1 2.1702e1 1e2\\n9e1 9e1 9e1\\n0 0\\n21\"",
+      "frames": 1
+    },
+    {
+      "bit_exact": 0,
+      "file": "tiny_cuh2.convel",
+      "first_mismatch": "len 593 vs 513 first delta at 40 left=\"\\\"con_spec_version\\\":2}\\n15.345600\\t21.702000\\t100.000000\\n90.0000\" right=\"\\\"con_spec_version\\\":2,\\\"sections\\\":[\\\"velocities\\\"]}\\n1.53456e1 2.\"",
+      "frames": 1
+    },
+    {
+      "bit_exact": 0,
+      "file": "tiny_cuh2_forces.con",
+      "first_mismatch": "len 805 vs 714 first delta at 42 left=\"on_spec_version\\\":2,\\\"sections\\\":[\\\"forces\\\"],\\\"potential\\\":{\\\"type\\\"\" right=\"on_spec_version\\\":2,\\\"energy\\\":-42.5,\\\"potential\\\":{\\\"params\\\":{\\\"cu\"",
+      "frames": 1
+    },
+    {
+      "bit_exact": 0,
+      "file": "tiny_cuh2_vel_forces.con",
+      "first_mismatch": "len 900 vs 777 first delta at 42 left=\"on_spec_version\\\":2,\\\"sections\\\":[\\\"velocities\\\",\\\"forces\\\"],\\\"poten\" right=\"on_spec_version\\\":2,\\\"energy\\\":-42.5,\\\"potential\\\":{\\\"params\\\":{},\\\"\"",
+      "frames": 1
+    },
+    {
+      "bit_exact": 0,
+      "file": "tiny_multi_cuh2.con",
+      "first_mismatch": "len 339 vs 295 first delta at 43 left=\"n_spec_version\\\":2}\\n15.345600\\t21.702000\\t100.000000\\n90.000000\\t\" right=\"n_spec_version\\\":2}\\n1.53456e1 2.1702e1 1e2\\n9e1 9e1 9e1\\n0 0\\n21\"",
+      "frames": 2
+    }
+  ],
+  "lmdb": {
+    "con_text_bytes": 31584938,
+    "data_mdb_after_recook": 64303104,
+    "data_mdb_over_text": 1.181403617129152,
+    "data_mdb_text_and_indexes": 37314560,
+    "frames": 2188,
+    "frames_soa_bytes": 20322144,
+    "get_cooked_soa_mean_us": 3.59171,
+    "get_cooked_soa_median_us": 3.3850000000000002,
+    "get_cooked_soa_p99_us": 10.438,
+    "get_frame_text_mean_us": 3.8674949999999995,
+    "get_frame_text_median_us": 3.9770000000000003,
+    "get_frame_text_p99_us": 8.107000000000001,
+    "get_frame_texts_per_frame_us": 2.0537,
+    "value_only_numeric_mdb": 26972160,
+    "value_only_plain_mdb": 35934208,
+    "value_only_zstd_text_mdb": 18010112
+  },
+  "md": {
+    "bit_exact": {
+      "energy_bits_lost": 0,
+      "first_idempotence_mismatch": null,
+      "first_rebuild_mismatch": null,
+      "force_bits_lost": 0,
+      "force_values": 1266852,
+      "frames": 2188,
+      "position_bits_lost": 0,
+      "position_values": 1266852,
+      "rebuild_from_parsed_f64_frames": 2188,
+      "rebuild_from_stored_f64_frames": 2188,
+      "sample_coordinate_line": "1.327827e1 1.219568e1 -1.66215e0 0 0",
+      "writer_idempotent_frames": 2188
+    },
+    "cell_A": 12.42,
+    "con_text_bytes": 31584938,
+    "consecutive_rmsd_A": {
+      "max": 5.58803362819441,
+      "mean": 0.35526309287879554,
+      "median": 0.3874967161365116
+    },
+    "description": "time-ordered revPBE0-D3 configurations of an excess proton in bulk water",
+    "f64_pos_force_bytes": 20269632,
+    "f64_sub_irreversible": 454676,
+    "f64_sub_pairs": 2532546,
+    "jumps_rmsd_gt_1A": 4,
+    "n_H": 129,
+    "n_O": 64,
+    "n_frames": 2188,
+    "natoms": 193,
+    "numeric_codecs": [
+      {
+        "access": "one value, no decode",
+        "bytes": 20269632,
+        "decode_mean_us": 0.16838800000000004,
+        "decode_median_us": 0.157,
+        "decode_p99_us": 0.39499999999999996,
+        "lossless": true,
+        "name": "f64-le-uncompressed",
+        "vs_f64": 1.0,
+        "vs_text": 0.6417499378976144
+      },
+      {
+        "access": "one value",
+        "bytes": 17650054,
+        "decode_mean_us": 12.620928,
+        "decode_median_us": 11.972,
+        "decode_p99_us": 16.275,
+        "lossless": true,
+        "name": "zstd3-raw-f64",
+        "vs_f64": 0.8707634159317742,
+        "vs_text": 0.5588123680977306
+      },
+      {
+        "access": "one value",
+        "bytes": 18757116,
+        "decode_mean_us": 7.6981600000000014,
+        "decode_median_us": 7.696999999999999,
+        "decode_p99_us": 10.131,
+        "lossless": true,
+        "name": "shuffle-zstd3",
+        "vs_f64": 0.9253801943715604,
+        "vs_text": 0.5938626822696311
+      },
+      {
+        "access": "one value",
+        "bytes": 18454942,
+        "decode_mean_us": 6.978456,
+        "decode_median_us": 6.989000000000001,
+        "decode_p99_us": 7.662000000000001,
+        "lossless": true,
+        "name": "blosc2-shuffle-zstd3",
+        "vs_f64": 0.9104724742906039,
+        "vs_text": 0.5842956538334823
+      },
+      {
+        "access": "one value",
+        "bytes": 19339341,
+        "decode_mean_us": 2.308075999999999,
+        "decode_median_us": 2.299,
+        "decode_p99_us": 2.816,
+        "lossless": true,
+        "name": "blosc2-bitshuffle-zstd3",
+        "vs_f64": 0.9541041988330129,
+        "vs_text": 0.612296310348939
+      },
+      {
+        "access": "one value",
+        "bytes": 18613519,
+        "decode_mean_us": 8.306168000000005,
+        "decode_median_us": 7.691,
+        "decode_p99_us": 11.486,
+        "lossless": true,
+        "name": "blosc2-shuffle-bytedelta-zstd3",
+        "vs_f64": 0.9182958526331411,
+        "vs_text": 0.589316306398955
+      },
+      {
+        "access": "one value",
+        "bytes": 18596055,
+        "decode_mean_us": 9.494436000000006,
+        "decode_median_us": 8.895,
+        "decode_p99_us": 12.488,
+        "lossless": true,
+        "name": "blosc2-delta-shuffle-zstd3",
+        "vs_f64": 0.9174342681702361,
+        "vs_text": 0.5887633846233923
+      },
+      {
+        "access": "one value",
+        "bytes": 7434922,
+        "decode_mean_us": 8.997915999999998,
+        "decode_median_us": 8.927,
+        "decode_p99_us": 12.212,
+        "lossless": true,
+        "name": "pcodec-f64",
+        "vs_f64": 0.3668010351643286,
+        "vs_text": 0.23539454153748854
+      },
+      {
+        "access": "one value",
+        "bytes": 19102320,
+        "decode_mean_us": 64.38428799999997,
+        "decode_median_us": 63.315,
+        "decode_p99_us": 80.944,
+        "lossless": true,
+        "name": "fpzip-lossless-2d",
+        "vs_f64": 0.9424107946311013,
+        "vs_text": 0.6047920689285506
+      },
+      {
+        "access": "one value",
+        "bytes": 25869552,
+        "decode_mean_us": 90.10990799999993,
+        "decode_median_us": 89.02900000000001,
+        "decode_p99_us": 113.962,
+        "lossless": true,
+        "name": "zfp-reversible-2d",
+        "vs_f64": 1.2762714192344489,
+        "vs_text": 0.8190471040342077
+      },
+      {
+        "access": "chain to previous keyframe",
+        "bytes": 18384813,
+        "decode_mean_us": 30.98238399999998,
+        "decode_median_us": 30.505,
+        "decode_p99_us": 73.65899999999999,
+        "lossless": true,
+        "name": "xor-prev-shuffle-zstd3-k8",
+        "vs_f64": 0.9070126680148904,
+        "vs_text": 0.5820753233709055
+      },
+      {
+        "access": "chain to previous keyframe",
+        "bytes": 18346959,
+        "decode_mean_us": 122.103756,
+        "decode_median_us": 120.95100000000001,
+        "decode_p99_us": 279.197,
+        "lossless": true,
+        "name": "xor-prev-shuffle-zstd3-k32",
+        "vs_f64": 0.9051451452103324,
+        "vs_text": 0.5808768407270579
+      },
+      {
+        "access": "chain to previous keyframe",
+        "bytes": 18586943,
+        "decode_mean_us": 40.988651999999995,
+        "decode_median_us": 40.879,
+        "decode_p99_us": 103.093,
+        "lossless": true,
+        "name": "wrapsub-prev-shuffle-zstd3-k8",
+        "vs_f64": 0.9169847286818034,
+        "vs_text": 0.5884748926846081
+      },
+      {
+        "access": "must replay from frame 0",
+        "bytes": 17638938,
+        "decode_mean_us": 0.0,
+        "decode_median_us": 0.0,
+        "decode_p99_us": 0.0,
+        "lossless": true,
+        "name": "xor-prev-pcodec-full-chain",
+        "vs_f64": 0.8702150093302138,
+        "vs_text": 0.5584604281952366
+      },
+      {
+        "access": "whole trajectory, not one get",
+        "bytes": 17983531,
+        "decode_mean_us": 62.126012797074964,
+        "decode_median_us": 62.126012797074964,
+        "decode_p99_us": 62.126012797074964,
+        "lossless": true,
+        "name": "fpzip-lossless-3d-whole",
+        "vs_f64": 0.8872154659739259,
+        "vs_text": 0.56937047019057
+      },
+      {
+        "access": "whole trajectory, not one get",
+        "bytes": 26179440,
+        "decode_mean_us": 73.36892138939672,
+        "decode_median_us": 73.36892138939672,
+        "decode_p99_us": 73.36892138939672,
+        "lossless": true,
+        "name": "zfp-reversible-3d-whole",
+        "vs_f64": 1.2915597086321053,
+        "vs_text": 0.8288583628057146
+      },
+      {
+        "access": "whole trajectory, not one get",
+        "bytes": 6149738,
+        "decode_mean_us": 9.163355118829983,
+        "decode_median_us": 9.163355118829983,
+        "decode_p99_us": 9.163355118829983,
+        "lossless": true,
+        "name": "pcodec-time-major-whole",
+        "vs_f64": 0.30339662801968975,
+        "vs_text": 0.1947047671899815
+      }
+    ],
+    "sha256_configurations": "a62ed76e281e9e3dae733c9218ccf8d5e9f0a45139ac73f45a6b95bbe6de83f9",
+    "sha256_energies": "7829b97c08e84296511b8b5493da84af4d7f02651e5ef7a6b6ee00e97827f2fe",
+    "sha256_forces": "3c6de4118d117d0f8a9764bf09bf7f709549252c7cd0d60dcc1f67fb50b57890",
+    "source": "https://zenodo.org/records/13741551",
+    "text_codecs": [
+      {
+        "access": "one value, memcpy",
+        "bytes": 31584938,
+        "decode_mean_us": 0.02479600000000008,
+        "decode_median_us": 0.024999999999999998,
+        "decode_p99_us": 0.026000000000000002,
+        "lossless": true,
+        "name": "con-text",
+        "vs_f64": 1.0,
+        "vs_text": 1.0
+      },
+      {
+        "access": "one value",
+        "bytes": 14217637,
+        "decode_mean_us": 18.159572,
+        "decode_median_us": 17.355,
+        "decode_p99_us": 25.483999999999998,
+        "lossless": true,
+        "name": "zstd3-text",
+        "vs_f64": 0.4501397786501908,
+        "vs_text": 0.4501397786501908
+      },
+      {
+        "access": "one value, size only",
+        "bytes": 12506021,
+        "decode_mean_us": 0.0,
+        "decode_median_us": 0.0,
+        "decode_p99_us": 0.0,
+        "lossless": true,
+        "name": "zstd19-text",
+        "vs_f64": 0.39594888550992247,
+        "vs_text": 0.39594888550992247
+      },
+      {
+        "access": "one value + shared dict of 32768 bytes, trained stride 20",
+        "bytes": 12742318,
+        "decode_mean_us": 22.591267999999996,
+        "decode_median_us": 22.165,
+        "decode_p99_us": 28.254,
+        "lossless": true,
+        "name": "zstd3-dict-text",
+        "vs_f64": 0.4034302046120844,
+        "vs_text": 0.4034302046120844
+      },
+      {
+        "access": "no single-frame get",
+        "bytes": 12303515,
+        "decode_mean_us": 0.0,
+        "decode_median_us": 0.0,
+        "decode_p99_us": 0.0,
+        "lossless": true,
+        "name": "zstd3-text-whole-file",
+        "vs_f64": 0.3895374117878591,
+        "vs_text": 0.3895374117878591
+      },
+      {
+        "access": "no single-frame get",
+        "bytes": 9589201,
+        "decode_mean_us": 0.0,
+        "decode_median_us": 0.0,
+        "decode_p99_us": 0.0,
+        "lossless": true,
+        "name": "zstd19-text-whole-file",
+        "vs_f64": 0.3036004376516427,
+        "vs_text": 0.3036004376516427
+      }
+    ]
+  },
+  "neb": {
+    "bit_exact": {
+      "energy_bits_lost": 0,
+      "first_idempotence_mismatch": null,
+      "first_rebuild_mismatch": null,
+      "force_bits_lost": 0,
+      "force_values": 4785,
+      "frames": 11,
+      "position_bits_lost": 0,
+      "position_values": 4785,
+      "rebuild_from_parsed_f64_frames": 11,
+      "rebuild_from_stored_f64_frames": 11,
+      "sample_coordinate_line": "0e0 0e0 0e0 7 0",
+      "writer_idempotent_frames": 11
+    },
+    "cell_A": [
+      22.93189964696049,
+      19.859607651303183,
+      27.361908827960484
+    ],
+    "chord": {
+      "cold_middle_image_us": 22.521,
+      "frc_prev_xor_bytes": 18311,
+      "images": 11,
+      "lossless": true,
+      "pos_chord_bytes": 18920,
+      "total_bytes": 37231,
+      "vs_f64": 0.48629832810867296,
+      "vs_text": 0.2158631685751558
+    },
+    "con_text_bytes": 172475,
+    "cutoff_A": 8.5125,
+    "endpoint_fmax_eV_A": 0.019997294665339775,
+    "energies_eV": [
+      -65.69295069471292,
+      -65.69196769648161,
+      -71.10087361533809,
+      -71.38407419015542,
+      -70.43306628460091,
+      -71.13523340271179,
+      -71.78024359872624,
+      -71.56584339976536,
+      -71.09472320780674,
+      -71.42141665837731,
+      -71.3176896095286
+    ],
+    "epsilon_eV": 0.1,
+    "f64_pos_force_bytes": 76560,
+    "k_spring_eV_per_A2": 0.5,
+    "model": "LJ fcc(111) Ar adatom, fcc hollow to hcp hollow, CI-NEB",
+    "n_images": 11,
+    "natoms": 145,
+    "neb_fmax_eV_A": 0.5240892470731392,
+    "neb_steps": 250,
+    "neighbor_chain": {
+      "access": "chain from image 0",
+      "bytes": 36004,
+      "decode_mean_us": 35.86654545454545,
+      "decode_median_us": 35.942,
+      "decode_p99_us": 65.50500000000001,
+      "lossless": true,
+      "name": "neb-xor-previous-image-shuffle-zstd3",
+      "vs_f64": 0.47027168234064787,
+      "vs_text": 0.20874909407160458
+    },
+    "numeric_codecs": [
+      {
+        "access": "one value, no decode",
+        "bytes": 76560,
+        "decode_mean_us": 0.032181818181818186,
+        "decode_median_us": 0.027,
+        "decode_p99_us": 0.08,
+        "lossless": true,
+        "name": "f64-le-uncompressed",
+        "vs_f64": 1.0,
+        "vs_text": 0.44389041890129005
+      },
+      {
+        "access": "one value",
+        "bytes": 40151,
+        "decode_mean_us": 5.7133636363636375,
+        "decode_median_us": 5.9270000000000005,
+        "decode_p99_us": 6.653,
+        "lossless": true,
+        "name": "zstd3-raw-f64",
+        "vs_f64": 0.5244383490073146,
+        "vs_text": 0.23279315842875778
+      },
+      {
+        "access": "one value",
+        "bytes": 46170,
+        "decode_mean_us": 6.104181818181818,
+        "decode_median_us": 6.096,
+        "decode_p99_us": 6.409,
+        "lossless": true,
+        "name": "shuffle-zstd3",
+        "vs_f64": 0.6030564263322884,
+        "vs_text": 0.26769096970575446
+      },
+      {
+        "access": "one value",
+        "bytes": 47426,
+        "decode_mean_us": 4.723636363636364,
+        "decode_median_us": 4.65,
+        "decode_p99_us": 5.0520000000000005,
+        "lossless": true,
+        "name": "blosc2-shuffle-zstd3",
+        "vs_f64": 0.6194618599791013,
+        "vs_text": 0.2749731845194956
+      },
+      {
+        "access": "one value",
+        "bytes": 47409,
+        "decode_mean_us": 3.955636363636363,
+        "decode_median_us": 3.6679999999999997,
+        "decode_p99_us": 4.957,
+        "lossless": true,
+        "name": "blosc2-bitshuffle-zstd3",
+        "vs_f64": 0.6192398119122257,
+        "vs_text": 0.2748746195100739
+      },
+      {
+        "access": "one value",
+        "bytes": 48749,
+        "decode_mean_us": 5.150090909090909,
+        "decode_median_us": 5.1819999999999995,
+        "decode_p99_us": 5.3020000000000005,
+        "lossless": true,
+        "name": "blosc2-shuffle-bytedelta-zstd3",
+        "vs_f64": 0.6367424242424242,
+        "vs_text": 0.2826438614291926
+      },
+      {
+        "access": "one value",
+        "bytes": 48632,
+        "decode_mean_us": 6.295909090909091,
+        "decode_median_us": 6.2940000000000005,
+        "decode_p99_us": 6.4239999999999995,
+        "lossless": true,
+        "name": "blosc2-delta-shuffle-zstd3",
+        "vs_f64": 0.6352142110762801,
+        "vs_text": 0.2819655022467024
+      },
+      {
+        "access": "one value",
+        "bytes": 38843,
+        "decode_mean_us": 8.152454545454544,
+        "decode_median_us": 8.136,
+        "decode_p99_us": 8.439,
+        "lossless": true,
+        "name": "pcodec-f64",
+        "vs_f64": 0.5073537095088819,
+        "vs_text": 0.22520945064502101
+      },
+      {
+        "access": "one value",
+        "bytes": 49521,
+        "decode_mean_us": 36.665727272727274,
+        "decode_median_us": 36.010000000000005,
+        "decode_p99_us": 40.83,
+        "lossless": true,
+        "name": "fpzip-lossless-2d",
+        "vs_f64": 0.6468260188087774,
+        "vs_text": 0.2871198724452819
+      },
+      {
+        "access": "one value",
+        "bytes": 66220,
+        "decode_mean_us": 41.63590909090909,
+        "decode_median_us": 41.341,
+        "decode_p99_us": 43.642,
+        "lossless": true,
+        "name": "zfp-reversible-2d",
+        "vs_f64": 0.8649425287356322,
+        "vs_text": 0.38393970140600087
+      },
+      {
+        "access": "chain to previous keyframe",
+        "bytes": 36978,
+        "decode_mean_us": 22.956454545454545,
+        "decode_median_us": 18.282,
+        "decode_p99_us": 47.579,
+        "lossless": true,
+        "name": "xor-prev-shuffle-zstd3-k8",
+        "vs_f64": 0.4829937304075235,
+        "vs_text": 0.21439628931729235
+      },
+      {
+        "access": "chain to previous keyframe",
+        "bytes": 37900,
+        "decode_mean_us": 24.469999999999995,
+        "decode_median_us": 24.217,
+        "decode_p99_us": 53.031,
+        "lossless": true,
+        "name": "wrapsub-prev-shuffle-zstd3-k8",
+        "vs_f64": 0.4950365726227795,
+        "vs_text": 0.2197419915929845
+      },
+      {
+        "access": "must replay from frame 0",
+        "bytes": 35718,
+        "decode_mean_us": 0.0,
+        "decode_median_us": 0.0,
+        "decode_p99_us": 0.0,
+        "lossless": true,
+        "name": "xor-prev-pcodec-full-chain",
+        "vs_f64": 0.4665360501567398,
+        "vs_text": 0.20709088273662848
+      },
+      {
+        "access": "whole trajectory, not one get",
+        "bytes": 37110,
+        "decode_mean_us": 29.16909090909091,
+        "decode_median_us": 29.16909090909091,
+        "decode_p99_us": 29.16909090909091,
+        "lossless": true,
+        "name": "fpzip-lossless-3d-whole",
+        "vs_f64": 0.484717868338558,
+        "vs_text": 0.21516161762574287
+      },
+      {
+        "access": "whole trajectory, not one get",
+        "bytes": 66952,
+        "decode_mean_us": 33.975727272727276,
+        "decode_median_us": 33.975727272727276,
+        "decode_p99_us": 33.975727272727276,
+        "lossless": true,
+        "name": "zfp-reversible-3d-whole",
+        "vs_f64": 0.874503657262278,
+        "vs_text": 0.38818379475286274
+      },
+      {
+        "access": "whole trajectory, not one get",
+        "bytes": 40180,
+        "decode_mean_us": 2.7227272727272727,
+        "decode_median_us": 2.7227272727272727,
+        "decode_p99_us": 2.7227272727272727,
+        "lossless": true,
+        "name": "pcodec-time-major-whole",
+        "vs_f64": 0.5248171368861024,
+        "vs_text": 0.23296129873894766
+      }
+    ],
+    "relax_steps": 423,
+    "sigma_A": 3.405,
+    "text_codecs": [
+      {
+        "access": "one value, memcpy",
+        "bytes": 172475,
+        "decode_mean_us": 0.026454545454545453,
+        "decode_median_us": 0.024,
+        "decode_p99_us": 0.049999999999999996,
+        "lossless": true,
+        "name": "con-text",
+        "vs_f64": 1.0,
+        "vs_text": 1.0
+      },
+      {
+        "access": "one value",
+        "bytes": 64258,
+        "decode_mean_us": 12.98109090909091,
+        "decode_median_us": 13.013,
+        "decode_p99_us": 13.203999999999999,
+        "lossless": true,
+        "name": "zstd3-text",
+        "vs_f64": 0.3725641397303957,
+        "vs_text": 0.3725641397303957
+      },
+      {
+        "access": "one value, size only",
+        "bytes": 57420,
+        "decode_mean_us": 0.0,
+        "decode_median_us": 0.0,
+        "decode_p99_us": 0.0,
+        "lossless": true,
+        "name": "zstd19-text",
+        "vs_f64": 0.33291781417596755,
+        "vs_text": 0.33291781417596755
+      },
+      {
+        "access": "one value + shared dict of 21559 bytes, trained stride 1",
+        "bytes": 64281,
+        "decode_mean_us": 10.354000000000001,
+        "decode_median_us": 10.567,
+        "decode_p99_us": 12.458,
+        "lossless": true,
+        "name": "zstd3-dict-text",
+        "vs_f64": 0.3726974923902015,
+        "vs_text": 0.3726974923902015
+      },
+      {
+        "access": "no single-frame get",
+        "bytes": 55740,
+        "decode_mean_us": 0.0,
+        "decode_median_us": 0.0,
+        "decode_p99_us": 0.0,
+        "lossless": true,
+        "name": "zstd3-text-whole-file",
+        "vs_f64": 0.32317727206841573,
+        "vs_text": 0.32317727206841573
+      },
+      {
+        "access": "no single-frame get",
+        "bytes": 44279,
+        "decode_mean_us": 0.0,
+        "decode_median_us": 0.0,
+        "decode_p99_us": 0.0,
+        "lossless": true,
+        "name": "zstd19-text-whole-file",
+        "vs_f64": 0.25672706189302796,
+        "vs_text": 0.25672706189302796
+      }
+    ]
+  }
+}
