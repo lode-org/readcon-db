@@ -87,6 +87,7 @@ Site map
    howto/install
    howto/campaign
    howto/workflows
+   howto/mpi
 
 .. toctree::
    :maxdepth: 1

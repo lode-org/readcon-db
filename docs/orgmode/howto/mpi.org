@@ -1,0 +1,37 @@
+#+OPTIONS: toc:nil num:nil
+
+* MPI ingest and export
+:PROPERTIES:
+:CUSTOM_ID: mpi-ingest-and-export
+:END:
+Build with =--features mpi= against one MPI implementation (=MPICC=mpicc.mpich= or =mpicc.openmpi=). The library never calls =MPI_Init= and only uses the communicator you pass.
+
+** Ingest
+:PROPERTIES:
+:CUSTOM_ID: mpi-ingest
+:END:
+#+begin_src rust
+let counts = readcon_db::mpi_ingest::append_trajectory_paths(&world, "corpus", &files, 4096)?;
+let counts = readcon_db::mpi_ingest::append_trajectory_paths_sharded(&world, "root", 64, &files, 4096)?;
+#+end_src
+The frames of all files, in order, are split into contiguous blocks. Each rank parses, hashes and derives index keys for its block. Ranks exchange only the 16-byte hashes first, so a repeated frame sends no blob. Records go to the env owner with =MPI_Alltoallv= (rank 0 for one corpus, rank =shard % P= for shards), which inserts them in global frame order.
+
+From C, C++ or Fortran use =rkrdb_mpi_ingest_paths= (an =MPI_Comm=) or =rkrdb_mpi_ingest_paths_f= (an =MPI_Fint=) from =readcon-db-mpi.h=.
+
+** Read and export
+:PROPERTIES:
+:CUSTOM_ID: mpi-read-export
+:END:
+=mpi_read::scatter_packed_frames= sends each rank its block of a selection as one RCSO batch. =mpi_read::export_extxyz_collective= writes extended XYZ from every rank with =MPI_File_write_at_all=, or through rank 0 with =WriteMode::Gather=.
+
+** Determinism
+:PROPERTIES:
+:CUSTOM_ID: mpi-determinism
+:END:
+LMDB page layout can differ between equal corpora, so the check is =ConCorpus::canonical_dump= (every table in key order). Its sha256 after an MPI ingest equals the serial ingest of the same files in the same order, for every rank count. Exported XYZ bytes equal the serial export.
+
+** Benchmark
+:PROPERTIES:
+:CUSTOM_ID: mpi-benchmark
+:END:
+=bench/mpi_bench.sh FRAMES ATOMS "1 2 4 8"= writes a synthetic trajectory with =bench/gen_con.py= and prints the ingest wall time and the sha256 match for every rank count and mode.

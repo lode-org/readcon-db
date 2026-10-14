@@ -9,6 +9,7 @@
 - `mpi_ingest::append_trajectory_paths_sharded`: sharded multi-writer ingest routed with `MPI_Alltoallv`, plus `ShardedConCorpus::canonical_dump`.
 - `mpi_read::scatter_packed_frames`: rank 0 packs each rank's block of a selection and sends it with `MPI_Scatterv`.
 - `mpi_read::export_extxyz_collective`: extended XYZ export at `MPI_Exscan` offsets with `MPI_File_write_at_all`, or gathered to rank 0.
+- `bench/mpi_bench.sh` and `bench/gen_con.py` for the MPI ingest benchmark, and the MPI how-to page.
 - C ABI `rkrdb_mpi_ingest_paths_f` and the `rkrdb_mpi_ingest_paths` header wrapper.
 
 ### Changed
