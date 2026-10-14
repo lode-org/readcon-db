@@ -4,6 +4,7 @@
 
 ### Added
 
+- Per-frame zstd level 1 of the CON text in `frames` (`0xFD 0x01` plus one zstd frame). Untagged UTF-8 still reads. `readcon-db migrate` rewrites legacy values. `--no-compress` stores the UTF-8. xxh3-128 stays on the decompressed text. Both MPI ingest routes send the stored bytes. Ingest and migrate do not cook.
 - Optional `mpi` feature with `mpi_ingest::append_trajectory_path`, a parallel ingest over a caller-supplied communicator.
 - `ConCorpus::canonical_dump` for comparing corpora independent of LMDB page layout.
 - `mpi_ingest::append_trajectory_paths_sharded`: sharded multi-writer ingest routed with `MPI_Alltoallv`, plus `ShardedConCorpus::canonical_dump`.

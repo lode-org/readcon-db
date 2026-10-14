@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use heed::types::{Bytes, Str, Unit};
@@ -130,7 +130,9 @@ impl TrajMeta {
 /// All secondary index keys precomputed **outside** exclusive write_txn (commit = puts only).
 struct PreparedIndexPuts {
     fk: FrameKey,
-    blob: String,
+    /// Bytes written to `frames` (tagged zstd, or the UTF-8 when compression is off or does not shrink).
+    stored: Vec<u8>,
+    /// xxh3-128 of the CON UTF-8, computed before compression.
     hash: [u8; 16],
     natoms_k: [u8; 16],
     symbol_keys: Vec<Vec<u8>>,
@@ -153,7 +155,9 @@ pub struct ConCorpus {
     /// map grows, so the write guard stays held across the abort and the
     /// `resize` call.
     txn_gate: RwLock<()>,
-    frames: Database<Bytes, Str>,
+    frames: Database<Bytes, Bytes>,
+    /// When false, new frames are stored as raw UTF-8. Existing tagged values still decode.
+    compress_frames: AtomicBool,
     traj_meta: Database<Bytes, Str>,
     idx_natoms: Database<Bytes, Unit>,
     idx_symbol: Database<Bytes, Unit>,
@@ -253,7 +257,7 @@ fn is_map_full(err: &Error) -> bool {
 fn prepared_bytes(prepared: &[PreparedIndexPuts]) -> usize {
     prepared
         .iter()
-        .fold(0usize, |n, p| n.saturating_add(p.blob.len()))
+        .fold(0usize, |n, p| n.saturating_add(p.stored.len()))
 }
 
 impl ConCorpus {
@@ -493,6 +497,7 @@ impl ConCorpus {
                 env,
                 txn_gate: RwLock::new(()),
                 frames,
+                compress_frames: AtomicBool::new(true),
                 traj_meta,
                 idx_natoms,
                 idx_symbol,
@@ -539,6 +544,7 @@ impl ConCorpus {
             env,
             txn_gate: RwLock::new(()),
             frames,
+            compress_frames: AtomicBool::new(true),
             traj_meta,
             idx_natoms,
             idx_symbol,
@@ -627,11 +633,28 @@ impl ConCorpus {
         self.get_frame_text(key)
     }
 
+    /// When false, later ingests store raw UTF-8. Reads of either form are unchanged.
+    pub fn set_compress_frames(&self, compress: bool) {
+        self.compress_frames.store(compress, Ordering::Relaxed);
+    }
+
+    fn compress_on(&self) -> bool {
+        self.compress_frames.load(Ordering::Relaxed)
+    }
+
     /// CPU-only: derive every secondary key for one frame (call **outside** write_txn).
     /// Screening scalars come from [`readcon_core::index_proj::FrameIndexProjection`].
-    fn build_index_puts(fk: FrameKey, frame: &ConFrame, blob: String) -> PreparedIndexPuts {
+    /// The content hash is the UTF-8. Compression of that UTF-8 happens here, still
+    /// outside the write transaction.
+    fn build_index_puts(
+        fk: FrameKey,
+        frame: &ConFrame,
+        text: String,
+        compress: bool,
+    ) -> Result<PreparedIndexPuts> {
         use readcon_core::index_proj::FrameIndexProjection;
-        let hash = hash_frame_bytes(blob.as_bytes()).to_bytes();
+        let hash = hash_frame_bytes(text.as_bytes()).to_bytes();
+        let stored = crate::frame_codec::store_frame(&text, compress)?;
         let proj = FrameIndexProjection::from_frame(frame);
         let mut symbol_keys = Vec::new();
         let mut elem_count_keys = Vec::new();
@@ -682,9 +705,9 @@ impl ConCorpus {
                 }
             }
         }
-        PreparedIndexPuts {
+        Ok(PreparedIndexPuts {
             fk,
-            blob,
+            stored,
             hash,
             natoms_k: natoms_key(proj.n_atoms, fk),
             symbol_keys,
@@ -697,13 +720,13 @@ impl ConCorpus {
             pbc_k,
             flag_keys,
             meta_keys,
-        }
+        })
     }
 
     /// Exclusive section: LMDB puts only (no hash/species/bin derivation).
     fn put_index_puts(&self, wtxn: &mut RwTxn, p: &PreparedIndexPuts) -> Result<()> {
         let fk_b = p.fk.to_bytes();
-        self.frames.put(wtxn, &fk_b[..], p.blob.as_str())?;
+        self.frames.put(wtxn, &fk_b[..], &p.stored[..])?;
         self.hash_by_frame.put(wtxn, &fk_b[..], &p.hash[..])?;
         if self.frame_by_hash.get(wtxn, &p.hash[..])?.is_none() {
             self.frame_by_hash.put(wtxn, &p.hash[..], &fk_b[..])?;
@@ -790,7 +813,7 @@ impl ConCorpus {
         frame: &ConFrame,
         blob: &str,
     ) -> Result<()> {
-        let puts = Self::build_index_puts(fk, frame, blob.to_owned());
+        let puts = Self::build_index_puts(fk, frame, blob.to_owned(), self.compress_on())?;
         self.put_index_puts(wtxn, &puts)
     }
 
@@ -798,6 +821,7 @@ impl ConCorpus {
     fn prepare_trajectory_str(
         traj_id: TrajId,
         file_contents: &str,
+        compress: bool,
     ) -> Result<Vec<PreparedIndexPuts>> {
         let mut out = Vec::new();
         let mut frame_idx: u32 = 0;
@@ -809,7 +833,12 @@ impl ConCorpus {
                 Some(Ok(x)) => x,
             };
             let fk = FrameKey { traj_id, frame_idx };
-            out.push(Self::build_index_puts(fk, &frame, blob.to_owned()));
+            out.push(Self::build_index_puts(
+                fk,
+                &frame,
+                blob.to_owned(),
+                compress,
+            )?);
             frame_idx += 1;
         }
         Ok(out)
@@ -820,12 +849,14 @@ impl ConCorpus {
         traj_id: TrajId,
         frames: &[ConFrame],
         start_idx: u32,
+        compress: bool,
     ) -> Result<Vec<PreparedIndexPuts>> {
         Self::prepare_trajectory_frames_formatted(
             traj_id,
             frames,
             start_idx,
             FloatFormat::default(),
+            compress,
         )
     }
 
@@ -834,6 +865,7 @@ impl ConCorpus {
         frames: &[ConFrame],
         start_idx: u32,
         float_format: FloatFormat,
+        compress: bool,
     ) -> Result<Vec<PreparedIndexPuts>> {
         let mut out = Vec::with_capacity(frames.len());
         let mut frame_idx = start_idx;
@@ -847,7 +879,7 @@ impl ConCorpus {
             let blob = String::from_utf8(buf.into_inner())
                 .map_err(|e| Error::Message(format!("utf8: {e}")))?;
             let fk = FrameKey { traj_id, frame_idx };
-            out.push(Self::build_index_puts(fk, fr, blob));
+            out.push(Self::build_index_puts(fk, fr, blob, compress)?);
             frame_idx += 1;
         }
         Ok(out)
@@ -872,8 +904,8 @@ impl ConCorpus {
         fk: FrameKey,
         frame: &ConFrame,
         blob: &str,
-    ) -> ([u8; 16], Vec<u8>) {
-        let p = Self::build_index_puts(fk, frame, blob.to_owned());
+    ) -> Result<([u8; 16], Vec<u8>, Vec<u8>)> {
+        let p = Self::build_index_puts(fk, frame, blob.to_owned(), true)?;
         let mut v = Vec::with_capacity(160);
         fn put(v: &mut Vec<u8>, b: &[u8]) {
             v.extend_from_slice(&(b.len() as u32).to_le_bytes());
@@ -897,13 +929,13 @@ impl ConCorpus {
         list(&mut v, p.pbc_k.as_slice());
         list(&mut v, &p.flag_keys);
         list(&mut v, &p.meta_keys);
-        (p.hash, v)
+        Ok((p.hash, v, p.stored))
     }
 
     /// Insert frames from encoded keys plus blobs, in slice order, in one
     /// write transaction. Same puts as the serial path.
     #[cfg(feature = "mpi")]
-    pub(crate) fn put_encoded(&self, rows: Vec<(FrameKey, &[u8], String)>) -> Result<()> {
+    pub(crate) fn put_encoded(&self, rows: Vec<(FrameKey, &[u8], Vec<u8>)>) -> Result<()> {
         struct Rd<'a>(&'a [u8]);
         impl<'a> Rd<'a> {
             fn take(&mut self, n: usize) -> Result<&'a [u8]> {
@@ -940,13 +972,13 @@ impl ConCorpus {
         // re-parses nor copies the payload.
         let prepared = rows
             .into_iter()
-            .map(|(fk, enc, blob)| {
+            .map(|(fk, enc, stored)| {
                 let mut r = Rd(enc);
                 let hash: [u8; 16] = r.take(16)?.try_into().unwrap();
                 let natoms_k: [u8; 16] = r.take(16)?.try_into().unwrap();
                 Ok(PreparedIndexPuts {
                     fk,
-                    blob,
+                    stored,
                     hash,
                     natoms_k,
                     symbol_keys: r.list()?,
@@ -1116,15 +1148,20 @@ impl ConCorpus {
         for k in &keys {
             let blob = self.get_frame_text(*k)?;
             let mut fr = self.get_frame(*k)?;
-            old_puts.push(Self::build_index_puts(*k, &fr, blob));
+            old_puts.push(Self::build_index_puts(*k, &fr, blob, self.compress_on())?);
             let merged = crate::units_canon::merge_units(fr.header.units(), units.clone())?;
             crate::units_canon::rescale_frame_units(&mut fr, &merged)?;
             fr.header.set_units(merged);
             frames.push(fr);
         }
         // Unit conversion retains the binary64 values of every stored field.
-        let prepared =
-            Self::prepare_trajectory_frames_formatted(traj_id, &frames, 0, FloatFormat::RoundTrip)?;
+        let prepared = Self::prepare_trajectory_frames_formatted(
+            traj_id,
+            &frames,
+            0,
+            FloatFormat::RoundTrip,
+            self.compress_on(),
+        )?;
         let input_bytes = prepared_bytes(&prepared);
         self.with_write(input_bytes, |wtxn| {
             for p in &old_puts {
@@ -1151,7 +1188,7 @@ impl ConCorpus {
     ) -> Result<u32> {
         let source = source.into();
         // Prepare outside exclusive write section (parallel writers can parse concurrently).
-        let prepared = Self::prepare_trajectory_str(traj_id, file_contents)?;
+        let prepared = Self::prepare_trajectory_str(traj_id, file_contents, self.compress_on())?;
         self.commit_prepared(traj_id, &prepared, source, false)
     }
 
@@ -1163,7 +1200,7 @@ impl ConCorpus {
         source: impl Into<String>,
     ) -> Result<u32> {
         let source = source.into();
-        let prepared = Self::prepare_trajectory_frames(traj_id, frames, 0)?;
+        let prepared = Self::prepare_trajectory_frames(traj_id, frames, 0, self.compress_on())?;
         self.commit_prepared(traj_id, &prepared, source, false)
     }
 
@@ -1194,7 +1231,13 @@ impl ConCorpus {
         float_format: FloatFormat,
     ) -> Result<u32> {
         let source = source.into();
-        let prepared = Self::prepare_trajectory_frames_formatted(traj_id, frames, 0, float_format)?;
+        let prepared = Self::prepare_trajectory_frames_formatted(
+            traj_id,
+            frames,
+            0,
+            float_format,
+            self.compress_on(),
+        )?;
         self.commit_prepared(traj_id, &prepared, source, false)
     }
 
@@ -1217,7 +1260,8 @@ impl ConCorpus {
             }
         };
         // Key derivation fully outside exclusive section.
-        let prepared = Self::prepare_trajectory_frames(traj_id, frames, start_idx)?;
+        let prepared =
+            Self::prepare_trajectory_frames(traj_id, frames, start_idx, self.compress_on())?;
         let hint = source_hint.into();
         let input_bytes = prepared_bytes(&prepared).saturating_add(hint.len());
         self.with_write(input_bytes, |wtxn| {
@@ -1325,10 +1369,10 @@ impl ConCorpus {
                 let Some(fk) = FrameKey::from_bytes(&k) else {
                     continue;
                 };
-                let Some(blob) = self.frames.get(wtxn, &k)? else {
+                let Some(stored) = self.frames.get(wtxn, &k)? else {
                     continue;
                 };
-                let blob_owned = blob.to_owned();
+                let blob_owned = crate::frame_codec::load_frame(stored)?;
                 let mut it = ConFrameIterator::new(&blob_owned);
                 let frame = it
                     .next()
@@ -1685,7 +1729,7 @@ impl ConCorpus {
     fn get_frame_text_txn(&self, rtxn: &heed::RoTxn<'_>, key: FrameKey) -> Result<String> {
         let fk_b = key.to_bytes();
         match self.frames.get(rtxn, &fk_b[..])? {
-            Some(s) => Ok(s.to_owned()),
+            Some(b) => crate::frame_codec::load_frame(b),
             None => Err(Error::MissingFrame(key)),
         }
     }
@@ -1702,8 +1746,8 @@ impl ConCorpus {
 
     /// Materialize every frame blob for `traj_id` in **one** read txn (full extract hot path).
     ///
-    /// Copies each LMDB value into an owned `String` and folds bytes so the fair
-    /// campaign pays for payload access—not merely `mmap` slice length.
+    /// Copies each frame's CON text (decompressing a tagged value) into an owned
+    /// `String` and folds those bytes so the campaign pays for the payload.
     /// Returns `(sum of lengths, byte checksum)` for observability.
     pub fn touch_trajectory_blobs(&self, traj_id: TrajId, n_frames: u32) -> Result<(u64, u64)> {
         let rtxn = self.read_txn()?;
@@ -1820,7 +1864,46 @@ impl ConCorpus {
         })
     }
 
+    /// On-disk `frames` value, tagged or legacy. Tests and `migrate` use this.
+    fn stored_frame(&self, key: FrameKey) -> Result<Vec<u8>> {
+        let rtxn = self.read_txn()?;
+        let fk_b = key.to_bytes();
+        match self.frames.get(&rtxn, &fk_b[..])? {
+            Some(b) => Ok(b.to_vec()),
+            None => Err(Error::MissingFrame(key)),
+        }
+    }
+
+    /// Rewrite legacy UTF-8 frame values to a tagged zstd frame when that is smaller.
+    ///
+    /// Already-tagged values are left as they are, so a second call does not wrap
+    /// a zstd frame in another one. Hashes stay on the UTF-8 and are not rewritten.
+    /// This does not cook `frames_soa`.
+    pub fn migrate_frames(&self) -> Result<u32> {
+        let keys = self.list_frame_keys()?;
+        let mut n = 0u32;
+        for key in keys {
+            let stored = self.stored_frame(key)?;
+            if crate::frame_codec::is_tagged(&stored) {
+                continue;
+            }
+            let text = crate::frame_codec::load_frame(&stored)?;
+            let next = crate::frame_codec::store_frame(&text, true)?;
+            if next == stored {
+                continue;
+            }
+            let fk_b = key.to_bytes();
+            self.with_write(next.len(), |wtxn| {
+                self.frames.put(wtxn, &fk_b[..], &next)?;
+                Ok(())
+            })?;
+            n += 1;
+        }
+        Ok(n)
+    }
+
     /// Cook all frames that have CON text; returns number of frames cooked.
+    /// Not called by ingest or [`Self::migrate_frames`].
     pub fn recook_all(&self) -> Result<u32> {
         let keys = self.list_frame_keys()?;
         let mut n = 0u32;
@@ -2348,13 +2431,14 @@ impl ConCorpus {
         let n = paths.len();
         let bounds = ingest_chunk_bounds(n);
         let threads = threads.max(1);
+        let compress = self.compress_on();
         let mut prepared: Vec<Result<Vec<PreparedIndexPuts>>> =
             (0..n).map(|_| Ok(Vec::new())).collect();
         if threads == 1 || bounds.len() <= 1 {
             for (lo, hi) in bounds {
                 for i in lo..hi {
                     let tid = start_traj_id + i as u64;
-                    prepared[i] = Self::prepare_path(tid, &paths[i], units.as_ref());
+                    prepared[i] = Self::prepare_path(tid, &paths[i], units.as_ref(), compress);
                 }
             }
         } else {
@@ -2375,7 +2459,7 @@ impl ConCorpus {
                         let (lo, hi) = bounds[chunk];
                         for (i, path) in paths.iter().enumerate().take(hi).skip(lo) {
                             let tid = start_traj_id + i as u64;
-                            let row = Self::prepare_path(tid, path, units.as_ref());
+                            let row = Self::prepare_path(tid, path, units.as_ref(), compress);
                             prepared_slots.lock().unwrap()[i] = row;
                         }
                     });
@@ -2398,10 +2482,11 @@ impl ConCorpus {
         traj_id: TrajId,
         path: &Path,
         units: Option<&serde_json::Value>,
+        compress: bool,
     ) -> Result<Vec<PreparedIndexPuts>> {
         let text = fs::read_to_string(path)?;
         let Some(units) = units else {
-            return Self::prepare_trajectory_str(traj_id, &text);
+            return Self::prepare_trajectory_str(traj_id, &text, compress);
         };
         let units = crate::units_canon::canonicalize_units_object(units.clone())?;
         let mut frames = Vec::new();
@@ -2410,7 +2495,7 @@ impl ConCorpus {
             fr.header.set_units(units.clone());
             frames.push(fr);
         }
-        Self::prepare_trajectory_frames(traj_id, &frames, 0)
+        Self::prepare_trajectory_frames(traj_id, &frames, 0, compress)
     }
 
     /// Sorted `database key value` lines for every logical entry.
@@ -2430,7 +2515,7 @@ impl ConCorpus {
         {
             let mut iter = self.frames.iter(&rtxn)?;
             while let Some(Ok((k, v))) = iter.next() {
-                lines.push(format!("frames\t{}\t{}", hex(k), hex(v.as_bytes())));
+                lines.push(format!("frames\t{}\t{}", hex(k), hex(v)));
             }
         }
         {
@@ -3851,5 +3936,104 @@ mod tests {
         );
         let sel = db.select(&Select::new().topo_key(&hex)).unwrap();
         assert_eq!(sel, vec![k0]);
+    }
+
+    fn raw_spans(path: &std::path::Path) -> Vec<String> {
+        let raw = std::fs::read_to_string(path).unwrap();
+        let mut it = ConFrameIterator::new(&raw);
+        let mut out = Vec::new();
+        loop {
+            match it.next_with_raw_span(&raw) {
+                None => break,
+                Some(Ok((_, blob))) => out.push(blob.to_owned()),
+                Some(Err(e)) => panic!("{e}"),
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn zstd_round_trip_is_byte_exact_and_does_not_cook() {
+        let path = fixture("sulfolene.con");
+        let spans = raw_spans(&path);
+        assert!(!spans.is_empty());
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let n = db.append_trajectory_path(1, &path).unwrap();
+        assert_eq!(n as usize, spans.len());
+        for (i, span) in spans.iter().enumerate() {
+            let key = FrameKey {
+                traj_id: 1,
+                frame_idx: i as u32,
+            };
+            assert_eq!(db.get_frame_text(key).unwrap(), *span);
+            let stored = db.stored_frame(key).unwrap();
+            assert!(
+                crate::frame_codec::is_single_zstd_frame(&stored),
+                "frame {i} was not one tagged zstd frame"
+            );
+            assert_eq!(crate::frame_codec::load_frame(&stored).unwrap(), *span);
+            assert_eq!(
+                db.frame_hash(key).unwrap(),
+                hash_frame_bytes(span.as_bytes())
+            );
+            assert!(!db.has_valid_cooked_soa(key).unwrap());
+        }
+    }
+
+    #[test]
+    fn legacy_utf8_reads_and_migrate_never_double_encodes() {
+        let path = fixture("tiny_cuh2.con");
+        let spans = raw_spans(&path);
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.set_compress_frames(false);
+        let n = db.append_trajectory_path(1, &path).unwrap();
+        assert_eq!(n as usize, spans.len());
+        for (i, span) in spans.iter().enumerate() {
+            let key = FrameKey {
+                traj_id: 1,
+                frame_idx: i as u32,
+            };
+            assert_eq!(db.stored_frame(key).unwrap(), span.as_bytes());
+            assert_eq!(db.get_frame_text(key).unwrap(), *span);
+            assert_eq!(
+                db.frame_hash(key).unwrap(),
+                hash_frame_bytes(span.as_bytes())
+            );
+        }
+        drop(db);
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let key0 = FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        let hash0 = db.frame_hash(key0).unwrap();
+        assert_eq!(db.migrate_frames().unwrap() as usize, spans.len());
+        assert_eq!(db.get_frame_text(key0).unwrap(), spans[0]);
+        assert_eq!(db.frame_hash(key0).unwrap(), hash0);
+        let tagged = db.stored_frame(key0).unwrap();
+        assert!(crate::frame_codec::is_single_zstd_frame(&tagged));
+        assert_eq!(crate::frame_codec::load_frame(&tagged).unwrap(), spans[0]);
+        assert!(std::str::from_utf8(&tagged).is_err());
+        db.reindex().unwrap();
+        assert_eq!(db.frame_hash(key0).unwrap(), hash0);
+        assert_eq!(db.get_frame_text(key0).unwrap(), spans[0]);
+        assert_eq!(db.migrate_frames().unwrap(), 0);
+        assert_eq!(db.stored_frame(key0).unwrap(), tagged);
+        assert!(!db.has_valid_cooked_soa(key0).unwrap());
+    }
+
+    #[test]
+    fn repeated_ingest_stores_identical_frame_bytes() {
+        let path = fixture("tiny_multi_cuh2.con");
+        let mut dumps = Vec::new();
+        for _ in 0..2 {
+            let dir = tempfile::tempdir().unwrap();
+            let db = ConCorpus::open(dir.path()).unwrap();
+            db.append_trajectory_path(1, &path).unwrap();
+            dumps.push(db.canonical_dump().unwrap());
+        }
+        assert_eq!(dumps[0], dumps[1]);
     }
 }

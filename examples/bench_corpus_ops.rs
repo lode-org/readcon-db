@@ -10,7 +10,9 @@ use serde_json::json;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let frames_dir = PathBuf::from(env::args().nth(1).expect("frames_dir"));
-    let out_path = env::args().nth(2).unwrap_or_else(|| "/tmp/readcon_db_bench.json".into());
+    let out_path = env::args()
+        .nth(2)
+        .unwrap_or_else(|| "/tmp/readcon_db_bench.json".into());
     let work = tempfile::tempdir()?;
     let mut results = Vec::new();
 

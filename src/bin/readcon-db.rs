@@ -1,10 +1,10 @@
 //! CLI for corpus ingest / select / export / reindex
 //!
 //! ```text
-//! readcon-db ingest <corpus_dir> [--start-id N] [--units JSON] <file.con>...
-//! readcon-db ingest-dir <corpus_dir> [--units JSON] <con_directory>
+//! readcon-db ingest <corpus_dir> [--start-id N] [--units JSON] [--no-compress] <file.con>...
+//! readcon-db ingest-dir <corpus_dir> [--units JSON] [--no-compress] <con_directory>
 //! readcon-db shard-init <root> [--shards N]
-//! readcon-db shard-ingest <root> --shard S --start-id T [--units JSON] <file.con>...
+//! readcon-db shard-ingest <root> --shard S --start-id T [--units JSON] [--no-compress] <file.con>...
 //! readcon-db select <corpus_dir> [filters...] [--export out.xyz]
 //! readcon-db drain <local_root> <pfs_root>
 //! readcon-db join-drained <single_dst> <drained_root>...
@@ -22,6 +22,7 @@
 //! readcon-db annotate-topology <corpus_dir> --cutoff A [--graph G] [--hops N] [--seams PATH]
 //! readcon-db find-by-topology <corpus_dir> <file.con>
 //! readcon-db hash-file <file.con>
+//! readcon-db migrate <corpus_dir>
 //! ```
 
 use std::env;
@@ -35,8 +36,8 @@ use readcon_db::{
 fn usage() -> ExitCode {
     eprintln!(
         "Usage:
-  readcon-db ingest <corpus_dir> [--start-id N] [--units JSON] <file.con>...
-  readcon-db ingest-dir <corpus_dir> [--units JSON] <dir_with_con_files>
+  readcon-db ingest <corpus_dir> [--start-id N] [--units JSON] [--no-compress] <file.con>...
+  readcon-db ingest-dir <corpus_dir> [--units JSON] [--no-compress] <dir_with_con_files>
   readcon-db select <corpus_dir> [--traj N] [--symbol S] [--natoms-min A] [--natoms-max B]
                      [--energy-min E] [--energy-max E] [--fmax-min F] [--fmax-max F]
                      [--elem SYM:COUNT] [--elem-min SYM:COUNT] [--formula Cu:2|H:2]
@@ -53,7 +54,7 @@ fn usage() -> ExitCode {
   readcon-db annotate-topology <corpus_dir> --cutoff A [--graph G] [--hops N] [--seams PATH]
   readcon-db find-by-topology <corpus_dir> <file.con>
   readcon-db shard-init <root> [--shards N]
-  readcon-db shard-ingest <root> --shard S --start-id T [--units JSON] <file.con>...
+  readcon-db shard-ingest <root> --shard S --start-id T [--units JSON] [--no-compress] <file.con>...
   readcon-db shard-select <root> [--symbol S] ...
   readcon-db drain <local_root> <pfs_root>
   readcon-db join-drained <single_dst> <drained_root>...
@@ -66,10 +67,20 @@ fn usage() -> ExitCode {
   readcon-db positions <corpus_dir> --traj T --frame F
   readcon-db h5md-velocities <corpus_dir> --traj T [--velocity-time-unit UNIT]
   readcon-db hash-file <file.con>
-  (RCSO cooked tier is opt-in; CON text in frames remains authority — docs/orgmode/cooked-soa.org)
+  readcon-db migrate <corpus_dir>
+  (RCSO cooked tier is opt-in; ingest and migrate do not cook. CON text remains authority.)
 "
     );
     ExitCode::from(2)
+}
+
+fn take_flag(args: &mut Vec<String>, flag: &str) -> bool {
+    if let Some(i) = args.iter().position(|s| s == flag) {
+        args.remove(i);
+        true
+    } else {
+        false
+    }
 }
 
 fn parse_sym_count(s: &str) -> Result<(String, u32), Box<dyn std::error::Error>> {
@@ -86,6 +97,7 @@ fn main() -> ExitCode {
     let run = (|| -> Result<(), Box<dyn std::error::Error>> {
         match cmd.as_str() {
             "ingest" => {
+                let no_compress = take_flag(&mut args, "--no-compress");
                 let corpus = args.first().ok_or("corpus_dir")?.clone();
                 let mut start = 1u64;
                 let mut files = Vec::new();
@@ -107,6 +119,9 @@ fn main() -> ExitCode {
                     i += 1;
                 }
                 let db = ConCorpus::open(&corpus)?;
+                if no_compress {
+                    db.set_compress_frames(false);
+                }
                 let mut tid = start;
                 for f in files {
                     let n = db.append_trajectory_path_units(tid, &f, units.clone())?;
@@ -115,6 +130,7 @@ fn main() -> ExitCode {
                 }
             }
             "ingest-dir" => {
+                let no_compress = take_flag(&mut args, "--no-compress");
                 let corpus = args.first().ok_or("corpus")?.clone();
                 let mut units = None;
                 let mut dir = None;
@@ -131,9 +147,30 @@ fn main() -> ExitCode {
                 }
                 let dir = dir.ok_or("dir")?;
                 let db = ConCorpus::open(&corpus)?;
+                if no_compress {
+                    db.set_compress_frames(false);
+                }
                 for (tid, n, p) in db.ingest_directory_units(&dir, 1, units)? {
                     println!("traj {tid}: {n} frames <- {p}");
                 }
+            }
+            "migrate" => {
+                let corpus = args.first().ok_or("corpus")?.clone();
+                let path = std::path::PathBuf::from(&corpus);
+                let n = if path.join("shards.json").is_file() {
+                    let root = ShardedConCorpus::open_existing(&path)?;
+                    let mut n = 0u32;
+                    for sid in 0..root.n_shards() {
+                        let shard = path.join(format!("shard_{sid:04}"));
+                        if shard.join("data.mdb").is_file() {
+                            n += ConCorpus::open_existing(&shard)?.migrate_frames()?;
+                        }
+                    }
+                    n
+                } else {
+                    ConCorpus::open_existing(&path)?.migrate_frames()?
+                };
+                println!("migrated {n} frames");
             }
             "reindex" => {
                 let corpus = args.first().ok_or("corpus")?.clone();
@@ -524,6 +561,7 @@ fn main() -> ExitCode {
                 println!("initialized {root} with {ns} shards");
             }
             "shard-ingest" => {
+                let no_compress = take_flag(&mut args, "--no-compress");
                 let root = args.first().ok_or("root")?.clone();
                 let mut shard = None::<u32>;
                 let mut start = 1u64;
@@ -572,6 +610,9 @@ fn main() -> ExitCode {
                     .into());
                 }
                 let db = ShardedConCorpus::open_shard(&root, sid)?;
+                if no_compress {
+                    db.set_compress_frames(false);
+                }
                 for f in files {
                     let routed = ShardedConCorpus::shard_for_traj(tid, m.n_shards);
                     if routed != sid {

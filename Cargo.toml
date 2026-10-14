@@ -32,6 +32,7 @@ thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
+zstd = { version = "0.13", default-features = false }
 
 pyo3 = { version = "0.28", features = ["extension-module"], optional = true }
 mpi = { version = "0.8", optional = true, default-features = false }
@@ -39,6 +40,7 @@ mpi = { version = "0.8", optional = true, default-features = false }
 [dev-dependencies]
 tempfile = "3"
 sha2 = "0.10"
+libc = "0.2"
 
 [package.metadata.docs.rs]
 all-features = false
@@ -74,4 +76,9 @@ required-features = ["mpi"]
 [[example]]
 name = "mpi_read_check"
 path = "examples/mpi_read_check.rs"
+required-features = ["mpi"]
+
+[[example]]
+name = "shard_gate"
+path = "examples/shard_gate.rs"
 required-features = ["mpi"]

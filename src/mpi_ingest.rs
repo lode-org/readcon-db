@@ -7,7 +7,10 @@
 //! lower global index in the same LMDB env sends no blob.
 //!
 //! Records then move to the rank that owns the destination env with
-//! `MPI_Alltoallv`, in batches of global frames:
+//! `MPI_Alltoallv`, in batches of global frames. The payload of a first
+//! occurrence is the tagged zstd frame of the CON text (or the raw UTF-8
+//! when that frame does not shrink). xxh3-128 was taken on the UTF-8.
+//! A later duplicate of those bytes in the same env receives a copy.
 //!
 //! - single writer: rank 0 owns the one corpus;
 //! - sharded: shard `s = traj_id % n_shards` is owned by rank `s % P`.
@@ -163,7 +166,8 @@ struct Local {
     first: usize,
     hashes: Vec<[u8; 16]>,
     enc: Vec<Vec<u8>>,
-    blobs: Vec<String>,
+    /// Tagged zstd bytes, or raw UTF-8 when the tagged frame does not shrink.
+    stored: Vec<Vec<u8>>,
 }
 
 fn take<'a>(k: usize, p: &mut &'a [u8]) -> &'a [u8] {
@@ -181,7 +185,7 @@ fn parse_local(tabs: &[FileTab], range: std::ops::Range<usize>) -> Result<Local>
         first: range.start,
         hashes: vec![],
         enc: vec![],
-        blobs: vec![],
+        stored: vec![],
     };
     let mut g = range.start;
     while g < range.end {
@@ -209,10 +213,10 @@ fn parse_local(tabs: &[FileTab], range: std::ops::Range<usize>) -> Result<Local>
                 traj_id: t.traj_id,
                 frame_idx: i as u32,
             };
-            let (h, enc) = ConCorpus::encode_frame_keys(fk, &frame, blob);
+            let (h, enc, stored) = ConCorpus::encode_frame_keys(fk, &frame, blob)?;
             out.hashes.push(h);
             out.enc.push(enc);
-            out.blobs.push(blob.to_owned());
+            out.stored.push(stored);
         }
         g = t.g0 + b;
     }
@@ -320,7 +324,7 @@ fn engine<C: Communicator>(
         .map(|g| first_of[g])
         .collect();
 
-    let mut kept: HashMap<usize, String> = HashMap::new();
+    let mut kept: HashMap<usize, Vec<u8>> = HashMap::new();
     let mut b0 = 0usize;
     while b0 < n {
         let b1 = (b0 + batch).min(n);
@@ -332,13 +336,13 @@ fn engine<C: Communicator>(
             m.extend_from_slice(&(g as u64).to_le_bytes());
             m.extend_from_slice(&(local.enc[i].len() as u32).to_le_bytes());
             m.extend_from_slice(&local.enc[i]);
-            let blob: &[u8] = if first_of[g] == g {
-                local.blobs[i].as_bytes()
+            let stored: &[u8] = if first_of[g] == g {
+                &local.stored[i]
             } else {
                 &[]
             };
-            m.extend_from_slice(&(blob.len() as u32).to_le_bytes());
-            m.extend_from_slice(blob);
+            m.extend_from_slice(&(stored.len() as u32).to_le_bytes());
+            m.extend_from_slice(stored);
         }
         let scounts: Vec<i32> = out.iter().map(|m| m.len() as i32).collect();
         let mut rcounts = vec![0i32; size];
@@ -359,7 +363,7 @@ fn engine<C: Communicator>(
             comm.all_to_all_varcount_into(&sp, &mut rp);
         }
         // Decode in source order (= global order) and insert per env.
-        let mut rows: Vec<(u32, FrameKey, &[u8], String)> = Vec::new();
+        let mut rows: Vec<(u32, FrameKey, &[u8], Vec<u8>)> = Vec::new();
         let mut p = &recv[..];
         while !p.is_empty() {
             let g = u64::from_le_bytes(take(8, &mut p).try_into().unwrap()) as usize;
@@ -367,8 +371,8 @@ fn engine<C: Communicator>(
             let enc = take(el, &mut p);
             let bl = u32::from_le_bytes(take(4, &mut p).try_into().unwrap()) as usize;
             let raw = take(bl, &mut p);
-            let blob = if first_of[g] == g {
-                let s = String::from_utf8(raw.to_vec()).unwrap_or_default();
+            let stored = if first_of[g] == g {
+                let s = raw.to_vec();
                 if referenced.contains(&g) {
                     kept.insert(g, s.clone());
                 }
@@ -384,7 +388,7 @@ fn engine<C: Communicator>(
                     frame_idx: (g - t.g0) as u32,
                 },
                 enc,
-                blob,
+                stored,
             ));
         }
         let mut ids: Vec<u32> = rows.iter().map(|r| r.0).collect();
@@ -392,7 +396,7 @@ fn engine<C: Communicator>(
         ids.sort_unstable();
         ids.dedup();
         let put = ids.iter().try_for_each(|id| {
-            let sel: Vec<(FrameKey, &[u8], String)> = rows
+            let sel: Vec<(FrameKey, &[u8], Vec<u8>)> = rows
                 .iter()
                 .filter(|r| r.0 == *id)
                 .map(|r| (r.1, r.2, r.3.clone()))

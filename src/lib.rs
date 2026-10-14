@@ -9,6 +9,7 @@ mod corpus;
 mod error;
 mod export_h5md;
 mod export_xyz;
+mod frame_codec;
 mod frame_scalars;
 mod keys;
 #[cfg(feature = "mpi")]
