@@ -57,6 +57,10 @@ jobs:
               '  return s == 2 ? 0 : 1;' \
               '}' > "$d/csize.c"
             mpicc.mpich -o "$d/csize" "$d/csize.c"
+            # 4.2.0-5.1 is ch4:ucx. GitHub runners abort MPI_Init_thread in
+            # ibv_create_srq. TCP is enough for this job.
+            echo UCX_TLS=tcp >> "$GITHUB_ENV"
+            export UCX_TLS=tcp
             mpiexec.mpich -n 2 "$d/csize"
           fi
       - uses: dtolnay/rust-toolchain@stable
@@ -71,8 +75,13 @@ jobs:
           for i in 1 2 3; do cat resources/test/tiny_cuh2.con resources/test/tiny_multi_cuh2.con resources/test/sulfolene.con resources/test/tiny_cuh2_forces.con; done > "$T/mix.con"
           for p in 1 2 3 4; do
             for b in 1 4096; do
-              out=$(${{ matrix.launcher }} $p target/debug/examples/mpi_ingest_check "$T/mix.con" "$T/o$p-$b" $b)
+              # New directory and traj id for every (ranks, batch) pair.
+              # Reusing either makes the second writer return TrajExists.
+              D=$(mktemp -d)
+              tid=$((p * 100000 + b))
+              out=$(${{ matrix.launcher }} $p target/debug/examples/mpi_ingest_check "$T/mix.con" "$D" "$b" "$tid")
               echo "$out"
+              echo "$out" | grep -q "ranks=$p "
               echo "$out" | grep -q 'match=true'
             done
           done
