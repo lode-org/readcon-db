@@ -27,7 +27,7 @@ FILES="$WORK/traj.con $WORK/traj.con $WORK/traj.con $WORK/traj.con"
 for p in $RANKS; do
   for mode in single sharded; do
     for r in $(seq "$REPS"); do
-      $LAUNCH "$p" "$BIN/mpi_ingest_check" "$mode" "$WORK/i-$p-$mode-$r" 4096 4 $FILES | tail -1
+      $LAUNCH "$p" "$BIN/mpi_ingest_check" "$mode" "$WORK/i-$p-$mode-$r" 4096 4 1 $FILES | tail -1
       rm -rf "$WORK/i-$p-$mode-$r"
     done
   done
