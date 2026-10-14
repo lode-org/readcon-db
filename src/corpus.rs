@@ -31,8 +31,56 @@ use crate::topology::{
     run_seams_fingerprint, AnnotateTopologyOpts, TopologyParams,
 };
 
-/// Default mmap region (2 GiB). Raise via re-open with a larger map if the corpus grows.
-const MAP_SIZE: usize = 2 * 1024 * 1024 * 1024;
+/// Default LMDB map size (2 GiB) when neither the caller nor
+/// [`MAP_SIZE_ENV`] asks for more. The map is address space, not disk:
+/// `data.mdb` only grows as pages are written.
+pub const DEFAULT_MAP_SIZE: usize = 2 * 1024 * 1024 * 1024;
+/// Environment variable that overrides [`DEFAULT_MAP_SIZE`]. Accepts a byte
+/// count with an optional `K`, `M`, `G` or `T` suffix (powers of 1024).
+pub const MAP_SIZE_ENV: &str = "READCON_DB_MAP_SIZE";
+/// Map sizes are rounded up to a multiple of this (1 MiB, a multiple of
+/// every LMDB page size in use).
+const MAP_ALIGN: usize = 1 << 20;
+
+/// Parse a map size such as `8G`, `512M` or `1073741824`.
+pub fn parse_map_size(s: &str) -> Option<usize> {
+    let s = s.trim();
+    let (num, mul) = match s.as_bytes().last()? {
+        b'k' | b'K' => (&s[..s.len() - 1], 1usize << 10),
+        b'm' | b'M' => (&s[..s.len() - 1], 1 << 20),
+        b'g' | b'G' => (&s[..s.len() - 1], 1 << 30),
+        b't' | b'T' => (&s[..s.len() - 1], 1 << 40),
+        _ => (s, 1),
+    };
+    num.trim()
+        .parse::<usize>()
+        .ok()?
+        .checked_mul(mul)
+        .filter(|&n| n > 0)
+}
+
+fn align_map(n: usize) -> usize {
+    n.div_ceil(MAP_ALIGN).saturating_mul(MAP_ALIGN)
+}
+
+/// Map size for opening `path`: the request, else [`MAP_SIZE_ENV`], else
+/// [`DEFAULT_MAP_SIZE`]; never less than twice an existing `data.mdb`, so a
+/// corpus that already outgrew the default keeps room to append.
+fn initial_map_size(path: &Path, requested: Option<usize>) -> Result<usize> {
+    let base = match requested {
+        Some(n) => n,
+        None => match std::env::var(MAP_SIZE_ENV) {
+            Ok(v) => parse_map_size(&v).ok_or_else(|| {
+                Error::Message(format!("{MAP_SIZE_ENV}={v:?} is not a byte count"))
+            })?,
+            Err(_) => DEFAULT_MAP_SIZE,
+        },
+    };
+    let used = fs::metadata(path.join("data.mdb"))
+        .map(|m| m.len() as usize)
+        .unwrap_or(0);
+    Ok(align_map(base.max(used.saturating_mul(2))))
+}
 const MAX_DBS: u32 = 48;
 /// LMDB multi-process reader slots (analysis farms / concurrent CLI processes).
 /// Classic embedded SOTA: one writer, many readers across OS processes sharing the mmap
@@ -172,7 +220,7 @@ fn ingest_thread_count() -> usize {
 
 impl ConCorpus {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        Self::open_with(path, false)
+        Self::open_with(path, false, None)
     }
 
     /// Write-open an existing corpus. Does not mkdir or mint `data.mdb`.
@@ -184,7 +232,38 @@ impl ConCorpus {
                 path.display()
             )));
         }
-        Self::open_with(path, false)
+        Self::open_with(path, false, None)
+    }
+
+    /// Open or create a writable corpus with an explicit LMDB map size in
+    /// bytes, overriding [`MAP_SIZE_ENV`] and [`DEFAULT_MAP_SIZE`]. The map
+    /// is still at least twice an existing `data.mdb`.
+    pub fn open_with_map_size(path: impl AsRef<Path>, map_size: usize) -> Result<Self> {
+        Self::open_with(path, false, Some(map_size))
+    }
+
+    /// Current LMDB map size in bytes.
+    pub fn map_size(&self) -> usize {
+        self.env.info().map_size
+    }
+
+    /// Grow the map so at least `extra_bytes` fit beyond the pages already
+    /// used. Never shrinks. Returns the resulting map size.
+    ///
+    /// LMDB only allows this while this process has no open transaction on
+    /// the env, so call it between writes, before sharing the handle across
+    /// threads. The MPI ingest calls it on each writer rank with the input
+    /// size before its first batch.
+    pub fn reserve_map(&self, extra_bytes: usize) -> Result<usize> {
+        let used = fs::metadata(self.path.join("data.mdb"))
+            .map(|m| m.len() as usize)
+            .unwrap_or(0);
+        let want = align_map(used.saturating_add(extra_bytes));
+        if want > self.map_size() {
+            // SAFETY: documented precondition, no transaction is open in this process.
+            unsafe { self.env.resize(want)? };
+        }
+        Ok(self.map_size())
     }
 
     /// Open an existing corpus with `MDB_RDONLY`. No mkdir, no write txn.
@@ -193,10 +272,10 @@ impl ConCorpus {
     /// on that same handle so other ranks never open LMDB. Never
     /// initialize MPI here; the host (LAMMPS, mpi4py) already did.
     pub fn open_readonly(path: impl AsRef<Path>) -> Result<Self> {
-        Self::open_with(path, true)
+        Self::open_with(path, true, None)
     }
 
-    fn open_with(path: impl AsRef<Path>, readonly: bool) -> Result<Self> {
+    fn open_with(path: impl AsRef<Path>, readonly: bool, map_size: Option<usize>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         if path.join("shards.json").is_file() {
             return Err(Error::Message(format!(
@@ -215,7 +294,7 @@ impl ConCorpus {
             fs::create_dir_all(&path)?;
         }
         let mut opts = EnvOpenOptions::new();
-        opts.map_size(MAP_SIZE);
+        opts.map_size(initial_map_size(&path, map_size)?);
         opts.max_dbs(MAX_DBS);
         opts.max_readers(MAX_READERS);
         if readonly {
@@ -2295,6 +2374,56 @@ mod tests {
 
     fn fixtures_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/test")
+    }
+
+    #[test]
+    fn parse_map_size_suffixes() {
+        assert_eq!(parse_map_size("1048576"), Some(1 << 20));
+        assert_eq!(parse_map_size("512M"), Some(512 << 20));
+        assert_eq!(parse_map_size(" 8g "), Some(8usize << 30));
+        assert_eq!(parse_map_size("2T"), Some(2usize << 40));
+        assert_eq!(parse_map_size("0"), None);
+        assert_eq!(parse_map_size("big"), None);
+        assert_eq!(parse_map_size(""), None);
+    }
+
+    #[test]
+    fn map_size_env_overrides_default_and_request_overrides_env() {
+        let dir = tempfile::tempdir().unwrap();
+        // Larger than the default, so concurrent tests that open corpora are unaffected.
+        std::env::set_var(MAP_SIZE_ENV, "3G");
+        let from_env = initial_map_size(dir.path(), None).unwrap();
+        let requested = initial_map_size(dir.path(), Some(5 << 20)).unwrap();
+        std::env::remove_var(MAP_SIZE_ENV);
+        assert_eq!(from_env, 3usize << 30);
+        assert_eq!(requested, 5 << 20);
+        assert_eq!(
+            initial_map_size(dir.path(), None).unwrap(),
+            DEFAULT_MAP_SIZE
+        );
+    }
+
+    #[test]
+    fn small_map_fills_then_reserve_map_grows_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let one = std::fs::read_to_string(fixture("sulfolene.con")).unwrap();
+        let text = one.repeat((4 << 20) / one.len() + 1);
+        let db = ConCorpus::open_with_map_size(dir.path(), 1 << 20).unwrap();
+        assert_eq!(db.map_size(), 1 << 20);
+        let err = db.append_trajectory_str(1, &text, "big").unwrap_err();
+        assert!(format!("{err:?}").contains("MapFull"), "{err:?}");
+        let grown = db.reserve_map(3 * text.len()).unwrap();
+        assert!(grown >= 3 * text.len(), "{grown}");
+        let n = db.append_trajectory_str(1, &text, "big").unwrap();
+        assert!(n > 1);
+        drop(db);
+        // Reopening at the default keeps at least twice the used size.
+        let used = std::fs::metadata(dir.path().join("data.mdb"))
+            .unwrap()
+            .len() as usize;
+        let db = ConCorpus::open_with_map_size(dir.path(), 1 << 20).unwrap();
+        assert!(db.map_size() >= 2 * used);
+        assert_eq!(db.traj_meta(1).unwrap().unwrap().n_frames, n);
     }
 
     #[test]
