@@ -47,6 +47,16 @@ jobs:
               done
             done
           done
+      - name: Scatter read and collective XYZ export on 1 to 4 ranks
+        run: |
+          set -euo pipefail
+          cargo build --features mpi --example mpi_read_check
+          for p in 1 2 3 4; do
+            T=$(mktemp -d)
+            out=$(${{ matrix.launcher }} $p target/debug/examples/mpi_read_check "$T" resources/test/tiny_multi_cuh2.con resources/test/sulfolene.con resources/test/tiny_cuh2.con)
+            echo "$out"
+            echo "$out" | grep -q 'scatter_match=true .*mpiio_match=true gather_match=true'
+          done
       - name: C wrapper on a split communicator
         run: |
           set -euo pipefail

@@ -70,3 +70,8 @@ path = "examples/bench_corpus_ops.rs"
 name = "mpi_ingest_check"
 path = "examples/mpi_ingest_check.rs"
 required-features = ["mpi"]
+
+[[example]]
+name = "mpi_read_check"
+path = "examples/mpi_read_check.rs"
+required-features = ["mpi"]

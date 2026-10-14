@@ -7,6 +7,8 @@
 - Optional `mpi` feature with `mpi_ingest::append_trajectory_path`, a parallel ingest over a caller-supplied communicator.
 - `ConCorpus::canonical_dump` for comparing corpora independent of LMDB page layout.
 - `mpi_ingest::append_trajectory_paths_sharded`: sharded multi-writer ingest routed with `MPI_Alltoallv`, plus `ShardedConCorpus::canonical_dump`.
+- `mpi_read::scatter_packed_frames`: rank 0 packs each rank's block of a selection and sends it with `MPI_Scatterv`.
+- `mpi_read::export_extxyz_collective`: extended XYZ export at `MPI_Exscan` offsets with `MPI_File_write_at_all`, or gathered to rank 0.
 - C ABI `rkrdb_mpi_ingest_paths_f` and the `rkrdb_mpi_ingest_paths` header wrapper.
 
 ### Changed

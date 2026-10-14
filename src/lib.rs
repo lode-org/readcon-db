@@ -13,6 +13,8 @@ mod frame_scalars;
 mod keys;
 #[cfg(feature = "mpi")]
 pub mod mpi_ingest;
+#[cfg(feature = "mpi")]
+pub mod mpi_read;
 mod select;
 mod shard;
 mod topology;

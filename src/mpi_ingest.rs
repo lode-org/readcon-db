@@ -89,6 +89,10 @@ fn bcast_result<C: Communicator>(
 }
 
 /// Fail on every rank if `r` failed on any rank.
+pub(crate) fn collective_pub<C: Communicator, T>(comm: &C, r: Result<T>) -> Result<T> {
+    collective(comm, r)
+}
+
 fn collective<C: Communicator, T>(comm: &C, r: Result<T>) -> Result<T> {
     let ok = agree(comm, r.is_ok());
     match (r, ok) {
