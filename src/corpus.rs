@@ -818,13 +818,17 @@ impl ConCorpus {
     }
 
     /// Parse path/string CON into owned blobs + frames (no exclusive LMDB write section).
+    ///
+    /// `start_idx` is the first `frame_idx`. Append starts at 0. Extend starts
+    /// at the live `n_frames`. Stored blobs are the raw spans.
     fn prepare_trajectory_str(
         traj_id: TrajId,
         file_contents: &str,
+        start_idx: u32,
         compress: bool,
     ) -> Result<Vec<PreparedIndexPuts>> {
         let mut out = Vec::new();
-        let mut frame_idx: u32 = 0;
+        let mut frame_idx: u32 = start_idx;
         let mut iter = ConFrameIterator::new(file_contents);
         loop {
             let (frame, blob) = match iter.next_with_raw_span(file_contents) {
@@ -1215,7 +1219,7 @@ impl ConCorpus {
         let source = source.into();
         // Prepare outside exclusive write section (parallel writers can parse concurrently).
         let mut prepared =
-            Self::prepare_trajectory_str(traj_id, file_contents, self.compress_on())?;
+            Self::prepare_trajectory_str(traj_id, file_contents, 0, self.compress_on())?;
         self.commit_prepared(traj_id, &mut prepared, source, false, self.compress_on())
     }
 
@@ -1268,32 +1272,28 @@ impl ConCorpus {
         self.commit_prepared(traj_id, &mut prepared, source, false, self.compress_on())
     }
 
-    /// Append frames to an existing trajectory (or create it). Returns new total frame count.
-    /// Concurrent extend of the **same** `traj_id` is rejected if `n_frames` moved (TOCTOU guard).
-    pub fn extend_trajectory_frames(
+    fn read_extend_start(&self, traj_id: TrajId) -> Result<(u32, Option<TrajMeta>)> {
+        let rtxn = self.read_txn()?;
+        let tid_key = traj_id.to_be_bytes();
+        if let Some(existing) = self.traj_meta.get(&rtxn, &tid_key[..])? {
+            let meta: TrajMeta = serde_json::from_str(existing)?;
+            Ok((meta.n_frames, Some(meta)))
+        } else {
+            Ok((0, None))
+        }
+    }
+
+    /// Same exclusive section as [`Self::extend_trajectory_frames`].
+    /// Earlier frame keys are not rewritten.
+    fn commit_extend(
         &self,
         traj_id: TrajId,
-        frames: &[ConFrame],
-        source_hint: impl Into<String>,
+        prepared: &[PreparedIndexPuts],
+        start_idx: u32,
+        prior: Option<TrajMeta>,
+        hint: String,
     ) -> Result<u32> {
-        let (start_idx, prior) = {
-            let rtxn = self.read_txn()?;
-            let tid_key = traj_id.to_be_bytes();
-            if let Some(existing) = self.traj_meta.get(&rtxn, &tid_key[..])? {
-                let meta: TrajMeta = serde_json::from_str(existing)?;
-                (meta.n_frames, Some(meta))
-            } else {
-                (0u32, None)
-            }
-        };
-        // Key derivation fully outside exclusive section.
-        let mut prepared =
-            Self::prepare_trajectory_frames(traj_id, frames, start_idx, self.compress_on())?;
-        if self.compress_on() {
-            Self::group_prepared(&mut prepared)?;
-        }
-        let hint = source_hint.into();
-        let input_bytes = prepared_bytes(&prepared).saturating_add(hint.len());
+        let input_bytes = prepared_bytes(prepared).saturating_add(hint.len());
         self.with_write(input_bytes, |wtxn| {
             let tid_key = traj_id.to_be_bytes();
             let live: Option<TrajMeta> =
@@ -1308,7 +1308,7 @@ impl ConCorpus {
                     "concurrent extend race on traj {traj_id}: expected start {start_idx}, live {live_n}"
                 )));
             }
-            for p in &prepared {
+            for p in prepared {
                 self.put_index_puts(wtxn, p)?;
             }
             let n_frames = prepared
@@ -1324,6 +1324,48 @@ impl ConCorpus {
                 .put(wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
             Ok(n_frames)
         })
+    }
+
+    /// Append frames to an existing trajectory (or create it). Returns new total frame count.
+    /// Concurrent extend of the **same** `traj_id` is rejected if `n_frames` moved (TOCTOU guard).
+    pub fn extend_trajectory_frames(
+        &self,
+        traj_id: TrajId,
+        frames: &[ConFrame],
+        source_hint: impl Into<String>,
+    ) -> Result<u32> {
+        let (start_idx, prior) = self.read_extend_start(traj_id)?;
+        // Key derivation fully outside exclusive section.
+        let mut prepared =
+            Self::prepare_trajectory_frames(traj_id, frames, start_idx, self.compress_on())?;
+        if self.compress_on() {
+            Self::group_prepared(&mut prepared)?;
+        }
+        self.commit_extend(traj_id, &prepared, start_idx, prior, source_hint.into())
+    }
+
+    /// Append CON text after the live frame count, or create the trajectory.
+    ///
+    /// `frame_idx` starts at `traj_meta.n_frames`. When compression is on, an
+    /// aligned run in this call is packed the same way as
+    /// [`Self::extend_trajectory_frames`]. Stored blobs are the raw spans.
+    ///
+    /// Foreign tail: the text is parsed before the write transaction. If it
+    /// does not parse, this returns [`Error::Parse`] and writes nothing.
+    /// Earlier frames are not rewritten. A tail that parses is stored.
+    pub fn extend_trajectory_str(
+        &self,
+        traj_id: TrajId,
+        file_contents: &str,
+        source_hint: impl Into<String>,
+    ) -> Result<u32> {
+        let (start_idx, prior) = self.read_extend_start(traj_id)?;
+        let mut prepared =
+            Self::prepare_trajectory_str(traj_id, file_contents, start_idx, self.compress_on())?;
+        if self.compress_on() {
+            Self::group_prepared(&mut prepared)?;
+        }
+        self.commit_extend(traj_id, &prepared, start_idx, prior, source_hint.into())
     }
 
     /// [`Self::extend_trajectory_frames`] from a CON path: create the
@@ -1879,13 +1921,13 @@ impl ConCorpus {
             // Cooked present but no forces block — fall through to CON for fidelity.
         }
         let fr = self.get_frame(key)?;
-        if !fr.atom_data.iter().any(|a| a.force.is_some()) {
+        if !fr.atom_data.iter().any(|a| a.force().is_some()) {
             return Ok(None);
         }
         Ok(Some(
             fr.atom_data
                 .iter()
-                .map(|a| a.force.unwrap_or([0.0; 3]))
+                .map(|a| a.force().unwrap_or([0.0; 3]))
                 .collect(),
         ))
     }
@@ -1898,13 +1940,13 @@ impl ConCorpus {
             }
         }
         let fr = self.get_frame(key)?;
-        if !fr.atom_data.iter().any(|a| a.velocity.is_some()) {
+        if !fr.atom_data.iter().any(|a| a.velocity().is_some()) {
             return Ok(None);
         }
         Ok(Some(
             fr.atom_data
                 .iter()
-                .map(|a| a.velocity.unwrap_or([0.0; 3]))
+                .map(|a| a.velocity().unwrap_or([0.0; 3]))
                 .collect(),
         ))
     }
@@ -2571,7 +2613,7 @@ impl ConCorpus {
     ) -> Result<Vec<PreparedIndexPuts>> {
         let text = fs::read_to_string(path)?;
         let Some(units) = units else {
-            return Self::prepare_trajectory_str(traj_id, &text, compress);
+            return Self::prepare_trajectory_str(traj_id, &text, 0, compress);
         };
         let units = crate::units_canon::canonicalize_units_object(units.clone())?;
         let mut frames = Vec::new();
@@ -3546,7 +3588,7 @@ mod tests {
         let fr = db.get_frame(key).unwrap();
         let forces = db.get_forces(key).unwrap().expect("forces");
         for (i, a) in fr.atom_data.iter().enumerate() {
-            if let Some(f) = a.force {
+            if let Some(f) = a.force() {
                 assert_eq!(forces[i], f);
             }
         }
@@ -3644,7 +3686,7 @@ mod tests {
         let expect_f: Vec<_> = fr
             .atom_data
             .iter()
-            .map(|a| a.force.unwrap_or([0.0; 3]))
+            .map(|a| a.force().unwrap_or([0.0; 3]))
             .collect();
         // Without cook: parse path
         assert_eq!(db.get_positions(key).unwrap(), expect_pos);
@@ -3679,12 +3721,12 @@ mod tests {
         let expect_f: Vec<_> = fr
             .atom_data
             .iter()
-            .map(|a| a.force.unwrap_or([0.0; 3]))
+            .map(|a| a.force().unwrap_or([0.0; 3]))
             .collect();
         let expect_v: Vec<_> = fr
             .atom_data
             .iter()
-            .map(|a| a.velocity.unwrap_or([0.0; 3]))
+            .map(|a| a.velocity().unwrap_or([0.0; 3]))
             .collect();
         assert_eq!(db.get_positions(key).unwrap(), expect_pos);
         assert_eq!(db.get_forces(key).unwrap().unwrap(), expect_f);
@@ -4177,5 +4219,292 @@ mod tests {
             dumps.push(db.canonical_dump().unwrap());
         }
         assert_eq!(dumps[0], dumps[1]);
+    }
+
+    fn n_shifted_frames(n: u32) -> (String, Vec<String>) {
+        let one = std::fs::read_to_string(fixture("sulfolene.con")).unwrap();
+        let mut text = String::new();
+        for i in 0..n {
+            let shifted = one.replacen(
+                "10.477713",
+                &format!("{:.6}", 10.477713 + f64::from(i) * 1e-4),
+                1,
+            );
+            text.push_str(&shifted);
+            if !shifted.ends_with('\n') {
+                text.push('\n');
+            }
+        }
+        let mut it = ConFrameIterator::new(&text);
+        let mut spans = Vec::new();
+        loop {
+            match it.next_with_raw_span(&text) {
+                None => break,
+                Some(Ok((_, blob))) => spans.push(blob.to_owned()),
+                Some(Err(e)) => panic!("{e}"),
+            }
+        }
+        assert_eq!(spans.len(), n as usize);
+        (text, spans)
+    }
+
+    fn assert_span_bits(db: &ConCorpus, key: FrameKey, span: &str) {
+        assert_eq!(db.get_frame_text(key).unwrap(), span);
+        let stored = db.get_frame(key).unwrap();
+        let parsed = ConFrameIterator::new(span).next().unwrap().unwrap();
+        assert_eq!(stored.positions.nrows(), parsed.positions.nrows());
+        for i in 0..parsed.positions.nrows() {
+            assert_eq!(
+                stored.positions.as_f64_row(i),
+                parsed.positions.as_f64_row(i)
+            );
+        }
+        assert_eq!(
+            db.frame_hash(key).unwrap(),
+            hash_frame_bytes(span.as_bytes())
+        );
+    }
+
+    #[test]
+    fn sixty_five_frames_keep_text_at_group_edges() {
+        let (text, spans) = n_shifted_frames(65);
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        assert_eq!(db.append_trajectory_str(1, &text, "mem").unwrap(), 65);
+        for idx in [0u32, 63, 64] {
+            let key = FrameKey {
+                traj_id: 1,
+                frame_idx: idx,
+            };
+            assert_span_bits(&db, key, &spans[idx as usize]);
+        }
+        let head = db
+            .stored_frame(FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap();
+        assert_eq!(&head[..2], &crate::frame_codec::GROUP_TAG);
+        assert_eq!(u32::from_le_bytes(head[2..6].try_into().unwrap()), 64);
+        let redir = db
+            .stored_frame(FrameKey {
+                traj_id: 1,
+                frame_idx: 1,
+            })
+            .unwrap();
+        assert_eq!(&redir[..2], &crate::frame_codec::REDIR_TAG);
+        assert_eq!(
+            db.get_frame_text(FrameKey {
+                traj_id: 1,
+                frame_idx: 1
+            })
+            .unwrap(),
+            spans[1]
+        );
+        let single = db
+            .stored_frame(FrameKey {
+                traj_id: 1,
+                frame_idx: 64,
+            })
+            .unwrap();
+        assert_eq!(&single[..2], &crate::frame_codec::FRAME_TAG);
+        assert_eq!(crate::frame_codec::load_frame(&single).unwrap(), spans[64]);
+    }
+
+    #[test]
+    fn legacy_untagged_utf8_still_reads() {
+        let path = fixture("tiny_cuh2.con");
+        let spans = raw_spans(&path);
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.set_compress_frames(false);
+        db.append_trajectory_path(1, &path).unwrap();
+        let key = FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        let stored = db.stored_frame(key).unwrap();
+        assert_eq!(stored, spans[0].as_bytes());
+        assert!(std::str::from_utf8(&stored).is_ok());
+        assert_eq!(db.get_frame_text(key).unwrap(), spans[0]);
+    }
+
+    #[test]
+    fn extend_trajectory_str_groups_an_aligned_batch() {
+        let (text, spans) = n_shifted_frames(64);
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        assert_eq!(db.extend_trajectory_str(1, &text, "batch").unwrap(), 64);
+        let head = db
+            .stored_frame(FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap();
+        assert!(crate::frame_codec::is_group(&head));
+        assert!(crate::frame_codec::is_redirect(
+            &db.stored_frame(FrameKey {
+                traj_id: 1,
+                frame_idx: 63,
+            })
+            .unwrap()
+        ));
+        assert_span_bits(
+            &db,
+            FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            },
+            &spans[0],
+        );
+        assert_span_bits(
+            &db,
+            FrameKey {
+                traj_id: 1,
+                frame_idx: 63,
+            },
+            &spans[63],
+        );
+    }
+
+    #[test]
+    fn one_frame_extend_does_not_group() {
+        let (batch, _) = n_shifted_frames(64);
+        let extra = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.extend_trajectory_str(1, &batch, "batch").unwrap();
+        let head_before = db
+            .stored_frame(FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap();
+        let n = db.extend_trajectory_str(1, &extra, "one").unwrap();
+        assert_eq!(n, 65);
+        let key = FrameKey {
+            traj_id: 1,
+            frame_idx: 64,
+        };
+        let stored = db.stored_frame(key).unwrap();
+        assert!(!crate::frame_codec::is_group(&stored));
+        assert!(!crate::frame_codec::is_redirect(&stored));
+        assert_eq!(
+            db.stored_frame(FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap(),
+            head_before
+        );
+        assert_eq!(db.get_frame_text(key).unwrap(), extra);
+    }
+
+    #[test]
+    fn second_append_of_matching_text_is_traj_exists() {
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let n = db.append_trajectory_str(1, &text, "a").unwrap();
+        let before = db
+            .stored_frame(FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap();
+        match db.append_trajectory_str(1, &text, "a") {
+            Err(Error::TrajExists(id, frames)) => {
+                assert_eq!(id, 1);
+                assert_eq!(frames, n);
+            }
+            other => panic!("expected TrajExists, got {other:?}"),
+        }
+        assert_eq!(db.traj_meta(1).unwrap().unwrap().n_frames, n);
+        assert_eq!(
+            db.stored_frame(FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap(),
+            before
+        );
+    }
+
+    #[test]
+    fn grouping_keeps_select_keys_and_xxh3() {
+        let (text, spans) = n_shifted_frames(64);
+        let plain_dir = tempfile::tempdir().unwrap();
+        let grouped_dir = tempfile::tempdir().unwrap();
+        let plain = ConCorpus::open(plain_dir.path()).unwrap();
+        plain.set_compress_frames(false);
+        plain.append_trajectory_str(1, &text, "plain").unwrap();
+        let grouped = ConCorpus::open(grouped_dir.path()).unwrap();
+        grouped.append_trajectory_str(1, &text, "grouped").unwrap();
+        let keys_plain = plain.select(&Select::new().trajectory(1)).unwrap();
+        let keys_grouped = grouped.select(&Select::new().trajectory(1)).unwrap();
+        assert_eq!(keys_plain, keys_grouped);
+        assert_eq!(keys_plain.len(), spans.len());
+        for (key, span) in keys_plain.iter().zip(spans.iter()) {
+            assert_eq!(
+                plain.frame_hash(*key).unwrap(),
+                hash_frame_bytes(span.as_bytes())
+            );
+            assert_eq!(
+                grouped.frame_hash(*key).unwrap(),
+                plain.frame_hash(*key).unwrap()
+            );
+            assert_eq!(plain.get_frame_text(*key).unwrap(), *span);
+            assert_eq!(grouped.get_frame_text(*key).unwrap(), *span);
+        }
+        let key0 = FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        assert_ne!(
+            plain.stored_frame(key0).unwrap(),
+            grouped.stored_frame(key0).unwrap()
+        );
+        assert!(crate::frame_codec::is_group(
+            &grouped.stored_frame(key0).unwrap()
+        ));
+    }
+
+    #[test]
+    fn foreign_tail_that_does_not_parse_writes_nothing() {
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let n = db.append_trajectory_str(1, &text, "a").unwrap();
+        let key0 = FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        let text0 = db.get_frame_text(key0).unwrap();
+        let stored0 = db.stored_frame(key0).unwrap();
+        let keys_before = db.select(&Select::new().trajectory(1)).unwrap();
+        let bad = format!("{text}\nthis is not a con frame\n");
+        match db.extend_trajectory_str(1, &bad, "tail") {
+            Err(Error::Parse(_)) => {}
+            other => panic!("expected a parse error, got {other:?}"),
+        }
+        assert_eq!(db.traj_meta(1).unwrap().unwrap().n_frames, n);
+        assert_eq!(db.get_frame_text(key0).unwrap(), text0);
+        assert_eq!(db.stored_frame(key0).unwrap(), stored0);
+        assert_eq!(
+            db.select(&Select::new().trajectory(1)).unwrap(),
+            keys_before
+        );
+        let n2 = db.extend_trajectory_str(1, &text, "more").unwrap();
+        assert!(n2 > n);
+        assert_eq!(db.get_frame_text(key0).unwrap(), text0);
+        assert_eq!(db.stored_frame(key0).unwrap(), stored0);
+        assert_eq!(
+            db.get_frame_text(FrameKey {
+                traj_id: 1,
+                frame_idx: n,
+            })
+            .unwrap(),
+            text
+        );
     }
 }
