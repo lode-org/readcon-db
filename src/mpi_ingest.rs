@@ -230,6 +230,9 @@ fn prefix(counts: &[i32]) -> Vec<i32> {
         .collect()
 }
 
+/// Map headroom per input byte reserved before an MPI ingest.
+const INPUT_MAP_FACTOR: usize = 3;
+
 /// Where a trajectory's frames are written: (owner rank, env id).
 type Route<'a> = &'a dyn Fn(TrajId) -> (usize, u32);
 
@@ -264,6 +267,23 @@ fn engine<C: Communicator>(
         Ok(())
     })();
     collective(comm, opened)?;
+
+    // Size each writer's map from the input so large ingests cannot hit
+    // MDB_MAP_FULL: frame text, index keys and B-tree overhead stay below
+    // INPUT_MAP_FACTOR times the CON bytes routed to that env.
+    let mut env_bytes: HashMap<u32, usize> = HashMap::new();
+    for t in &tabs {
+        let (owner, env) = route(t.traj_id);
+        if owner == rank {
+            *env_bytes.entry(env).or_default() += *t.offs.last().unwrap_or(&0) as usize;
+        }
+    }
+    let grown = env_bytes.iter().try_for_each(|(env, b)| {
+        envs[env]
+            .reserve_map(b.saturating_mul(INPUT_MAP_FACTOR))
+            .map(|_| ())
+    });
+    collective(comm, grown)?;
 
     let mine = block_range(n, size, rank);
     let local = collective(comm, parse_local(&tabs, mine.clone()))?;
