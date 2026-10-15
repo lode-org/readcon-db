@@ -159,6 +159,38 @@
 - drop unused FrameKey import in collect_h5md - (3765955) - *HaoZeke*
 
 - - -
+## v0.2.0 - 2026-10-15
+#### Features
+- (**frames**) store CON text as a tagged zstd frame - (838df21) - *HaoZeke*
+- (**mpi**) scatter read helper and collective XYZ export - (b1c9c4d) - *HaoZeke*
+- (**mpi**) sharded multi-writer ingest and canonical dump checks - (7891ce2) - *HaoZeke*
+- (**mpi**) parallel ingest with hash-only dedup exchange - (d978427) - *HaoZeke*
+#### Bug Fixes
+- (**bench**) pass the first traj id to mpi_ingest_check - (4095660) - *HaoZeke*
+- (**ci**) fresh directory and traj ids per ingest check - (b3552aa) - *HaoZeke*
+- (**ci**) isolate each MPICH ingest check - (4b9fd3e) - *HaoZeke*
+- (**ci**) install the MPICH build that Hydra can launch - (68ce3d6) - *HaoZeke*
+- (**frames**) group 64 CON frames when the zstd run is shorter - (75248ba) - *HaoZeke*
+- (**h5md**) convert velocities with the declared time unit (#15) - (1a1a8a5) - *HaoZeke*
+- (**lmdb**) retry serial writes after growing a full map - (20c8076) - *HaoZeke*
+- (**lmdb**) configurable map size sized from MPI ingest input - (c651ccd) - *HaoZeke*
+- (**reader**) preserve optional fields through atom accessors - (f1be53e) - *HaoZeke*
+- (**reader**) retain blank preambles in adjacent CON frames - (d19b265) - *HaoZeke*
+#### Performance
+- (**lmdb**) grow the map before a write and stop copying MPI blobs - (f0eacc5) - *HaoZeke*
+#### Documentation
+- (**mpi**) ingest benchmark harness and MPI how-to - (7e88ef5) - *HaoZeke*
+#### Build system
+- (**reader**) require the published 0.17.1 release - (c34dc55) - *HaoZeke*
+- (**reader**) lock the current CON parser dependency - (ac6e1f2) - *HaoZeke*
+- (**release**) synchronize package versions through cog - (4203e5c) - *HaoZeke*
+#### CI
+- (**docs**) install the Org exporter for Pages - (3634462) - *HaoZeke*
+#### Style
+- (**bench**) format gen_con.py with ruff - (4af4f83) - *HaoZeke*
+
+- - -
+
 
 ## v0.1.4 - 2026-08-15
 #### Maintenance
