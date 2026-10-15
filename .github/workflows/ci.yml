@@ -37,5 +37,30 @@ jobs:
         run: cargo clippy --locked --all-targets
       - name: Docs
         run: cargo doc --locked --no-deps
+      # cargo package --locked rewrites a git dependency to its crates.io
+      # version requirement and then resolves that requirement. readcon-core
+      # 0.17.1 is not published (crates.io has 0.17.0 and older). Cargo.toml
+      # pins version "=0.17.1" from readcon-core main until tag v0.17.1
+      # ships. Skip this verify step only while Cargo.lock records that git
+      # source. Test, clippy, and docs above stay `--locked` against the
+      # real pin. The package step runs again when the lockfile source is
+      # the crates.io registry.
+      - name: Decide registry package verify
+        id: registry_pkg
+        run: |
+          if awk '
+            $1 == "name" && $3 == "\"readcon-core\"" { in_pkg = 1; next }
+            in_pkg && $1 == "source" && index($0, "git+https://github.com/lode-org/readcon-core") { found = 1; exit }
+            in_pkg && $1 == "name" { exit }
+            END { exit(found ? 0 : 1) }
+          ' Cargo.lock; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "readcon-core is a git dependency in Cargo.lock."
+            echo "Skipping cargo package --locked until crates.io has readcon-core 0.17.1."
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "readcon-core is not a git dependency; cargo package --locked will run."
+          fi
       - name: Verify registry package
+        if: steps.registry_pkg.outputs.run == 'true'
         run: cargo package --locked
