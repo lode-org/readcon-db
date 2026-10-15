@@ -1232,6 +1232,64 @@ mod tests {
     }
 
     #[test]
+    fn set_units_refuses_v31_clock_without_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let src = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let text = with_line2(
+            &src,
+            r#"{"con_spec_version":3,"con_spec_minor":1,"time":12.5,"units":{"length":"angstrom","energy":"eV"}}"#,
+        );
+        db.append_trajectory_str(1, &text, "v31-clock").unwrap();
+        let key = crate::keys::FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        let before = db.get_frame(key).unwrap();
+        let err = db
+            .set_trajectory_units(1, serde_json::json!({"length": "nm"}))
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no units.time"), "{err}");
+        assert!(msg.contains("clock"), "{err}");
+        let err_t = db
+            .set_trajectory_units(1, serde_json::json!({"time": "ps"}))
+            .unwrap_err();
+        assert!(err_t.to_string().contains("no units.time"), "{err_t}");
+        let after = db.get_frame(key).unwrap();
+        assert!((after.header.time().unwrap() - 12.5).abs() < 1e-15);
+        assert!((after.header.boxl[0] - before.header.boxl[0]).abs() < 1e-15);
+        assert!(after.header.unit_for("time").is_none());
+        assert_eq!(after.header.unit_for("length"), Some("angstrom"));
+        let stored = db.get_frame_text(key).unwrap();
+        assert!(stored.contains("12.5"), "{stored}");
+        assert!(!stored.contains("\"time\":\"ps\""), "{stored}");
+    }
+
+    #[test]
+    fn set_units_v30_clock_without_time_converts_as_fs() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let src = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let text = with_line2(
+            &src,
+            r#"{"con_spec_version":3,"time":12.5,"units":{"length":"angstrom","energy":"eV"}}"#,
+        );
+        db.append_trajectory_str(1, &text, "v30-clock").unwrap();
+        db.set_trajectory_units(1, serde_json::json!({"time": "ps"}))
+            .unwrap();
+        let fr = db
+            .get_frame(crate::keys::FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap();
+        let tf = time_scale_to_ps("fs").unwrap();
+        assert!((fr.header.time().unwrap() - 12.5 * tf).abs() < 1e-12);
+        assert_eq!(fr.header.unit_for("time"), Some("ps"));
+    }
+
+    #[test]
     fn collect_h5md_v31_clock_override_is_fs() {
         let dir = tempfile::tempdir().unwrap();
         let db = ConCorpus::open(dir.path()).unwrap();
