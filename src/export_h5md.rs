@@ -289,21 +289,21 @@ impl ConCorpus {
                 (c.positions, c.velocities, c.forces)
             } else {
                 let pos: Vec<[f64; 3]> = fr.atom_data.iter().map(|a| [a.x, a.y, a.z]).collect();
-                let vel = if fr.atom_data.iter().any(|a| a.velocity.is_some()) {
+                let vel = if fr.atom_data.iter().any(|a| a.velocity().is_some()) {
                     Some(
                         fr.atom_data
                             .iter()
-                            .map(|a| a.velocity.unwrap_or([0.0; 3]))
+                            .map(|a| a.velocity().unwrap_or([0.0; 3]))
                             .collect(),
                     )
                 } else {
                     None
                 };
-                let frc = if fr.atom_data.iter().any(|a| a.force.is_some()) {
+                let frc = if fr.atom_data.iter().any(|a| a.force().is_some()) {
                     Some(
                         fr.atom_data
                             .iter()
-                            .map(|a| a.force.unwrap_or([0.0; 3]))
+                            .map(|a| a.force().unwrap_or([0.0; 3]))
                             .collect(),
                     )
                 } else {
@@ -1338,7 +1338,7 @@ mod tests {
         let native: Vec<[f64; 3]> = fr
             .atom_data
             .iter()
-            .map(|a| a.velocity.expect("vel"))
+            .map(|a| a.velocity().expect("vel"))
             .collect();
         assert_eq!(masses.len(), native.len());
         let half_ulp = 5e-7;

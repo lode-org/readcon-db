@@ -1879,13 +1879,13 @@ impl ConCorpus {
             // Cooked present but no forces block — fall through to CON for fidelity.
         }
         let fr = self.get_frame(key)?;
-        if !fr.atom_data.iter().any(|a| a.force.is_some()) {
+        if !fr.atom_data.iter().any(|a| a.force().is_some()) {
             return Ok(None);
         }
         Ok(Some(
             fr.atom_data
                 .iter()
-                .map(|a| a.force.unwrap_or([0.0; 3]))
+                .map(|a| a.force().unwrap_or([0.0; 3]))
                 .collect(),
         ))
     }
@@ -1898,13 +1898,13 @@ impl ConCorpus {
             }
         }
         let fr = self.get_frame(key)?;
-        if !fr.atom_data.iter().any(|a| a.velocity.is_some()) {
+        if !fr.atom_data.iter().any(|a| a.velocity().is_some()) {
             return Ok(None);
         }
         Ok(Some(
             fr.atom_data
                 .iter()
-                .map(|a| a.velocity.unwrap_or([0.0; 3]))
+                .map(|a| a.velocity().unwrap_or([0.0; 3]))
                 .collect(),
         ))
     }
@@ -3546,7 +3546,7 @@ mod tests {
         let fr = db.get_frame(key).unwrap();
         let forces = db.get_forces(key).unwrap().expect("forces");
         for (i, a) in fr.atom_data.iter().enumerate() {
-            if let Some(f) = a.force {
+            if let Some(f) = a.force() {
                 assert_eq!(forces[i], f);
             }
         }
@@ -3644,7 +3644,7 @@ mod tests {
         let expect_f: Vec<_> = fr
             .atom_data
             .iter()
-            .map(|a| a.force.unwrap_or([0.0; 3]))
+            .map(|a| a.force().unwrap_or([0.0; 3]))
             .collect();
         // Without cook: parse path
         assert_eq!(db.get_positions(key).unwrap(), expect_pos);
@@ -3679,12 +3679,12 @@ mod tests {
         let expect_f: Vec<_> = fr
             .atom_data
             .iter()
-            .map(|a| a.force.unwrap_or([0.0; 3]))
+            .map(|a| a.force().unwrap_or([0.0; 3]))
             .collect();
         let expect_v: Vec<_> = fr
             .atom_data
             .iter()
-            .map(|a| a.velocity.unwrap_or([0.0; 3]))
+            .map(|a| a.velocity().unwrap_or([0.0; 3]))
             .collect();
         assert_eq!(db.get_positions(key).unwrap(), expect_pos);
         assert_eq!(db.get_forces(key).unwrap().unwrap(), expect_f);

@@ -29,7 +29,7 @@ pub fn write_frame_extxyz<W: Write>(
         }
     }
 
-    let has_forces = frame.atom_data.iter().any(|a| a.force.is_some());
+    let has_forces = frame.atom_data.iter().any(|a| a.force().is_some());
     let props = if has_forces {
         "species:S:1:pos:R:3:forces:R:3"
     } else {
@@ -57,7 +57,7 @@ pub fn write_frame_extxyz<W: Write>(
             a.symbol, a.x, a.y, a.z
         )?;
         if has_forces {
-            let f = a.force.unwrap_or([0.0; 3]);
+            let f = a.force().unwrap_or([0.0; 3]);
             write!(w, " {:16.10} {:16.10} {:16.10}", f[0], f[1], f[2])?;
         }
         writeln!(w)?;

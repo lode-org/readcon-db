@@ -248,23 +248,25 @@ pub fn rescale_frame_units(
                 a.y *= lf;
                 a.z *= lf;
             }
-            if let Some(v) = a.velocity.as_mut() {
+            if let Some(mut v) = a.velocity() {
                 if vf != 1.0 {
                     v[0] *= vf;
                     v[1] *= vf;
                     v[2] *= vf;
+                    a.set_velocity(Some(v));
                 }
             }
-            if let Some(f) = a.force.as_mut() {
+            if let Some(mut f) = a.force() {
                 if ff != 1.0 {
                     f[0] *= ff;
                     f[1] *= ff;
                     f[2] *= ff;
+                    a.set_force(Some(f));
                 }
             }
-            if let Some(e) = a.energy.as_mut() {
+            if let Some(e) = a.energy() {
                 if ef != 1.0 {
-                    *e *= ef;
+                    a.set_energy(Some(e * ef));
                 }
             }
         }
