@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.9
 
 ### Added
 
@@ -12,12 +12,14 @@
 - `mpi_read::export_extxyz_collective`: extended XYZ export at `MPI_Exscan` offsets with `MPI_File_write_at_all`, or gathered to rank 0.
 - `bench/mpi_bench.sh` and `bench/gen_con.py` for the MPI ingest benchmark, and the MPI how-to page.
 - C ABI `rkrdb_mpi_ingest_paths_f` and the `rkrdb_mpi_ingest_paths` header wrapper.
+- `ConCorpus::extend_trajectory_str` and `rkrdb_extend_trajectory_str` append CON text after the live frame count. The new text is parsed before the write. A span that does not parse is not written, and earlier frames stay as stored.
 
 ### Changed
 
 - The broadcast helpers in `readcon-db-mpi.h` share one collective tail with the readcon-core shim contract.
 - `mpi_ingest::append_trajectory_path` takes the corpus directory instead of an open corpus.
-- Pin readcon-core 0.17.0.
+- Pin readcon-core 0.17.1. Until tag v0.17.1 is published, the pin is a git dependency on readcon-core main.
+- Python `append_trajectory_frames` serializes with RoundTrip inside the crate.
 
 ## v0.1.8 - 2026-10-09
 

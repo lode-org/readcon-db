@@ -30,10 +30,13 @@ check_contains "fortran/ReadConDb/fpm.toml" "^version = \"${cargo_ver}\""
 check_contains "CITATION.cff" "^version: ${cargo_ver}$"
 check_contains "docs/source/conf.py" "release = \"${cargo_ver}\""
 
-if grep -qxF 'readcon-core = "=0.17.0"' "$ROOT/Cargo.toml"; then
-  ok "Cargo.toml pins the published readcon-core 0.16.2"
+if grep -q 'TODO: replace this git pin with crates.io `readcon-core = "=0.17.1"`' "$ROOT/Cargo.toml" \
+  && grep -q 'git = "https://github.com/lode-org/readcon-core"' "$ROOT/Cargo.toml" \
+  && grep -q 'branch = "main"' "$ROOT/Cargo.toml" \
+  && grep -q 'version = "=0.17.1"' "$ROOT/Cargo.toml"; then
+  ok "Cargo.toml pins readcon-core =0.17.1 from git main until tag v0.17.1"
 else
-  die "Cargo.toml must pin the published round-trip readcon-core release"
+  die "Cargo.toml must pin readcon-core =0.17.1 from git main until the tag exists"
 fi
 
 if [[ "$fail" -ne 0 ]]; then

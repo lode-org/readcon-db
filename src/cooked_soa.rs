@@ -55,8 +55,8 @@ impl CookedSoa {
         }
         let natoms = n as u32;
         let mut flags = 0u32;
-        let has_f = frame.atom_data.iter().any(|a| a.force.is_some());
-        let has_v = frame.atom_data.iter().any(|a| a.velocity.is_some());
+        let has_f = frame.atom_data.iter().any(|a| a.force().is_some());
+        let has_v = frame.atom_data.iter().any(|a| a.velocity().is_some());
         if has_f {
             flags |= FLAG_FORCES;
         }
@@ -81,7 +81,7 @@ impl CookedSoa {
         }
         if has_f {
             for a in &frame.atom_data {
-                let f = a.force.unwrap_or([0.0; 3]);
+                let f = a.force().unwrap_or([0.0; 3]);
                 for c in f {
                     out.extend_from_slice(&c.to_le_bytes());
                 }
@@ -89,7 +89,7 @@ impl CookedSoa {
         }
         if has_v {
             for a in &frame.atom_data {
-                let v = a.velocity.unwrap_or([0.0; 3]);
+                let v = a.velocity().unwrap_or([0.0; 3]);
                 for c in v {
                     out.extend_from_slice(&c.to_le_bytes());
                 }
@@ -284,7 +284,7 @@ mod tests {
         let forces = cooked.forces.as_ref().unwrap();
         for (i, a) in fr.atom_data.iter().enumerate() {
             assert_eq!(cooked.positions[i], [a.x, a.y, a.z]);
-            if let Some(f) = a.force {
+            if let Some(f) = a.force() {
                 assert_eq!(forces[i], f);
             }
         }
@@ -302,10 +302,10 @@ mod tests {
         let vels = cooked.velocities.as_ref().unwrap();
         for (i, a) in fr.atom_data.iter().enumerate() {
             assert_eq!(cooked.positions[i], [a.x, a.y, a.z]);
-            if let Some(f) = a.force {
+            if let Some(f) = a.force() {
                 assert_eq!(forces[i], f);
             }
-            if let Some(v) = a.velocity {
+            if let Some(v) = a.velocity() {
                 assert_eq!(vels[i], v);
             }
         }
