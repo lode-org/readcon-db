@@ -9,18 +9,25 @@
 //! Records then move to the rank that owns the destination env with
 //! `MPI_Alltoallv`, in batches of global frames. The payload of a first
 //! occurrence is the tagged zstd frame of the CON text (or the raw UTF-8
-//! when that frame does not shrink). The owner then packs each aligned run
-//! of 64 frames into one zstd group when that is shorter, and writes the
-//! group. xxh3-128 was taken on the UTF-8. A later duplicate of those bytes
-//! in the same env receives a copy.
+//! when that frame does not shrink). A duplicate whose first occurrence is
+//! in the same batch sends no blob; the owner still has that batch's bytes.
+//! A duplicate whose winner was in an earlier batch sends its bytes again,
+//! so the owner does not keep every distinct blob until the file ends.
+//! The owner then packs each aligned run of 64 frames into one zstd group
+//! when that is shorter, and stages the group. xxh3-128 was taken on the UTF-8.
 //!
 //! - single writer: rank 0 owns the one corpus;
 //! - sharded: shard `s = traj_id % n_shards` is owned by rank `s % P`.
 //!
 //! Each owner receives records in source rank order, which is global frame
-//! order, and inserts them in that order. Keys, hash winners and trajectory
-//! metadata therefore equal the serial ingest of the same files in the same
-//! order, for every rank count.
+//! order, and stages them in that order inside one LMDB write transaction
+//! per environment. Frames and trajectory metadata commit together. Dropping
+//! the transaction, which is what a failure or a crash does, leaves neither.
+//! Keys, hash winners and metadata therefore equal the serial ingest of the
+//! same files in the same order, for every rank count.
+//!
+//! Collective byte counts are checked against `i32::MAX` before they are
+//! narrowed. A batch that would overflow is split. Record lengths are `u64`.
 //!
 //! The library never calls `MPI_Init` and only uses the communicator it is
 //! given.
@@ -34,9 +41,13 @@ use mpi::datatype::PartitionMut;
 use mpi::traits::*;
 use readcon_core::iterators::{frame_start_offsets, ConFrameIterator};
 
-use crate::corpus::ConCorpus;
+use crate::corpus::{ConCorpus, IngestSession};
 use crate::error::{Error, Result};
 use crate::keys::{FrameKey, TrajId};
+use crate::mpi_wire::{
+    batch_end, fit_u32, fits_i32, hash_gather_chunk_frames, mpi_i32, prefix_i32, push_record,
+    read_bytes, read_u64, record_bytes, send_stored_bytes, shrink_batch_end,
+};
 use crate::shard::ShardedConCorpus;
 
 /// Frames per gather batch on the writer rank (bounds rank 0 memory).
@@ -149,17 +160,36 @@ fn scan_files<C: Communicator>(comm: &C, files: &[(TrajId, PathBuf)]) -> Result<
     let mut tabs = Vec::with_capacity(files.len());
     let (mut i, mut g0) = (0usize, 0usize);
     for (t, p) in files {
-        let k = words[i] as usize;
-        let offs = words[i + 1..i + 1 + k].to_vec();
-        i += 1 + k;
+        if i >= words.len() {
+            return Err(Error::Message("truncated frame-offset broadcast".into()));
+        }
+        let k = usize::try_from(words[i])
+            .map_err(|_| Error::Message("frame-offset count exceeds usize".into()))?;
+        let end = i
+            .checked_add(1)
+            .and_then(|s| s.checked_add(k))
+            .ok_or_else(|| Error::Message("frame-offset table overflows".into()))?;
+        if end > words.len() {
+            return Err(Error::Message("truncated frame-offset broadcast".into()));
+        }
+        let offs = words[i + 1..end].to_vec();
+        i = end;
+        if offs.is_empty() {
+            return Err(Error::Message("frame-offset table is empty".into()));
+        }
         let tab = FileTab {
             traj_id: *t,
             path: p.clone(),
             offs,
             g0,
         };
-        g0 += tab.n();
+        g0 = g0
+            .checked_add(tab.n())
+            .ok_or_else(|| Error::Message("frame count overflows".into()))?;
         tabs.push(tab);
+    }
+    if i != words.len() {
+        return Err(Error::Message("trailing frame-offset bytes".into()));
     }
     Ok(tabs)
 }
@@ -170,12 +200,6 @@ struct Local {
     enc: Vec<Vec<u8>>,
     /// Tagged zstd bytes, or raw UTF-8 when the tagged frame does not shrink.
     stored: Vec<Vec<u8>>,
-}
-
-fn take<'a>(k: usize, p: &mut &'a [u8]) -> &'a [u8] {
-    let (a, b) = p.split_at(k);
-    *p = b;
-    a
 }
 
 fn file_of(tabs: &[FileTab], g: usize) -> usize {
@@ -194,9 +218,22 @@ fn parse_local(tabs: &[FileTab], range: std::ops::Range<usize>) -> Result<Local>
         let t = &tabs[file_of(tabs, g)];
         let (a, b) = (g - t.g0, (range.end - t.g0).min(t.n()));
         let (lo, hi) = (t.offs[a], t.offs[b]);
+        if hi < lo {
+            return Err(Error::Message(format!(
+                "{}: frame offsets go backwards",
+                t.path.display()
+            )));
+        }
+        let span = usize::try_from(hi - lo).map_err(|_| {
+            Error::Message(format!(
+                "{}: frame byte span {} exceeds usize",
+                t.path.display(),
+                hi - lo
+            ))
+        })?;
         let mut f = std::fs::File::open(&t.path)?;
         f.seek(SeekFrom::Start(lo))?;
-        let mut buf = vec![0u8; (hi - lo) as usize];
+        let mut buf = vec![0u8; span];
         f.read_exact(&mut buf)?;
         let text = std::str::from_utf8(&buf).map_err(|e| Error::Message(format!("utf8: {e}")))?;
         for i in a..b {
@@ -213,7 +250,7 @@ fn parse_local(tabs: &[FileTab], range: std::ops::Range<usize>) -> Result<Local>
             };
             let fk = FrameKey {
                 traj_id: t.traj_id,
-                frame_idx: i as u32,
+                frame_idx: fit_u32(i)?,
             };
             let (h, enc, stored) = ConCorpus::encode_frame_keys(fk, &frame, blob)?;
             out.hashes.push(h);
@@ -223,17 +260,6 @@ fn parse_local(tabs: &[FileTab], range: std::ops::Range<usize>) -> Result<Local>
         g = t.g0 + b;
     }
     Ok(out)
-}
-
-fn prefix(counts: &[i32]) -> Vec<i32> {
-    counts
-        .iter()
-        .scan(0, |a, &c| {
-            let d = *a;
-            *a += c;
-            Some(d)
-        })
-        .collect()
 }
 
 /// Map headroom per input byte reserved before an MPI ingest.
@@ -295,7 +321,7 @@ fn drain_ready(buf: &mut Vec<Held>, n_of: &HashMap<TrajId, u32>) -> Result<Vec<H
 }
 
 fn flush_ready(
-    envs: &mut HashMap<u32, ConCorpus>,
+    sessions: &mut HashMap<u32, IngestSession<'_>>,
     bufs: &mut HashMap<u32, Vec<Held>>,
     id: u32,
     n_of: &HashMap<TrajId, u32>,
@@ -308,9 +334,250 @@ fn flush_ready(
         return Ok(());
     }
     let rows = ready.into_iter().map(|r| (r.fk, r.enc, r.stored)).collect();
-    envs.get(&id)
+    sessions
+        .get_mut(&id)
         .ok_or_else(|| Error::Message(format!("missing env {id}")))?
         .put_encoded(rows)
+}
+
+fn rank_span(n: usize, size: usize, rank: usize, g0: usize, g1: usize) -> std::ops::Range<usize> {
+    let mine = block_range(n, size, rank);
+    mine.start.max(g0)..mine.end.min(g1)
+}
+
+fn gather_hashes<C: Communicator>(
+    comm: &C,
+    n: usize,
+    local: &Local,
+    rank: usize,
+    size: usize,
+) -> Result<Vec<u8>> {
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    let total = n
+        .checked_mul(16)
+        .ok_or_else(|| Error::Message(format!("hash exchange of {n} frames overflows")))?;
+    let mut all_h = vec![0u8; total];
+    let chunk = hash_gather_chunk_frames().max(1);
+    let mut g0 = 0usize;
+    while g0 < n {
+        let g1 = (g0 + chunk).min(n);
+        let counts = (0..size)
+            .map(|r| {
+                let bytes = rank_span(n, size, r, g0, g1)
+                    .len()
+                    .checked_mul(16)
+                    .ok_or_else(|| Error::Message("hash count overflows".into()))?;
+                mpi_i32(bytes as u64)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let displs = prefix_i32(&counts)?;
+        let mine = rank_span(n, size, rank, g0, g1);
+        // Capacity 1 keeps the empty send pointer live. Open MPI rejects a
+        // dangling buffer even when the count is zero.
+        let mut my = Vec::with_capacity(mine.len().saturating_mul(16).saturating_add(1));
+        for g in mine {
+            my.extend_from_slice(&local.hashes[g - local.first]);
+        }
+        let mut part = PartitionMut::new(&mut all_h[g0 * 16..g1 * 16], &counts[..], &displs[..]);
+        comm.all_gather_varcount_into(&my[..], &mut part);
+        g0 = g1;
+    }
+    Ok(all_h)
+}
+
+fn plan_counts(
+    local: &Local,
+    mine: std::ops::Range<usize>,
+    b0: usize,
+    b1: usize,
+    size: usize,
+    env_of: &[(usize, u32)],
+    first_of: &[usize],
+) -> Result<Vec<u64>> {
+    let mut scounts = vec![0u64; size];
+    for g in mine.start.max(b0)..mine.end.min(b1) {
+        let i = g - local.first;
+        let n = record_bytes(
+            local.enc[i].len(),
+            local.stored[i].len(),
+            send_stored_bytes(first_of[g], g, b0),
+        );
+        let dest = env_of[g].0;
+        scounts[dest] = scounts[dest]
+            .checked_add(n)
+            .ok_or_else(|| Error::Message("MPI message length overflows u64".into()))?;
+    }
+    Ok(scounts)
+}
+
+fn build_messages(
+    local: &Local,
+    mine: std::ops::Range<usize>,
+    b0: usize,
+    b1: usize,
+    size: usize,
+    env_of: &[(usize, u32)],
+    first_of: &[usize],
+) -> Vec<Vec<u8>> {
+    let mut out = vec![Vec::new(); size];
+    for g in mine.start.max(b0)..mine.end.min(b1) {
+        let i = g - local.first;
+        let blob: &[u8] = if send_stored_bytes(first_of[g], g, b0) {
+            &local.stored[i]
+        } else {
+            &[]
+        };
+        push_record(&mut out[env_of[g].0], g as u64, &local.enc[i], blob);
+    }
+    out
+}
+
+/// Exchange frames in `[b0, b1)` and return the rank-local receive buffer.
+/// `b1` may be shorter than requested when a full batch would exceed `i32::MAX`.
+/// A huge `batch` cannot wrap `b1` back to or below `b0`.
+fn exchange_batch<C: Communicator>(
+    comm: &C,
+    local: &Local,
+    mine: std::ops::Range<usize>,
+    b0: usize,
+    batch: usize,
+    n: usize,
+    size: usize,
+    env_of: &[(usize, u32)],
+    first_of: &[usize],
+) -> Result<(usize, Vec<u8>)> {
+    let mut b1 = batch_end(b0, batch, n);
+    loop {
+        let planned = plan_counts(local, mine.clone(), b0, b1, size, env_of, first_of);
+        if !agree(comm, planned.is_ok()) {
+            return match planned {
+                Err(e) => Err(e),
+                Ok(_) => Err(Error::Message("MPI ingest failed on another rank".into())),
+            };
+        }
+        let scounts = planned.expect("plan succeeded on every rank");
+        let mut rcounts = vec![0u64; size];
+        comm.all_to_all_into(&scounts[..], &mut rcounts[..]);
+        let fit = fits_i32(&scounts) && fits_i32(&rcounts);
+        if !agree(comm, fit) {
+            let Some(shrunk) = shrink_batch_end(b0, b1) else {
+                let biggest = scounts
+                    .iter()
+                    .chain(rcounts.iter())
+                    .copied()
+                    .max()
+                    .unwrap_or(0);
+                return Err(Error::Message(format!(
+                    "MPI message of {biggest} bytes exceeds i32::MAX"
+                )));
+            };
+            b1 = shrunk;
+            continue;
+        }
+        let out = build_messages(local, mine.clone(), b0, b1, size, env_of, first_of);
+        let lens: Vec<u64> = out.iter().map(|m| m.len() as u64).collect();
+        if !agree(comm, lens == scounts) {
+            return Err(Error::Message(
+                "MPI batch length does not match the planned count".into(),
+            ));
+        }
+        let packed = (|| -> Result<_> {
+            let sc_i32 = scounts
+                .iter()
+                .copied()
+                .map(mpi_i32)
+                .collect::<Result<Vec<_>>>()?;
+            let rc_i32 = rcounts
+                .iter()
+                .copied()
+                .map(mpi_i32)
+                .collect::<Result<Vec<_>>>()?;
+            let sd = prefix_i32(&sc_i32)?;
+            let rd = prefix_i32(&rc_i32)?;
+            Ok((sc_i32, rc_i32, sd, rd))
+        })();
+        if !agree(comm, packed.is_ok()) {
+            return match packed {
+                Err(e) => Err(e),
+                Ok(_) => Err(Error::Message("MPI ingest failed on another rank".into())),
+            };
+        }
+        let (sc_i32, rc_i32, sd, rd) = packed.expect("counts fit in i32");
+        // `fits_i32` already required both totals to be <= i32::MAX.
+        let send_len = usize::try_from(scounts.iter().sum::<u64>()).expect("send length fits");
+        let mut send = Vec::with_capacity(1 + send_len);
+        for m in &out {
+            send.extend_from_slice(m);
+        }
+        let rtot = usize::try_from(rcounts.iter().sum::<u64>()).expect("receive length fits");
+        let mut recv = vec![0u8; rtot + 1];
+        recv.truncate(rtot);
+        {
+            let sp = mpi::datatype::Partition::new(&send[..], &sc_i32[..], &sd[..]);
+            let mut rp = PartitionMut::new(&mut recv[..], &rc_i32[..], &rd[..]);
+            comm.all_to_all_varcount_into(&sp, &mut rp);
+        }
+        return Ok((b1, recv));
+    }
+}
+
+fn decode_batch(
+    recv: &[u8],
+    b0: usize,
+    b1: usize,
+    first_of: &[usize],
+    tabs: &[FileTab],
+    env_of: &[(usize, u32)],
+) -> Result<Vec<(u32, Held)>> {
+    let mut reuse = HashSet::new();
+    for g in b0..b1 {
+        let winner = first_of[g];
+        if winner != g && winner >= b0 {
+            reuse.insert(winner);
+        }
+    }
+    // Winners needed again in this batch only. The map dies with the batch.
+    let mut kept: HashMap<usize, Vec<u8>> = HashMap::new();
+    let mut rows = Vec::new();
+    let mut p = recv;
+    while !p.is_empty() {
+        let g = usize::try_from(read_u64(&mut p)?)
+            .map_err(|_| Error::Message("frame index exceeds usize".into()))?;
+        if g >= first_of.len() {
+            return Err(Error::Message(format!("frame {g} outside ingest")));
+        }
+        let enc = read_bytes(&mut p)?.to_vec();
+        let raw = read_bytes(&mut p)?;
+        let winner = first_of[g];
+        let stored = if winner == g {
+            let bytes = raw.to_vec();
+            if reuse.contains(&g) {
+                kept.insert(g, bytes.clone());
+            }
+            bytes
+        } else if winner < b0 {
+            raw.to_vec()
+        } else {
+            kept.get(&winner)
+                .cloned()
+                .ok_or_else(|| Error::Message(format!("missing dedup payload for frame {g}")))?
+        };
+        let t = &tabs[file_of(tabs, g)];
+        rows.push((
+            env_of[g].1,
+            Held {
+                fk: FrameKey {
+                    traj_id: t.traj_id,
+                    frame_idx: fit_u32(g - t.g0)?,
+                },
+                enc,
+                stored,
+            },
+        ));
+    }
+    Ok(rows)
 }
 
 fn engine<C: Communicator>(
@@ -328,8 +595,15 @@ fn engine<C: Communicator>(
     }
     let tabs = scan_files(comm, files)?;
     let n: usize = tabs.iter().map(FileTab::n).sum();
+    let counts = collective(
+        comm,
+        tabs.iter()
+            .map(|t| fit_u32(t.n()))
+            .collect::<Result<Vec<_>>>(),
+    )?;
 
-    // Owners open their envs and check that no trajectory exists yet.
+    // Owners open their envs. The existence check happens inside the write
+    // transaction below, so a second writer cannot pass it first.
     let mut envs: HashMap<u32, ConCorpus> = HashMap::new();
     let opened = (|| -> Result<()> {
         for t in &tabs {
@@ -338,7 +612,6 @@ fn engine<C: Communicator>(
                 if let std::collections::hash_map::Entry::Vacant(v) = envs.entry(env) {
                     v.insert(sink(env)?);
                 }
-                envs[&env].check_traj_free(t.traj_id)?;
             }
         }
         Ok(())
@@ -348,13 +621,24 @@ fn engine<C: Communicator>(
     // Size each writer's map from the input so large ingests cannot hit
     // MDB_MAP_FULL: frame text, index keys and B-tree overhead stay below
     // INPUT_MAP_FACTOR times the CON bytes routed to that env.
+    // The resize must finish before the ingest transaction opens.
     let mut env_bytes: HashMap<u32, usize> = HashMap::new();
-    for t in &tabs {
-        let (owner, env) = route(t.traj_id);
-        if owner == rank {
-            *env_bytes.entry(env).or_default() += *t.offs.last().unwrap_or(&0) as usize;
+    let measured = (|| -> Result<()> {
+        for t in &tabs {
+            let (owner, env) = route(t.traj_id);
+            if owner == rank {
+                let bytes = usize::try_from(*t.offs.last().unwrap_or(&0)).map_err(|_| {
+                    Error::Message(format!("{} is longer than usize", t.path.display()))
+                })?;
+                let slot = env_bytes.entry(env).or_default();
+                *slot = slot
+                    .checked_add(bytes)
+                    .ok_or_else(|| Error::Message(format!("input bytes for env {env} overflow")))?;
+            }
         }
-    }
+        Ok(())
+    })();
+    collective(comm, measured)?;
     let grown = env_bytes.iter().try_for_each(|(env, b)| {
         envs[env]
             .reserve_map(b.saturating_mul(INPUT_MAP_FACTOR))
@@ -362,22 +646,28 @@ fn engine<C: Communicator>(
     });
     collective(comm, grown)?;
 
+    let mut sessions: HashMap<u32, IngestSession<'_>> = HashMap::new();
+    let begun = (|| -> Result<()> {
+        for (id, corpus) in &envs {
+            sessions.insert(*id, IngestSession::begin(corpus)?);
+        }
+        for t in &tabs {
+            let (owner, env) = route(t.traj_id);
+            if owner == rank {
+                sessions
+                    .get_mut(&env)
+                    .ok_or_else(|| Error::Message(format!("missing env {env}")))?
+                    .claim(t.traj_id)?;
+            }
+        }
+        Ok(())
+    })();
+    collective(comm, begun)?;
+
     let mine = block_range(n, size, rank);
     let local = collective(comm, parse_local(&tabs, mine.clone()))?;
+    let all_h = collective(comm, gather_hashes(comm, n, &local, rank, size))?;
 
-    // Hash-only exchange in rank order = global frame order.
-    let mut my_h: Vec<u8> = Vec::with_capacity(1 + local.hashes.len() * 16);
-    my_h.extend(local.hashes.iter().flatten());
-    let counts: Vec<i32> = (0..size)
-        .map(|r| (block_range(n, size, r).len() * 16) as i32)
-        .collect();
-    let displs = prefix(&counts);
-    let mut all_h = vec![0u8; n * 16 + 1];
-    all_h.truncate(n * 16);
-    {
-        let mut part = PartitionMut::new(&mut all_h[..], &counts[..], &displs[..]);
-        comm.all_gather_varcount_into(&my_h[..], &mut part);
-    }
     // env_of[g] and first_of[g] = lowest global index with equal bytes in the same env.
     let mut env_of = Vec::with_capacity(n);
     for t in &tabs {
@@ -392,95 +682,41 @@ fn engine<C: Communicator>(
                 .or_insert(g)
         })
         .collect();
-    let referenced: HashSet<usize> = (0..n)
-        .filter(|&g| first_of[g] != g)
-        .map(|g| first_of[g])
-        .collect();
 
-    let mut kept: HashMap<usize, Vec<u8>> = HashMap::new();
-    let n_of: HashMap<TrajId, u32> = tabs.iter().map(|t| (t.traj_id, t.n() as u32)).collect();
+    let n_of: HashMap<TrajId, u32> = tabs
+        .iter()
+        .zip(counts.iter())
+        .map(|(t, n_frames)| (t.traj_id, *n_frames))
+        .collect();
     let mut bufs: HashMap<u32, Vec<Held>> = HashMap::new();
     let mut b0 = 0usize;
     while b0 < n {
-        let b1 = (b0 + batch).min(n);
-        // One message per destination rank, records in global order.
-        let mut out: Vec<Vec<u8>> = vec![Vec::new(); size];
-        for g in mine.start.max(b0)..mine.end.min(b1) {
-            let i = g - local.first;
-            let m = &mut out[env_of[g].0];
-            m.extend_from_slice(&(g as u64).to_le_bytes());
-            m.extend_from_slice(&(local.enc[i].len() as u32).to_le_bytes());
-            m.extend_from_slice(&local.enc[i]);
-            let stored: &[u8] = if first_of[g] == g {
-                &local.stored[i]
-            } else {
-                &[]
-            };
-            m.extend_from_slice(&(stored.len() as u32).to_le_bytes());
-            m.extend_from_slice(stored);
-        }
-        let scounts: Vec<i32> = out.iter().map(|m| m.len() as i32).collect();
-        let mut rcounts = vec![0i32; size];
-        comm.all_to_all_into(&scounts[..], &mut rcounts[..]);
-        let mut send: Vec<u8> =
-            Vec::with_capacity(1 + scounts.iter().map(|&c| c as usize).sum::<usize>());
-        for m in &out {
-            send.extend_from_slice(m);
-        }
-        let rtot: usize = rcounts.iter().map(|&c| c as usize).sum();
-        let mut recv = vec![0u8; rtot + 1];
-        recv.truncate(rtot);
-        {
-            let sd = prefix(&scounts);
-            let rd = prefix(&rcounts);
-            let sp = mpi::datatype::Partition::new(&send[..], &scounts[..], &sd[..]);
-            let mut rp = PartitionMut::new(&mut recv[..], &rcounts[..], &rd[..]);
-            comm.all_to_all_varcount_into(&sp, &mut rp);
-        }
-        // Decode in source order (= global order) and insert per env.
-        let mut rows: Vec<(u32, Held)> = Vec::new();
-        let mut p = &recv[..];
-        while !p.is_empty() {
-            let g = u64::from_le_bytes(take(8, &mut p).try_into().unwrap()) as usize;
-            let el = u32::from_le_bytes(take(4, &mut p).try_into().unwrap()) as usize;
-            let enc = take(el, &mut p).to_vec();
-            let bl = u32::from_le_bytes(take(4, &mut p).try_into().unwrap()) as usize;
-            let raw = take(bl, &mut p);
-            let stored = if first_of[g] == g {
-                let s = raw.to_vec();
-                if referenced.contains(&g) {
-                    kept.insert(g, s.clone());
-                }
-                s
-            } else {
-                kept.get(&first_of[g]).cloned().unwrap_or_default()
-            };
-            let t = &tabs[file_of(&tabs, g)];
-            rows.push((
-                env_of[g].1,
-                Held {
-                    fk: FrameKey {
-                        traj_id: t.traj_id,
-                        frame_idx: (g - t.g0) as u32,
-                    },
-                    enc,
-                    stored,
-                },
-            ));
-        }
-        for (id, held) in rows {
+        let exchanged = exchange_batch(
+            comm,
+            &local,
+            mine.clone(),
+            b0,
+            batch,
+            n,
+            size,
+            &env_of,
+            &first_of,
+        );
+        let (b1, recv) = collective(comm, exchanged)?;
+        let decoded = decode_batch(&recv, b0, b1, &first_of, &tabs, &env_of);
+        for (id, held) in collective(comm, decoded)? {
             bufs.entry(id).or_default().push(held);
         }
         let ids: Vec<u32> = bufs.keys().copied().collect();
         let put = ids
             .iter()
-            .try_for_each(|id| flush_ready(&mut envs, &mut bufs, *id, &n_of));
+            .try_for_each(|id| flush_ready(&mut sessions, &mut bufs, *id, &n_of));
         collective(comm, put)?;
         b0 = b1;
     }
     let ids: Vec<u32> = bufs.keys().copied().collect();
     let tail = ids.iter().try_for_each(|id| {
-        flush_ready(&mut envs, &mut bufs, *id, &n_of)?;
+        flush_ready(&mut sessions, &mut bufs, *id, &n_of)?;
         if bufs.get(id).is_some_and(|b| !b.is_empty()) {
             return Err(Error::Message(
                 "MPI ingest left an unfinished frame group".into(),
@@ -489,16 +725,28 @@ fn engine<C: Communicator>(
         Ok(())
     });
     collective(comm, tail)?;
-    let meta = tabs.iter().try_for_each(|t| {
-        let (owner, env) = route(t.traj_id);
-        if owner == rank {
-            envs[&env].put_traj_meta(t.traj_id, t.n() as u32, t.path.display().to_string())
-        } else {
-            Ok(())
-        }
-    });
+    let meta = tabs
+        .iter()
+        .zip(counts.iter())
+        .try_for_each(|(t, n_frames)| {
+            let (owner, env) = route(t.traj_id);
+            if owner == rank {
+                sessions
+                    .get_mut(&env)
+                    .ok_or_else(|| Error::Message(format!("missing env {env}")))?
+                    .put_traj_meta(t.traj_id, *n_frames, t.path.display().to_string())
+            } else {
+                Ok(())
+            }
+        });
     collective(comm, meta)?;
-    Ok(tabs.iter().map(|t| t.n() as u32).collect())
+    // Every rank reached here, so every owner can commit. A failure before
+    // this point dropped `sessions` and aborted the uncommitted transaction.
+    let committed = sessions
+        .into_iter()
+        .try_for_each(|(_, session)| session.commit());
+    collective(comm, committed)?;
+    Ok(counts)
 }
 
 /// Ingest the CON file at `path` (visible on every rank) as `traj_id`.
@@ -630,5 +878,61 @@ pub unsafe extern "C" fn rkrdb_mpi_ingest_paths_f(
             }
             -3
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_ingest_commits_nothing_and_leaves_an_earlier_traj() {
+        let universe = mpi::initialize().expect("MPI init");
+        let comm = universe.world();
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let good = root.join("resources/test/tiny_cuh2.con");
+        // One directory, created on rank 0, so every rank reads the same file.
+        let hold = if comm.rank() == 0 {
+            let dir = tempfile::tempdir().unwrap();
+            let mut text = std::fs::read_to_string(&good).unwrap();
+            text.push_str("\nthis is not a frame\n");
+            std::fs::write(dir.path().join("bad.con"), text).unwrap();
+            Some(dir)
+        } else {
+            None
+        };
+        let dir_bytes = if comm.rank() == 0 {
+            hold.as_ref()
+                .unwrap()
+                .path()
+                .as_os_str()
+                .as_encoded_bytes()
+                .to_vec()
+        } else {
+            Vec::new()
+        };
+        let dir = PathBuf::from(
+            std::str::from_utf8(&bcast_bytes(&comm, dir_bytes)).expect("dir path is utf-8"),
+        );
+        let bad = dir.join("bad.con");
+
+        let n = append_trajectory_path(&comm, &dir, 1, &good, 1).unwrap();
+        assert!(n > 0);
+
+        // Reusing traj 1 must fail without deleting the frames committed above.
+        let err = append_trajectory_paths(&comm, &dir, &[(1, good.clone()), (2, bad.clone())], 1)
+            .unwrap_err();
+        assert!(!err.to_string().is_empty(), "{err}");
+
+        // A parse error on any rank aborts before commit, so traj 2 is absent.
+        let err = append_trajectory_path(&comm, &dir, 2, &bad, 1).unwrap_err();
+        assert!(!err.to_string().is_empty(), "{err}");
+        if comm.rank() == 0 {
+            let db = ConCorpus::open(&dir).unwrap();
+            assert_eq!(db.traj_meta(1).unwrap().unwrap().n_frames, n);
+            assert!(db.traj_meta(2).unwrap().is_none());
+            assert!(db.list_frame_keys().unwrap().iter().all(|k| k.traj_id == 1));
+        }
+        let _ = hold;
     }
 }
