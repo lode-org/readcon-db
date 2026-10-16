@@ -55,6 +55,38 @@ pub(crate) fn hash_gather_chunk_frames() -> usize {
     (MPI_COUNT_MAX as usize) / 16
 }
 
+/// Exclusive end of a batch of at most `batch` frames starting at `b0`.
+///
+/// `batch` can be `usize::MAX` when a C `size_t` was `-1`. Once a previous
+/// batch was split, `b0 > 0`, and `b0 + batch` wraps to `b0 - 1`. The range
+/// is empty and the ingest cursor never moves forward. The sum saturates,
+/// and while any frame remains the end is strictly greater than `b0`.
+pub(crate) fn batch_end(b0: usize, batch: usize, n: usize) -> usize {
+    if b0 >= n {
+        return b0;
+    }
+    let end = b0.saturating_add(batch.max(1)).min(n);
+    debug_assert!(end > b0);
+    end
+}
+
+/// Halve `[b0, b1)` after the batch exceeds an `i32` count.
+///
+/// `None` when fewer than two frames remain, including a wrapped `b1 < b0`.
+/// The span is a saturating subtract: an underflow must not spin the split.
+pub(crate) fn shrink_batch_end(b0: usize, b1: usize) -> Option<usize> {
+    let span = b1.saturating_sub(b0);
+    if span <= 1 {
+        return None;
+    }
+    let next = b0.saturating_add(span / 2);
+    if next > b0 && next < b1 {
+        Some(next)
+    } else {
+        None
+    }
+}
+
 /// A duplicate whose winner is in an earlier batch must carry its own bytes.
 /// The writer keeps a winner only until the end of the batch that reuses it.
 pub(crate) fn send_stored_bytes(winner: usize, frame: usize, batch_start: usize) -> bool {
@@ -164,6 +196,53 @@ mod tests {
         assert!(!send_stored_bytes(0, 5, 0));
         assert!(send_stored_bytes(0, 5, 4));
         assert!(!send_stored_bytes(3, 5, 2));
+    }
+
+    #[test]
+    fn huge_batch_with_b0_past_zero_does_not_leave_an_empty_range() {
+        // After a split the next call has b0 > 0 and still carries
+        // batch == usize::MAX. The unchecked sum wraps and the range is empty,
+        // so the outer ingest loop never advances.
+        let n = 64;
+        let b0 = 5usize;
+        let wrapped = b0.wrapping_add(usize::MAX).min(n);
+        assert!(wrapped < b0, "unchecked sum is the empty-range hang");
+
+        let b1 = batch_end(b0, usize::MAX, n);
+        assert!(b1 > b0 && b1 <= n, "b1={b1} does not advance");
+        assert_eq!(b1, n);
+
+        let mut cursor = b0;
+        for _ in 0..n {
+            if cursor >= n {
+                break;
+            }
+            let next = batch_end(cursor, usize::MAX, n);
+            assert!(next > cursor && next <= n, "cursor stuck at {cursor}");
+            cursor = next;
+        }
+        assert_eq!(cursor, n);
+
+        assert_eq!(batch_end(0, usize::MAX, n), n);
+        assert_eq!(batch_end(0, 10, n), 10);
+        assert_eq!(batch_end(60, 8, n), n);
+        assert_eq!(batch_end(n, usize::MAX, n), n);
+        assert_eq!(batch_end(b0, 0, n), b0 + 1);
+
+        // `b1 - b0` on that wrapped end underflows and the split never finishes.
+        assert!(shrink_batch_end(b0, wrapped).is_none());
+        let half = shrink_batch_end(b0, n).unwrap();
+        assert!(half > b0 && half < n);
+        assert_eq!(half, b0 + (n - b0) / 2);
+        let mut end = n;
+        let mut steps = 0;
+        while let Some(shrunk) = shrink_batch_end(b0, end) {
+            assert!(shrunk > b0 && shrunk < end);
+            end = shrunk;
+            steps += 1;
+            assert!(steps < 64, "split did not converge");
+        }
+        assert_eq!(end, b0 + 1);
     }
 
     #[test]

@@ -45,8 +45,8 @@ use crate::corpus::{ConCorpus, IngestSession};
 use crate::error::{Error, Result};
 use crate::keys::{FrameKey, TrajId};
 use crate::mpi_wire::{
-    fit_u32, fits_i32, hash_gather_chunk_frames, mpi_i32, prefix_i32, push_record, read_bytes,
-    read_u64, record_bytes, send_stored_bytes,
+    batch_end, fit_u32, fits_i32, hash_gather_chunk_frames, mpi_i32, prefix_i32, push_record,
+    read_bytes, read_u64, record_bytes, send_stored_bytes, shrink_batch_end,
 };
 use crate::shard::ShardedConCorpus;
 
@@ -436,6 +436,7 @@ fn build_messages(
 
 /// Exchange frames in `[b0, b1)` and return the rank-local receive buffer.
 /// `b1` may be shorter than requested when a full batch would exceed `i32::MAX`.
+/// A huge `batch` cannot wrap `b1` back to or below `b0`.
 fn exchange_batch<C: Communicator>(
     comm: &C,
     local: &Local,
@@ -447,7 +448,7 @@ fn exchange_batch<C: Communicator>(
     env_of: &[(usize, u32)],
     first_of: &[usize],
 ) -> Result<(usize, Vec<u8>)> {
-    let mut b1 = (b0 + batch).min(n);
+    let mut b1 = batch_end(b0, batch, n);
     loop {
         let planned = plan_counts(local, mine.clone(), b0, b1, size, env_of, first_of);
         if !agree(comm, planned.is_ok()) {
@@ -461,7 +462,7 @@ fn exchange_batch<C: Communicator>(
         comm.all_to_all_into(&scounts[..], &mut rcounts[..]);
         let fit = fits_i32(&scounts) && fits_i32(&rcounts);
         if !agree(comm, fit) {
-            if b1 - b0 <= 1 {
+            let Some(shrunk) = shrink_batch_end(b0, b1) else {
                 let biggest = scounts
                     .iter()
                     .chain(rcounts.iter())
@@ -471,8 +472,8 @@ fn exchange_batch<C: Communicator>(
                 return Err(Error::Message(format!(
                     "MPI message of {biggest} bytes exceeds i32::MAX"
                 )));
-            }
-            b1 = b0 + (b1 - b0) / 2;
+            };
+            b1 = shrunk;
             continue;
         }
         let out = build_messages(local, mine.clone(), b0, b1, size, env_of, first_of);
