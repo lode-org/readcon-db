@@ -116,6 +116,10 @@ pub fn canonicalize_units_object(units: serde_json::Value) -> Result<serde_json:
 }
 
 /// LODE CON defaults when a dimension is missing (spec v3).
+///
+/// `time: fs` is the historical clock for v1, v2, and v3.0.
+/// Spec v3.1 does not use it. [`rescale_frame_units`] rejects a v3.1
+/// clock or velocities frame that has no `units.time`.
 pub fn default_con_units() -> serde_json::Value {
     serde_json::json!({
         "length": "angstrom",
@@ -161,11 +165,53 @@ pub fn merge_units(
     Ok(serde_json::Value::Object(out))
 }
 
+fn declared_time_unit(header: &readcon_core::types::FrameHeader) -> Option<&str> {
+    header
+        .unit_for("time")
+        .map(str::trim)
+        .filter(|unit| !unit.is_empty())
+}
+
+fn frame_has_clock(header: &readcon_core::types::FrameHeader) -> bool {
+    if header.time().is_some() {
+        return true;
+    }
+    matches!(header.timestep(), Some(dt) if dt.is_finite() && dt > 0.0)
+}
+
+fn frame_has_velocities(fr: &readcon_core::types::ConFrame) -> bool {
+    fr.velocities.nrows() > 0 || fr.atom_data.iter().any(|atom| atom.velocity().is_some())
+}
+
+/// v3.1 clock and velocity numbers have no historical `fs` default.
+/// Missing `units.time` is the same error `collect_h5md` reports.
+fn require_declared_v31_time(fr: &readcon_core::types::ConFrame) -> Result<()> {
+    if !velocity_time_is_declared(&fr.header) || declared_time_unit(&fr.header).is_some() {
+        return Ok(());
+    }
+    if frame_has_clock(&fr.header) {
+        return Err(Error::Message(
+            "v3.1 frame has a clock but no units.time (D10)".into(),
+        ));
+    }
+    if frame_has_velocities(fr) {
+        return Err(Error::Message(
+            "v3.1 frame has velocities but no units.time (D10)".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Scale stored numbers so `new_units` is an honest label (not a relabel).
+///
+/// A v3.1 frame with a clock (`time` or a positive `timestep`) or with
+/// velocities and no `units.time` is an error. The missing time unit is
+/// not read as `fs`. v1, v2, and v3.0 clocks still use that default.
 pub fn rescale_frame_units(
     fr: &mut readcon_core::types::ConFrame,
     new_units: &serde_json::Value,
 ) -> Result<()> {
+    require_declared_v31_time(fr)?;
     let old = fr.header.units().cloned().unwrap_or_else(default_con_units);
     let lf = dim_factor(&old, new_units, "length", "angstrom")?;
     let ef = dim_factor(&old, new_units, "energy", "eV")?;
@@ -173,6 +219,8 @@ pub fn rescale_frame_units(
     let mf = dim_factor(&old, new_units, "mass", "amu")?;
     // D10: pre-v3.1 velocities stay in the natural unit. The time label
     // still rescales the clock (`time`, `timestep`) and is not a velocity unit.
+    // v3.1 frames that lack `units.time` never reach here when a clock or
+    // velocities would otherwise pick up the `fs` default.
     let vel_tf = if velocity_time_is_declared(&fr.header) {
         tf
     } else {
@@ -292,5 +340,128 @@ mod tests {
         let u = canonicalize_units_object(serde_json::json!({"time": "femtosecond"})).unwrap();
         assert_eq!(u["time"], "fs");
         assert!(u.get("length").is_none());
+    }
+
+    fn load_fixture(name: &str) -> readcon_core::types::ConFrame {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources/test")
+            .join(name);
+        let text = std::fs::read_to_string(path).unwrap();
+        readcon_core::iterators::ConFrameIterator::new(&text)
+            .next()
+            .unwrap()
+            .unwrap()
+    }
+
+    fn mark_v31(fr: &mut readcon_core::types::ConFrame) {
+        fr.header.spec_version = 3;
+        fr.header
+            .metadata
+            .insert("con_spec_minor".into(), serde_json::json!(1));
+    }
+
+    #[test]
+    fn v31_clock_without_time_is_not_femtoseconds() {
+        let mut fr = load_fixture("tiny_cuh2.con");
+        mark_v31(&mut fr);
+        fr.header.set_time(12.5);
+        fr.header
+            .set_units(serde_json::json!({"length": "angstrom", "energy": "eV"}));
+        let box0 = fr.header.boxl[0];
+        let err = rescale_frame_units(
+            &mut fr,
+            &serde_json::json!({"length": "nm", "energy": "eV", "time": "ps"}),
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no units.time"), "{msg}");
+        assert!(msg.contains("clock"), "{msg}");
+        assert!((fr.header.time().unwrap() - 12.5).abs() < 1e-15);
+        assert!((fr.header.boxl[0] - box0).abs() < 1e-15);
+        assert!(fr.header.unit_for("time").is_none());
+    }
+
+    #[test]
+    fn v31_timestep_without_time_is_not_femtoseconds() {
+        let mut fr = load_fixture("tiny_cuh2.con");
+        mark_v31(&mut fr);
+        fr.header.metadata.remove("time");
+        fr.header.set_timestep(10.0);
+        fr.header
+            .set_units(serde_json::json!({"length": "angstrom", "energy": "eV", "time": "  "}));
+        let err = rescale_frame_units(
+            &mut fr,
+            &serde_json::json!({"length": "angstrom", "energy": "eV", "time": "ps"}),
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("clock"), "{msg}");
+        assert!((fr.header.timestep().unwrap() - 10.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn v31_velocities_without_time_are_not_femtoseconds() {
+        let mut fr = load_fixture("tiny_cuh2.convel");
+        mark_v31(&mut fr);
+        fr.header.metadata.remove("time");
+        fr.header.set_units(serde_json::json!({
+            "length": "angstrom",
+            "energy": "eV",
+            "mass": "amu"
+        }));
+        let vx = fr.velocities.as_f64_row(0)[0];
+        let err = rescale_frame_units(
+            &mut fr,
+            &serde_json::json!({"length": "nm", "energy": "eV", "time": "ps"}),
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("velocities"), "{msg}");
+        assert!(msg.contains("no units.time"), "{msg}");
+        assert!((fr.velocities.as_f64_row(0)[0] - vx).abs() < 1e-15);
+    }
+
+    #[test]
+    fn v31_declared_time_still_converts() {
+        let mut fr = load_fixture("tiny_cuh2.convel");
+        mark_v31(&mut fr);
+        fr.header.set_time(12.5);
+        fr.header.set_units(serde_json::json!({
+            "length": "angstrom",
+            "energy": "eV",
+            "mass": "amu",
+            "time": "fs"
+        }));
+        let vx = fr.velocities.as_f64_row(0)[0];
+        let tf = readcon_core::units::unit_conversion_factor("fs", "ps").unwrap();
+        rescale_frame_units(
+            &mut fr,
+            &serde_json::json!({
+                "length": "angstrom",
+                "energy": "eV",
+                "mass": "amu",
+                "time": "ps"
+            }),
+        )
+        .unwrap();
+        assert!((fr.header.time().unwrap() - 12.5 * tf).abs() < 1e-12);
+        assert!((fr.velocities.as_f64_row(0)[0] - vx / tf).abs() < 1e-9);
+    }
+
+    #[test]
+    fn v30_clock_without_time_stays_femtoseconds() {
+        let mut fr = load_fixture("tiny_cuh2.con");
+        fr.header.spec_version = 3;
+        fr.header.metadata.remove("con_spec_minor");
+        fr.header.set_time(12.5);
+        fr.header
+            .set_units(serde_json::json!({"length": "angstrom", "energy": "eV"}));
+        let tf = readcon_core::units::unit_conversion_factor("fs", "ps").unwrap();
+        rescale_frame_units(
+            &mut fr,
+            &serde_json::json!({"length": "angstrom", "energy": "eV", "time": "ps"}),
+        )
+        .unwrap();
+        assert!((fr.header.time().unwrap() - 12.5 * tf).abs() < 1e-12);
     }
 }
