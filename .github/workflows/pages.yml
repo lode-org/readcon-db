@@ -20,6 +20,8 @@ jobs:
           cache: true
           locked: true
           environments: docs
+      - name: Pandoc for org export
+        run: sudo apt-get update && sudo apt-get install -y pandoc
       - name: Sphinx HTML
         run: pixi r -e docs docbld
       - name: Assemble site

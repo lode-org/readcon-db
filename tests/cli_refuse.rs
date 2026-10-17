@@ -175,6 +175,18 @@ fn reindex_missing_path_does_not_mint() {
 }
 
 #[test]
+fn migrate_missing_path_does_not_mint() {
+    let dir = tempfile::tempdir().unwrap();
+    let corpus = dir.path().join("nope");
+    let st = bin()
+        .args(["migrate", corpus.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(!st.success());
+    assert!(!corpus.exists());
+}
+
+#[test]
 fn recook_all_missing_path_does_not_mint() {
     let dir = tempfile::tempdir().unwrap();
     let corpus = dir.path().join("nope");

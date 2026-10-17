@@ -1,6 +1,6 @@
 [package]
 name = "readcon-db"
-version = "0.1.8"
+version = "0.2.0"
 edition = "2021"
 description = "Mmap-backed CON frame corpus (Heed/LMDB), xxHash exact match, multi-language FFI"
 license = "MIT"
@@ -20,20 +20,27 @@ crate-type = ["lib", "cdylib", "staticlib"]
 default = []
 python = ["dep:pyo3"]
 capi = []
+# Parallel ingest over a caller-supplied communicator (rsmpi). Needs an MPI
+# implementation and libclang at build time. See src/mpi_ingest.rs.
+mpi = ["dep:mpi"]
 
 [dependencies]
 heed = "0.21"
 # The pinned writer provides exact numeric CON and JSON round trips.
-readcon-core = "=0.16.2"
+readcon-core = "=0.17.1"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
+zstd = { version = "0.13", default-features = false }
 
 pyo3 = { version = "0.28", features = ["extension-module"], optional = true }
+mpi = { version = "0.8", optional = true, default-features = false }
 
 [dev-dependencies]
 tempfile = "3"
+sha2 = "0.10"
+libc = "0.2"
 
 [package.metadata.docs.rs]
 all-features = false
@@ -60,3 +67,18 @@ asset = [
 [[example]]
 name = "bench_corpus_ops"
 path = "examples/bench_corpus_ops.rs"
+
+[[example]]
+name = "mpi_ingest_check"
+path = "examples/mpi_ingest_check.rs"
+required-features = ["mpi"]
+
+[[example]]
+name = "mpi_read_check"
+path = "examples/mpi_read_check.rs"
+required-features = ["mpi"]
+
+[[example]]
+name = "shard_gate"
+path = "examples/shard_gate.rs"
+required-features = ["mpi"]

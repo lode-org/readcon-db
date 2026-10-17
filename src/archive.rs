@@ -252,7 +252,10 @@ fn commit_row(corpus: &ConCorpus, traj: u64, z: &[u32], cell: [f64; 3], row: &Ro
         .build()
         .map_err(|e| Error::Message(format!("archive build: {e}")))?;
     corpus.append_trajectory_frames_with_float_format(
-        traj, &[frame], "observation-archive", FloatFormat::RoundTrip,
+        traj,
+        &[frame],
+        "observation-archive",
+        FloatFormat::RoundTrip,
     )?;
     Ok(())
 }

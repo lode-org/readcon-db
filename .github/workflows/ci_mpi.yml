@@ -1,0 +1,110 @@
+name: MPI ingest
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  mpi:
+    name: ${{ matrix.mpi }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mpi: mpich
+            packages: mpich libmpich-dev
+            cc: mpicc.mpich
+            launcher: mpiexec.mpich -n
+          - mpi: openmpi
+            packages: openmpi-bin libopenmpi-dev
+            cc: mpicc.openmpi
+            launcher: mpiexec.openmpi --oversubscribe -n
+    env:
+      MPICC: ${{ matrix.cc }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install one MPI implementation
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.packages }} libclang-dev
+          if [ "${{ matrix.mpi }}" = "mpich" ]; then
+            # Ubuntu 24.04's mpich 4.2.0-5build3 links an external PMIx that
+            # Hydra cannot drive (launchpad 2072338). Every rank comes up as a
+            # singleton, both write the same corpus, and the serial comparison
+            # returns TrajExists. 4.2.0-5.1 uses Hydra's own PMI.
+            d=$(mktemp -d)
+            for f in \
+              libmpich12_4.2.0-5.1_amd64.deb \
+              mpich_4.2.0-5.1_amd64.deb \
+              libmpich-dev_4.2.0-5.1_amd64.deb
+            do
+              curl -fsSL -o "$d/$f" "https://launchpad.net/ubuntu/+archive/primary/+files/$f"
+            done
+            sudo dpkg -i \
+              "$d/libmpich12_4.2.0-5.1_amd64.deb" \
+              "$d/mpich_4.2.0-5.1_amd64.deb" \
+              "$d/libmpich-dev_4.2.0-5.1_amd64.deb"
+            printf '%s\n' \
+              '#include <mpi.h>' \
+              'int main(int argc, char **argv) {' \
+              '  int s;' \
+              '  MPI_Init(&argc, &argv);' \
+              '  MPI_Comm_size(MPI_COMM_WORLD, &s);' \
+              '  MPI_Finalize();' \
+              '  return s == 2 ? 0 : 1;' \
+              '}' > "$d/csize.c"
+            mpicc.mpich -o "$d/csize" "$d/csize.c"
+            # 4.2.0-5.1 is ch4:ucx. GitHub runners abort MPI_Init_thread in
+            # ibv_create_srq. TCP is enough for this job.
+            echo UCX_TLS=tcp >> "$GITHUB_ENV"
+            export UCX_TLS=tcp
+            mpiexec.mpich -n 2 "$d/csize"
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Default build pulls no MPI
+        run: cargo tree -e normal --prefix none | grep -E '^mpi(-sys)? ' && exit 1 || true
+      - name: Build the ingest check
+        run: cargo build --features mpi --example mpi_ingest_check
+      - name: Canonical dump identical to serial on 1 to 4 ranks
+        run: |
+          set -euo pipefail
+          T=$(mktemp -d)
+          for i in 1 2 3; do cat resources/test/tiny_cuh2.con resources/test/tiny_multi_cuh2.con resources/test/sulfolene.con resources/test/tiny_cuh2_forces.con; done > "$T/mix.con"
+          F="$T/mix.con resources/test/tiny_cuh2.con resources/test/sulfolene.con resources/test/tiny_multi_cuh2.con"
+          tid=1
+          for p in 1 2 3 4; do
+            for mode in single sharded; do
+              for b in 1 4096; do
+                # New directory and traj ids for every (ranks, mode, batch).
+                # Reusing either makes the next writer return TrajExists.
+                D=$(mktemp -d)
+                out=$(${{ matrix.launcher }} $p target/debug/examples/mpi_ingest_check $mode "$D" $b 3 $tid $F)
+                echo "$out"
+                echo "$out" | grep -q "ranks=$p "
+                echo "$out" | grep -q 'match=true'
+                tid=$((tid + 4))
+              done
+            done
+          done
+      - name: Scatter read and collective XYZ export on 1 to 4 ranks
+        run: |
+          set -euo pipefail
+          cargo build --features mpi --example mpi_read_check
+          for p in 1 2 3 4; do
+            T=$(mktemp -d)
+            out=$(${{ matrix.launcher }} $p target/debug/examples/mpi_read_check "$T" resources/test/tiny_multi_cuh2.con resources/test/sulfolene.con resources/test/tiny_cuh2.con)
+            echo "$out"
+            echo "$out" | grep -q 'scatter_match=true .*mpiio_match=true gather_match=true'
+          done
+      - name: C wrapper on a split communicator
+        run: |
+          set -euo pipefail
+          cargo build --features mpi --lib
+          ${{ matrix.cc }} -Iinclude tests/mpi-c/ingest_smoke.c -Ltarget/debug -lreadcon_db -Wl,-rpath,$PWD/target/debug -o ingest_smoke
+          for p in 1 2 3 4; do
+            T=$(mktemp -d)
+            ${{ matrix.launcher }} $p ./ingest_smoke "$T/db" resources/test/tiny_multi_cuh2.con resources/test/sulfolene.con | grep -q '^rc=0'
+          done

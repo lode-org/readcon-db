@@ -6,8 +6,8 @@ use readcon_core::types::ConFrame;
 
 pub use index_proj::{
     finite_energy, frame_cell_volume, frame_composition_formula, frame_fmax, frame_total_mass,
-    sections_present_mask, FrameIndexProjection as CoreFrameIndexProjection, SECTIONS_MASK_ENERGIES,
-    SECTIONS_MASK_FORCES, SECTIONS_MASK_VELOCITIES,
+    sections_present_mask, FrameIndexProjection as CoreFrameIndexProjection,
+    SECTIONS_MASK_ENERGIES, SECTIONS_MASK_FORCES, SECTIONS_MASK_VELOCITIES,
 };
 
 /// Full index projection (preferred entry for prepare/reindex).
@@ -57,8 +57,7 @@ mod tests {
 
     #[test]
     fn mass_and_volume_from_fixture() {
-        let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("resources/test/tiny_cuh2.con");
+        let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/test/tiny_cuh2.con");
         let text = std::fs::read_to_string(p).unwrap();
         let fr = ConFrameIterator::new(&text).next().unwrap().unwrap();
         let m = frame_total_mass(&fr);

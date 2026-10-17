@@ -6,6 +6,7 @@
 
 #ifdef __cplusplus
 #include <stdexcept>
+#include <string>
 extern "C" {
 #endif
 
@@ -78,7 +79,13 @@ int rkrdb_extend_trajectory_frame(size_t id, uint64_t traj_id, const void *frame
 int rkrdb_extend_trajectory(size_t id, uint64_t traj_id, const char *path, uint32_t *out_n_frames);
 int rkrdb_extend_trajectory_units(size_t id, uint64_t traj_id, const char *path,
                                   const char *units_json, uint32_t *out_n_frames);
-/** Convert stored numbers and rewrite CON units. `units_json` required. */
+/**
+ * Convert stored numbers and rewrite CON units. `units_json` required.
+ * A v3.1 frame with a clock or velocities and no units.time returns
+ * RKRDB_ERR. The missing time unit is not read as fs. The message is
+ * left in rkrdb_last_error. v1, v2, and v3.0 clocks with no units.time
+ * still convert as fs.
+ */
 int rkrdb_set_units(size_t id, uint64_t traj_id, const char *units_json, uint32_t *out_n_frames);
 /** Frame units JSON into `buf` (NUL-terminated). */
 int rkrdb_frame_units(size_t id, uint64_t traj_id, uint32_t frame_idx, char *buf, size_t buflen);
@@ -118,8 +125,17 @@ int rkrdb_get_velocities(size_t id, uint64_t traj_id, uint32_t frame_idx, double
                          uint32_t capacity_atoms, uint32_t *out_natoms,
                          uint8_t *out_has_velocities);
 int rkrdb_xxh3_128(const uint8_t *data, size_t len, uint8_t *out_hash16);
-/** Dest-ps times from collect_h5md. */
+/**
+ * Dest-ps times from collect_h5md.
+ * An invalid handle returns RKRDB_NULL. A collect failure returns
+ * RKRDB_ERR and leaves the message in rkrdb_last_error.
+ */
 int rkrdb_h5md_times(size_t id, uint64_t traj_id, double *out, size_t cap, uint32_t *out_n);
+/**
+ * `nframes` and `natoms` for one trajectory.
+ * An invalid handle returns RKRDB_NULL. A collect failure returns
+ * RKRDB_ERR and leaves the message in rkrdb_last_error.
+ */
 int rkrdb_h5md_shape(size_t id, uint64_t traj_id, uint32_t *out_nframes, uint32_t *out_natoms);
 /** Row-major [T][N][3] dest-Angstrom positions. */
 int rkrdb_h5md_positions(size_t id, uint64_t traj_id, double *out, size_t cap,
@@ -172,6 +188,26 @@ int rkrdb_archive_close(size_t id);
 } /* extern "C" */
 
 namespace readcon_db {
+
+inline std::string status_detail(size_t id, int st) {
+  if (st == RKRDB_NULL)
+    return "invalid handle";
+  char buf[768];
+  int n = rkrdb_last_error(id, buf, sizeof buf);
+  if (n > 0)
+    return std::string(buf, static_cast<size_t>(n));
+  return {};
+}
+
+inline void throw_status(size_t id, int st, const char *what) {
+  std::string msg(what);
+  std::string detail = status_detail(id, st);
+  if (!detail.empty()) {
+    msg += ": ";
+    msg += detail;
+  }
+  throw std::runtime_error(msg);
+}
 
 class Corpus {
   size_t id_ = static_cast<size_t>(-1);
@@ -227,8 +263,9 @@ public:
 
   uint32_t set_units(uint64_t traj_id, const char *units_json) {
     uint32_t n = 0;
-    if (rkrdb_set_units(id_, traj_id, units_json, &n) != RKRDB_OK)
-      throw std::runtime_error("set_units failed");
+    int st = rkrdb_set_units(id_, traj_id, units_json, &n);
+    if (st != RKRDB_OK)
+      throw_status(id_, st, "set_units failed");
     return n;
   }
 
@@ -344,26 +381,30 @@ public:
 
   uint32_t h5md_times(uint64_t traj_id, double *out, size_t cap) {
     uint32_t n = 0;
-    if (rkrdb_h5md_times(id_, traj_id, out, cap, &n) != RKRDB_OK)
-      throw std::runtime_error("h5md_times failed");
+    int st = rkrdb_h5md_times(id_, traj_id, out, cap, &n);
+    if (st != RKRDB_OK)
+      throw_status(id_, st, "h5md_times failed");
     return n;
   }
 
   void h5md_shape(uint64_t traj_id, uint32_t *nframes, uint32_t *natoms) {
-    if (rkrdb_h5md_shape(id_, traj_id, nframes, natoms) != RKRDB_OK)
-      throw std::runtime_error("h5md_shape failed");
+    int st = rkrdb_h5md_shape(id_, traj_id, nframes, natoms);
+    if (st != RKRDB_OK)
+      throw_status(id_, st, "h5md_shape failed");
   }
 
   uint32_t h5md_positions(uint64_t traj_id, double *out, size_t cap,
                           uint32_t *nframes, uint32_t *natoms) {
-    if (rkrdb_h5md_positions(id_, traj_id, out, cap, nframes, natoms) != RKRDB_OK)
-      throw std::runtime_error("h5md_positions failed");
+    int st = rkrdb_h5md_positions(id_, traj_id, out, cap, nframes, natoms);
+    if (st != RKRDB_OK)
+      throw_status(id_, st, "h5md_positions failed");
     return *nframes;
   }
 
   void h5md_edges(uint64_t traj_id, double *out, size_t cap) {
-    if (rkrdb_h5md_edges(id_, traj_id, out, cap) != RKRDB_OK)
-      throw std::runtime_error("h5md_edges failed");
+    int st = rkrdb_h5md_edges(id_, traj_id, out, cap);
+    if (st != RKRDB_OK)
+      throw_status(id_, st, "h5md_edges failed");
   }
 
   bool h5md_forces(uint64_t traj_id, double *out, size_t cap) {
@@ -371,7 +412,7 @@ public:
     if (st == RKRDB_NOT_FOUND)
       return false;
     if (st != RKRDB_OK)
-      throw std::runtime_error("h5md_forces failed");
+      throw_status(id_, st, "h5md_forces failed");
     return true;
   }
 
@@ -380,21 +421,23 @@ public:
     if (st == RKRDB_NOT_FOUND)
       return false;
     if (st != RKRDB_OK)
-      throw std::runtime_error("h5md_velocities failed");
+      throw_status(id_, st, "h5md_velocities failed");
     return true;
   }
 
   /// D10 override. Also the clock unit when a v3.1 frame has no units.time.
   /// `unit == nullptr` clears it.
   void set_velocity_time_unit(const char *unit) {
-    if (rkrdb_set_velocity_time_unit(id_, unit) != RKRDB_OK)
-      throw std::runtime_error("set_velocity_time_unit failed");
+    int st = rkrdb_set_velocity_time_unit(id_, unit);
+    if (st != RKRDB_OK)
+      throw_status(id_, st, "set_velocity_time_unit failed");
   }
 
   uint32_t h5md_species(uint64_t traj_id, int32_t *out, size_t cap) {
     uint32_t n = 0;
-    if (rkrdb_h5md_species(id_, traj_id, out, cap, &n) != RKRDB_OK)
-      throw std::runtime_error("h5md_species failed");
+    int st = rkrdb_h5md_species(id_, traj_id, out, cap, &n);
+    if (st != RKRDB_OK)
+      throw_status(id_, st, "h5md_species failed");
     return n;
   }
 

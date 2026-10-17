@@ -29,14 +29,7 @@ else
 fi
 
 echo "==> version bump -> $VER"
-sed -i "0,/^version = /{s/^version = \".*\"/version = \"${VER}\"/}" Cargo.toml
-sed -i "s/^    version: '.*'/    version: '${VER}'/" meson.build
-sed -i "0,/^version = /{s/^version = \".*\"/version = \"${VER}\"/}" python/pyproject.toml
-sed -i "s/^release = \".*\"/release = \"${VER}\"/" docs/source/conf.py
-sed -i "s/^version = \".*\"/version = \"${VER}\"/" docs/source/conf.py
-sed -i "0,/^version = /{s/^version = \".*\"/version = \"${VER}\"/}" pixi.toml
-sed -i "s/^version = \".*\"/version = \"${VER}\"/" fortran/ReadConDb/fpm.toml
-sed -i "s/^version: .*/version: ${VER}/" CITATION.cff
+bash scripts/set-version.sh "$VER"
 
 echo "==> Cargo.lock refresh"
 if [[ "${READCON_RELEASE_PREP_SKIP_TESTS:-}" == 1 ]]; then

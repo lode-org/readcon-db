@@ -9,8 +9,15 @@ mod corpus;
 mod error;
 mod export_h5md;
 mod export_xyz;
+mod frame_codec;
 mod frame_scalars;
 mod keys;
+#[cfg(feature = "mpi")]
+pub mod mpi_ingest;
+#[cfg(feature = "mpi")]
+pub mod mpi_read;
+#[cfg(any(feature = "mpi", test))]
+mod mpi_wire;
 mod select;
 mod shard;
 mod topology;

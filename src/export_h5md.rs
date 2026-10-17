@@ -289,21 +289,21 @@ impl ConCorpus {
                 (c.positions, c.velocities, c.forces)
             } else {
                 let pos: Vec<[f64; 3]> = fr.atom_data.iter().map(|a| [a.x, a.y, a.z]).collect();
-                let vel = if fr.atom_data.iter().any(|a| a.velocity.is_some()) {
+                let vel = if fr.atom_data.iter().any(|a| a.velocity().is_some()) {
                     Some(
                         fr.atom_data
                             .iter()
-                            .map(|a| a.velocity.unwrap_or([0.0; 3]))
+                            .map(|a| a.velocity().unwrap_or([0.0; 3]))
                             .collect(),
                     )
                 } else {
                     None
                 };
-                let frc = if fr.atom_data.iter().any(|a| a.force.is_some()) {
+                let frc = if fr.atom_data.iter().any(|a| a.force().is_some()) {
                     Some(
                         fr.atom_data
                             .iter()
-                            .map(|a| a.force.unwrap_or([0.0; 3]))
+                            .map(|a| a.force().unwrap_or([0.0; 3]))
                             .collect(),
                     )
                 } else {
@@ -1174,9 +1174,11 @@ mod tests {
             &src,
             r#"{"con_spec_version":3,"con_spec_minor":1,"sections":["velocities"],"units":{"length":"angstrom","energy":"eV","mass":"amu"}}"#,
         );
-        db.append_trajectory_str(1, &text, "v31-notime").unwrap();
-        let err = db.collect_h5md(1).unwrap_err();
-        assert!(err.to_string().contains("no units.time"), "{err}");
+        // readcon-core 0.17 rejects this header at parse time, before export.
+        let err = db
+            .append_trajectory_str(1, &text, "v31-notime")
+            .unwrap_err();
+        assert!(err.to_string().contains("requires units.time"), "{err}");
     }
 
     #[test]
@@ -1227,6 +1229,64 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("no units.time"), "{err}");
         assert!(msg.contains("clock"), "{err}");
+    }
+
+    #[test]
+    fn set_units_refuses_v31_clock_without_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let src = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let text = with_line2(
+            &src,
+            r#"{"con_spec_version":3,"con_spec_minor":1,"time":12.5,"units":{"length":"angstrom","energy":"eV"}}"#,
+        );
+        db.append_trajectory_str(1, &text, "v31-clock").unwrap();
+        let key = crate::keys::FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        let before = db.get_frame(key).unwrap();
+        let err = db
+            .set_trajectory_units(1, serde_json::json!({"length": "nm"}))
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no units.time"), "{err}");
+        assert!(msg.contains("clock"), "{err}");
+        let err_t = db
+            .set_trajectory_units(1, serde_json::json!({"time": "ps"}))
+            .unwrap_err();
+        assert!(err_t.to_string().contains("no units.time"), "{err_t}");
+        let after = db.get_frame(key).unwrap();
+        assert!((after.header.time().unwrap() - 12.5).abs() < 1e-15);
+        assert!((after.header.boxl[0] - before.header.boxl[0]).abs() < 1e-15);
+        assert!(after.header.unit_for("time").is_none());
+        assert_eq!(after.header.unit_for("length"), Some("angstrom"));
+        let stored = db.get_frame_text(key).unwrap();
+        assert!(stored.contains("12.5"), "{stored}");
+        assert!(!stored.contains("\"time\":\"ps\""), "{stored}");
+    }
+
+    #[test]
+    fn set_units_v30_clock_without_time_converts_as_fs() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let src = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let text = with_line2(
+            &src,
+            r#"{"con_spec_version":3,"time":12.5,"units":{"length":"angstrom","energy":"eV"}}"#,
+        );
+        db.append_trajectory_str(1, &text, "v30-clock").unwrap();
+        db.set_trajectory_units(1, serde_json::json!({"time": "ps"}))
+            .unwrap();
+        let fr = db
+            .get_frame(crate::keys::FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap();
+        let tf = time_scale_to_ps("fs").unwrap();
+        assert!((fr.header.time().unwrap() - 12.5 * tf).abs() < 1e-12);
+        assert_eq!(fr.header.unit_for("time"), Some("ps"));
     }
 
     #[test]
@@ -1336,7 +1396,7 @@ mod tests {
         let native: Vec<[f64; 3]> = fr
             .atom_data
             .iter()
-            .map(|a| a.velocity.expect("vel"))
+            .map(|a| a.velocity().expect("vel"))
             .collect();
         assert_eq!(masses.len(), native.len());
         let half_ulp = 5e-7;
