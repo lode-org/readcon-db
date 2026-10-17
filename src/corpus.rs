@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -765,11 +765,23 @@ impl ConCorpus {
         Ok(())
     }
 
-    fn delete_index_puts(&self, wtxn: &mut RwTxn, p: &PreparedIndexPuts) -> Result<()> {
+    /// Drop one frame's index rows.
+    ///
+    /// Returns the content hash when `frame_by_hash` still names this frame.
+    /// That posting is left in place so the caller can point it at another
+    /// frame that stores the same bytes, or remove it when none does.
+    fn delete_index_puts(
+        &self,
+        wtxn: &mut RwTxn,
+        p: &PreparedIndexPuts,
+    ) -> Result<Option<[u8; 16]>> {
         let fk_b = p.fk.to_bytes();
+        let posted = match self.frame_by_hash.get(wtxn, &p.hash[..])? {
+            Some(bytes) => FrameKey::from_bytes(bytes) == Some(p.fk),
+            None => false,
+        };
         let _ = self.frames.delete(wtxn, &fk_b[..])?;
         let _ = self.hash_by_frame.delete(wtxn, &fk_b[..])?;
-        let _ = self.frame_by_hash.delete(wtxn, &p.hash[..])?;
         let _ = self.frames_soa.delete(wtxn, &fk_b[..])?;
         let _ = self.idx_natoms.delete(wtxn, &p.natoms_k[..])?;
         for sk in &p.symbol_keys {
@@ -801,6 +813,57 @@ impl ConCorpus {
         }
         for mk in &p.meta_keys {
             let _ = self.idx_meta.delete(wtxn, &mk[..])?;
+        }
+        Ok(posted.then_some(p.hash))
+    }
+
+    /// `frame_by_hash` keeps one key per digest. After a frame is removed, a
+    /// posting that named that frame moves to any frame that still stores the
+    /// same bytes, or is deleted when the digest is gone.
+    fn repoint_frame_by_hash(&self, wtxn: &mut RwTxn, stale: &[[u8; 16]]) -> Result<()> {
+        if stale.is_empty() {
+            return Ok(());
+        }
+        let mut survivor: BTreeMap<[u8; 16], FrameKey> = BTreeMap::new();
+        {
+            let mut iter = self.hash_by_frame.iter(wtxn)?;
+            while let Some(Ok((key, hash))) = iter.next() {
+                if hash.len() != 16 {
+                    continue;
+                }
+                let mut digest = [0u8; 16];
+                digest.copy_from_slice(hash);
+                if survivor.contains_key(&digest) {
+                    continue;
+                }
+                if let Some(fk) = FrameKey::from_bytes(key) {
+                    survivor.insert(digest, fk);
+                }
+            }
+        }
+        for digest in stale {
+            let posted = {
+                let current = self.frame_by_hash.get(wtxn, &digest[..])?;
+                current
+                    .as_ref()
+                    .and_then(|bytes| FrameKey::from_bytes(bytes))
+            };
+            let Some(posted) = posted else {
+                continue;
+            };
+            let posted_bytes = posted.to_bytes();
+            if self.hash_by_frame.get(wtxn, &posted_bytes[..])?.is_some() {
+                continue;
+            }
+            match survivor.get(digest).copied() {
+                Some(other) => {
+                    let bytes = other.to_bytes();
+                    self.frame_by_hash.put(wtxn, &digest[..], &bytes[..])?;
+                }
+                None => {
+                    let _ = self.frame_by_hash.delete(wtxn, &digest[..])?;
+                }
+            }
         }
         Ok(())
     }
@@ -1115,9 +1178,13 @@ impl ConCorpus {
         }
         let input_bytes = prepared_bytes(&prepared);
         self.with_write(input_bytes, |wtxn| {
+            let mut stale_hashes = Vec::new();
             for p in &old_puts {
-                self.delete_index_puts(wtxn, p)?;
+                if let Some(hash) = self.delete_index_puts(wtxn, p)? {
+                    stale_hashes.push(hash);
+                }
             }
+            self.repoint_frame_by_hash(wtxn, &stale_hashes)?;
             for p in &prepared {
                 self.put_index_puts(wtxn, p)?;
             }
@@ -3008,6 +3075,64 @@ mod tests {
             .select(&Select::new().volume_range(vol_nm * 0.5, vol_nm * 1.5))
             .unwrap();
         assert_eq!(fresh, vec![k]);
+    }
+
+    #[test]
+    fn hash_index_follows_surviving_duplicate_after_unit_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let path = fixture("tiny_cuh2.con");
+        db.append_trajectory_path(1, &path).unwrap();
+        db.append_trajectory_path(2, &path).unwrap();
+        let k1 = FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        let k2 = FrameKey {
+            traj_id: 2,
+            frame_idx: 0,
+        };
+        let h_old = db.frame_hash(k1).unwrap();
+        assert_eq!(db.frame_hash(k2).unwrap(), h_old);
+        assert_eq!(db.find_by_hash(h_old).unwrap(), Some(k1));
+        let text2 = db.get_frame_text(k2).unwrap();
+        db.set_trajectory_units(1, serde_json::json!({"length": "bohr", "energy": "eV"}))
+            .unwrap();
+        let text2_after = db.get_frame_text(k2).unwrap();
+        assert_eq!(text2_after, text2);
+        assert_eq!(db.frame_hash(k2).unwrap(), h_old);
+        assert_eq!(hash_frame_bytes(text2_after.as_bytes()), h_old);
+        assert_eq!(
+            db.find_by_hash(h_old).unwrap(),
+            Some(k2),
+            "the hash posting must move to the frame that still stores those bytes"
+        );
+        let h_new = db.frame_hash(k1).unwrap();
+        assert_ne!(h_new, h_old);
+        assert_eq!(db.find_by_hash(h_new).unwrap(), Some(k1));
+        assert_eq!(
+            h_new,
+            hash_frame_bytes(db.get_frame_text(k1).unwrap().as_bytes())
+        );
+    }
+
+    #[test]
+    fn hash_index_drops_sole_frame_hash_after_unit_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            .unwrap();
+        let k1 = FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        let h_old = db.frame_hash(k1).unwrap();
+        db.set_trajectory_units(1, serde_json::json!({"length": "bohr", "energy": "eV"}))
+            .unwrap();
+        let h_new = db.frame_hash(k1).unwrap();
+        assert_ne!(h_new, h_old);
+        assert_eq!(db.find_by_hash(h_old).unwrap(), None);
+        assert_eq!(db.find_by_hash(h_new).unwrap(), Some(k1));
     }
 
     #[test]
