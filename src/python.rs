@@ -1,8 +1,13 @@
+use std::collections::BTreeMap;
+use std::io::Cursor;
 use std::sync::Arc;
 
-use pyo3::exceptions::{PyIndexError, PyRuntimeError};
+use pyo3::exceptions::{PyIndexError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyDict, PyIterator, PyList};
+use readcon_core::types::{ConFrame, ConFrameBuilder};
+use readcon_core::writer::{ConFrameWriter, FloatFormat};
+use serde_json::Value;
 
 use crate::canonical::AtomOrderHit;
 use crate::corpus::ConCorpus;
@@ -308,6 +313,12 @@ impl PyConCorpus {
         };
         // A sequence is serialized in place, 64 frames at a time. Iterating a
         // `read_con` result builds a Python frame per index and keeps it.
+        let type_name: String = frames
+            .get_type()
+            .qualname()
+            .and_then(|name| name.extract())
+            .unwrap_or_default();
+        let align = type_name == "list" || type_name == "tuple";
         if let Ok(n) = frames.len() {
             if n == 0 {
                 return Ok(0);
@@ -315,13 +326,21 @@ impl PyConCorpus {
             let mut start = 0usize;
             while start < n {
                 let stop = (start + 64).min(n);
-                let kwargs = PyDict::new(py);
-                kwargs.set_item("start", start)?;
-                kwargs.set_item("stop", stop)?;
-                let text: String = readcon
-                    .call_method("write_con_string", (frames.clone(),), Some(&kwargs))
-                    .and_then(|v| v.extract())
-                    .map_err(|e| PyRuntimeError::new_err(format!("write_con_string: {e}")))?;
+                let text = if align {
+                    let window = PyList::empty(py);
+                    for i in start..stop {
+                        window.append(frames.get_item(i)?)?;
+                    }
+                    aligned_chunk_text(py, window.as_any())?
+                } else {
+                    let kwargs = PyDict::new(py);
+                    kwargs.set_item("start", start)?;
+                    kwargs.set_item("stop", stop)?;
+                    readcon
+                        .call_method("write_con_string", (frames.clone(),), Some(&kwargs))
+                        .and_then(|v| v.extract())
+                        .map_err(|e| PyRuntimeError::new_err(format!("write_con_string: {e}")))?
+                };
                 total = flush(&text, started)?;
                 started = true;
                 start = stop;
@@ -867,40 +886,6 @@ fn metadata_from_py(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<BTreeMap
     serde_json::from_str(&dumped).map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
-/// v1, v2, and v3.0 velocities are already in the natural time unit.
-/// The builder writes minor 1, which requires `units.time`.
-fn stamp_legacy_velocity_time(
-    meta: &mut BTreeMap<String, Value>,
-    spec_version: u32,
-    has_velocity: bool,
-) {
-    if !has_velocity {
-        return;
-    }
-    let minor = meta
-        .get("con_spec_minor")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    if spec_version >= 3 && minor >= 1 {
-        return;
-    }
-    let mut units = match meta.get("units").cloned() {
-        Some(Value::Object(map)) => Value::Object(map),
-        Some(_) => return,
-        None => readcon_core::units::default_v3_units_json(),
-    };
-    if let Some(object) = units.as_object_mut() {
-        object.insert(
-            "time".to_string(),
-            Value::String(readcon_core::units::NATURAL_TIME_UNIT.to_string()),
-        );
-        meta.insert("units".to_string(), units);
-        if meta.contains_key("con_spec_minor") {
-            meta.insert("con_spec_minor".to_string(), Value::from(1u64));
-        }
-    }
-}
-
 fn conframe_from_py(py: Python<'_>, frame: &Bound<'_, PyAny>) -> PyResult<ConFrame> {
     let cell: [f64; 3] = frame.getattr("cell")?.extract()?;
     let angles: [f64; 3] = frame.getattr("angles")?.extract()?;
@@ -918,7 +903,9 @@ fn conframe_from_py(py: Python<'_>, frame: &Bound<'_, PyAny>) -> PyResult<ConFra
         }
         built_atoms.push(atom);
     }
-    stamp_legacy_velocity_time(&mut meta, spec_version, saw_velocity);
+    let velocity_scale =
+        crate::units_canon::align_written_v31_time(&mut meta, spec_version, saw_velocity)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
     let mut builder = ConFrameBuilder::new(cell, angles);
     builder
         .prebox_header(prebox[0].as_str())
@@ -940,9 +927,9 @@ fn conframe_from_py(py: Python<'_>, frame: &Bound<'_, PyAny>) -> PyResult<ConFra
         );
         if atom.getattr("has_velocity")?.extract::<bool>()? {
             builder.with_velocity([
-                opt_f64(atom, "vx")?.unwrap_or(0.0),
-                opt_f64(atom, "vy")?.unwrap_or(0.0),
-                opt_f64(atom, "vz")?.unwrap_or(0.0),
+                opt_f64(atom, "vx")?.unwrap_or(0.0) * velocity_scale,
+                opt_f64(atom, "vy")?.unwrap_or(0.0) * velocity_scale,
+                opt_f64(atom, "vz")?.unwrap_or(0.0) * velocity_scale,
             ]);
         }
         if atom.getattr("has_forces")?.extract::<bool>()? {
@@ -985,6 +972,20 @@ fn conframe_from_py(py: Python<'_>, frame: &Bound<'_, PyAny>) -> PyResult<ConFra
     builder
         .build()
         .map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+fn aligned_chunk_text(py: Python<'_>, frames: &Bound<'_, PyAny>) -> PyResult<String> {
+    let rust_frames = conframes_from_py(py, frames)?;
+    let mut buf = Cursor::new(Vec::new());
+    {
+        let mut writer = ConFrameWriter::with_float_format(&mut buf, FloatFormat::RoundTrip);
+        for frame in &rust_frames {
+            writer
+                .write_frame(frame)
+                .map_err(|e| PyRuntimeError::new_err(format!("serialize: {e}")))?;
+        }
+    }
+    String::from_utf8(buf.into_inner()).map_err(|e| PyRuntimeError::new_err(format!("utf8: {e}")))
 }
 
 fn conframes_from_py(py: Python<'_>, frames: &Bound<'_, PyAny>) -> PyResult<Vec<ConFrame>> {
