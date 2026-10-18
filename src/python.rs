@@ -280,6 +280,8 @@ impl PyConCorpus {
     ///
     /// Frames are turned into `ConFrame` values here and serialized with
     /// [`FloatFormat::RoundTrip`]. This does not call the installed wheel.
+    /// A pre-3.1 clock keeps its unit (`units.time`, or `fs`) and velocities
+    /// move into that unit. A v3.1 frame with `units.time` is stored as given.
     #[pyo3(signature = (traj_id, frames, source="memory"))]
     fn append_trajectory_frames(
         &self,
@@ -742,40 +744,6 @@ fn metadata_from_py(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<BTreeMap
     serde_json::from_str(&dumped).map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
-/// v1, v2, and v3.0 velocities are already in the natural time unit.
-/// The builder writes minor 1, which requires `units.time`.
-fn stamp_legacy_velocity_time(
-    meta: &mut BTreeMap<String, Value>,
-    spec_version: u32,
-    has_velocity: bool,
-) {
-    if !has_velocity {
-        return;
-    }
-    let minor = meta
-        .get("con_spec_minor")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    if spec_version >= 3 && minor >= 1 {
-        return;
-    }
-    let mut units = match meta.get("units").cloned() {
-        Some(Value::Object(map)) => Value::Object(map),
-        Some(_) => return,
-        None => readcon_core::units::default_v3_units_json(),
-    };
-    if let Some(object) = units.as_object_mut() {
-        object.insert(
-            "time".to_string(),
-            Value::String(readcon_core::units::NATURAL_TIME_UNIT.to_string()),
-        );
-        meta.insert("units".to_string(), units);
-        if meta.contains_key("con_spec_minor") {
-            meta.insert("con_spec_minor".to_string(), Value::from(1u64));
-        }
-    }
-}
-
 fn conframe_from_py(py: Python<'_>, frame: &Bound<'_, PyAny>) -> PyResult<ConFrame> {
     let cell: [f64; 3] = frame.getattr("cell")?.extract()?;
     let angles: [f64; 3] = frame.getattr("angles")?.extract()?;
@@ -793,7 +761,9 @@ fn conframe_from_py(py: Python<'_>, frame: &Bound<'_, PyAny>) -> PyResult<ConFra
         }
         built_atoms.push(atom);
     }
-    stamp_legacy_velocity_time(&mut meta, spec_version, saw_velocity);
+    let velocity_scale =
+        crate::units_canon::align_written_v31_time(&mut meta, spec_version, saw_velocity)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
     let mut builder = ConFrameBuilder::new(cell, angles);
     builder
         .prebox_header(prebox[0].as_str())
@@ -815,9 +785,9 @@ fn conframe_from_py(py: Python<'_>, frame: &Bound<'_, PyAny>) -> PyResult<ConFra
         );
         if atom.getattr("has_velocity")?.extract::<bool>()? {
             builder.with_velocity([
-                opt_f64(atom, "vx")?.unwrap_or(0.0),
-                opt_f64(atom, "vy")?.unwrap_or(0.0),
-                opt_f64(atom, "vz")?.unwrap_or(0.0),
+                opt_f64(atom, "vx")?.unwrap_or(0.0) * velocity_scale,
+                opt_f64(atom, "vy")?.unwrap_or(0.0) * velocity_scale,
+                opt_f64(atom, "vz")?.unwrap_or(0.0) * velocity_scale,
             ]);
         }
         if atom.getattr("has_forces")?.extract::<bool>()? {

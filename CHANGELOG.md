@@ -6,6 +6,10 @@
 
 - `ConCorpus::extend_trajectory_str` and `rkrdb_extend_trajectory_str` append CON text after the live frame count. The new text is parsed before the write. A span that does not parse is not written, and earlier frames stay as stored.
 
+### Fixed
+
+- Python ingest writes one `units.time` for a v3.1 frame's clock and velocities. A pre-3.1 clock stays in its own unit (or `fs`) and velocities are converted into that unit. A clock with no velocities still gets `units.time`. A v3.1 frame that already names `units.time` is unchanged.
+
 ## v0.2.0 - 2026-10-15
 #### Features
 - (**frames**) store CON text as a tagged zstd frame - (838df21) - *HaoZeke*
