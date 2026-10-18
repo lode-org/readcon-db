@@ -1,0 +1,1 @@
+Python ingest writes one `units.time` for a v3.1 frame's clock and velocities. A pre-3.1 clock stays in its own unit (or `fs`) and velocities are converted into that unit. A clock with no velocities still gets `units.time`. A v3.1 frame that already names `units.time` is unchanged.

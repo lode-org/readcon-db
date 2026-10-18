@@ -1,9 +1,10 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use pyo3::create_exception;
-use pyo3::exceptions::{PyIndexError, PyRuntimeError};
+use pyo3::exceptions::{PyIndexError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList};
+use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 use readcon_core::iterators::ConFrameIterator;
 use readcon_core::types::ConFrame;
 use readcon_core::writer::FloatFormat;
@@ -442,12 +443,17 @@ impl PyConCorpus {
     /// Ingest already-parsed `readcon` frames, committing 64 frames at a time.
     ///
     /// `readcon.write_con_string` turns each group into CON text. A
-    /// `read_con` result is written from the stored frames, so this does not
-    /// build a Python frame per index. The group is parsed here and stored
+    /// `read_con` result is a `ConFrameList`, not a list. The writer reads
+    /// the stored frames, so a plain append does not build a Python frame
+    /// per index. When that stamp can hide the caller clock, the same
+    /// result is indexed and the label is corrected. The group is parsed
+    /// here and stored
     /// with readcon-core `FloatFormat::RoundTrip`, whatever float format the
     /// installed `readcon` wheel writes by default. The first group is a new
     /// trajectory and each later group extends it. The return value is the
     /// number of frames in the trajectory after the last commit.
+    /// A pre-3.1 clock keeps its unit (`units.time`, or `fs`) and velocities
+    /// move into that unit. A v3.1 frame with `units.time` is stored as given.
     #[pyo3(signature = (traj_id, frames, source="memory"))]
     fn append_trajectory_frames(
         &self,
@@ -461,11 +467,12 @@ impl PyConCorpus {
             .map_err(|e| PyRuntimeError::new_err(format!("readcon required: {e}")))?;
         let mut total = 0u32;
         let mut started = false;
-        let flush = |text: &str, started: bool| -> PyResult<u32> {
+        let flush = |text: &str, sources: &[Bound<'_, PyAny>], started: bool| -> PyResult<u32> {
             let parsed: Result<Vec<ConFrame>, Error> = ConFrameIterator::new(text)
                 .map(|item| item.map_err(|e| Error::Parse(e.to_string())))
                 .collect();
-            let frames = parsed.map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+            let mut frames = parsed.map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+            align_ingested_frames(py, sources, &mut frames)?;
             let result = if started {
                 self.inner.extend_trajectory_frames_with_float_format(
                     traj_id,
@@ -499,7 +506,10 @@ impl PyConCorpus {
                     .call_method("write_con_string", (frames.clone(),), Some(&kwargs))
                     .and_then(|v| v.extract())
                     .map_err(|e| PyRuntimeError::new_err(format!("write_con_string: {e}")))?;
-                total = flush(&text, started)?;
+                // A list or tuple already holds frames. A `ConFrameList` is
+                // indexed only when the stamp can disagree with its clock.
+                let sources = caller_clock_sources(readcon.as_any(), &frames, start, stop, &text)?;
+                total = flush(&text, &sources, started)?;
                 started = true;
                 start = stop;
             }
@@ -514,7 +524,9 @@ impl PyConCorpus {
                     .call_method1("write_con_string", (list,))
                     .and_then(|v| v.extract())
                     .map_err(|e| PyRuntimeError::new_err(format!("write_con_string: {e}")))?;
-                total = flush(&text, started)?;
+                let sources: Vec<Bound<'_, PyAny>> =
+                    chunk.iter().map(|item| item.bind(py).clone()).collect();
+                total = flush(&text, &sources, started)?;
                 started = true;
                 chunk.clear();
             }
@@ -525,7 +537,9 @@ impl PyConCorpus {
                 .call_method1("write_con_string", (list,))
                 .and_then(|v| v.extract())
                 .map_err(|e| PyRuntimeError::new_err(format!("write_con_string: {e}")))?;
-            total = flush(&text, started)?;
+            let sources: Vec<Bound<'_, PyAny>> =
+                chunk.iter().map(|item| item.bind(py).clone()).collect();
+            total = flush(&text, &sources, started)?;
         }
         Ok(total)
     }
@@ -1030,6 +1044,137 @@ fn bcast_packed_frames(
         return Err(PyRuntimeError::new_err(msg));
     }
     blob.ok_or_else(|| PyRuntimeError::new_err("empty pack on root"))
+}
+
+fn metadata_from_py(
+    py: Python<'_>,
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<BTreeMap<String, serde_json::Value>> {
+    let json = py.import("json")?;
+    let dumped: String = json.call_method1("dumps", (obj,))?.extract()?;
+    serde_json::from_str(&dumped).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+fn parse_con_frames(text: &str) -> PyResult<Vec<ConFrame>> {
+    let parsed: Result<Vec<ConFrame>, Error> = ConFrameIterator::new(text)
+        .map(|item| item.map_err(|e| Error::Parse(e.to_string())))
+        .collect();
+    parsed.map_err(|e| PyRuntimeError::new_err(e.to_string()))
+}
+
+/// Frames whose metadata still names the caller's clock.
+///
+/// A list or tuple is already those frames. `read_con` and
+/// `read_con_string` return a `ConFrameList`. Indexing that object builds
+/// a Python frame per index and the list keeps it, so a chunk whose stamp
+/// already matches the caller is not indexed.
+fn caller_clock_sources<'py>(
+    readcon: &Bound<'py, PyAny>,
+    seq: &Bound<'py, PyAny>,
+    start: usize,
+    stop: usize,
+    text: &str,
+) -> PyResult<Vec<Bound<'py, PyAny>>> {
+    let concrete = seq.is_instance_of::<PyList>() || seq.is_instance_of::<PyTuple>();
+    let read_result = seq.is_instance(&readcon.getattr("ConFrameList")?)?;
+    if !concrete && !read_result {
+        return Ok(Vec::new());
+    }
+    if read_result {
+        let parsed = parse_con_frames(text)?;
+        if !parsed
+            .iter()
+            .any(crate::units_canon::written_frame_needs_caller_clock)
+        {
+            return Ok(Vec::new());
+        }
+    }
+    let mut sources = Vec::with_capacity(stop - start);
+    for index in start..stop {
+        sources.push(seq.get_item(index)?);
+    }
+    Ok(sources)
+}
+
+/// The installed wheel still labels pre-3.1 velocities with the natural time
+/// unit. Apply [`crate::units_canon::align_written_v31_time`] to the caller's
+/// metadata and scale the parsed velocities into that clock.
+fn align_ingested_frames(
+    py: Python<'_>,
+    sources: &[Bound<'_, PyAny>],
+    parsed: &mut [ConFrame],
+) -> PyResult<()> {
+    if sources.is_empty() {
+        return Ok(());
+    }
+    if sources.len() != parsed.len() {
+        return Err(PyRuntimeError::new_err(
+            "write_con_string frame count does not match the input",
+        ));
+    }
+    for (src, fr) in sources.iter().zip(parsed.iter_mut()) {
+        align_one_ingested_frame(py, src, fr)?;
+    }
+    Ok(())
+}
+
+fn align_one_ingested_frame(
+    py: Python<'_>,
+    src: &Bound<'_, PyAny>,
+    fr: &mut ConFrame,
+) -> PyResult<()> {
+    let Ok(spec) = src.getattr("spec_version").and_then(|v| v.extract::<u32>()) else {
+        return Ok(());
+    };
+    // `has_velocities` builds every Python atom. The parsed frame already
+    // has the velocities `write_con_string` just wrote.
+    let has_velocity = crate::units_canon::frame_has_velocities(fr);
+    let Ok(meta_obj) = src.getattr("metadata") else {
+        return Ok(());
+    };
+    let mut meta = metadata_from_py(py, &meta_obj)?;
+    let before = meta.clone();
+    let scale = crate::units_canon::align_written_v31_time(&mut meta, spec, has_velocity)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    if scale == 1.0 && meta == before {
+        return Ok(());
+    }
+    if let Some(units) = meta.get(readcon_core::types::meta::UNITS).cloned() {
+        fr.header.set_units(units);
+    }
+    if let Some(minor) = meta.get(readcon_core::types::meta::CON_SPEC_MINOR).cloned() {
+        fr.header
+            .metadata
+            .insert(readcon_core::types::meta::CON_SPEC_MINOR.to_string(), minor);
+    }
+    if scale != 1.0 {
+        scale_frame_velocities(fr, scale);
+    }
+    Ok(())
+}
+
+fn scale_frame_velocities(fr: &mut ConFrame, scale: f64) {
+    let n = fr.positions.nrows();
+    let has_vel = fr.velocities.nrows() == n;
+    if has_vel {
+        for i in 0..n {
+            let mut v = fr.velocities.as_f64_row(i);
+            v[0] *= scale;
+            v[1] *= scale;
+            v[2] *= scale;
+            fr.velocities.set_f64_row(i, v);
+        }
+        fr.sync_atom_data_from_arrays();
+        return;
+    }
+    for atom in &mut fr.atom_data {
+        if let Some(mut v) = atom.velocity() {
+            v[0] *= scale;
+            v[1] *= scale;
+            v[2] *= scale;
+            atom.set_velocity(Some(v));
+        }
+    }
 }
 
 fn units_from_pydict(units: Option<Bound<'_, PyDict>>) -> PyResult<Option<serde_json::Value>> {
