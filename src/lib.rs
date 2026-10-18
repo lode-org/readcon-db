@@ -16,6 +16,8 @@ mod keys;
 pub mod mpi_ingest;
 #[cfg(feature = "mpi")]
 pub mod mpi_read;
+#[cfg(any(feature = "mpi", test))]
+mod mpi_wire;
 mod select;
 mod shard;
 mod topology;

@@ -1,25 +1,42 @@
 # Changelog
 
-## 0.1.9
+## Unreleased
 
 ### Added
 
-- Zstd level 1 of the CON text in `frames` (`0xFD 0x01` plus one zstd frame). An aligned run of 64 frames shares one zstd frame when the group is shorter, and the other keys store a redirect. Untagged UTF-8 still reads. `readcon-db migrate` rewrites legacy values and does not wrap a packed value again. `--no-compress` stores the UTF-8. xxh3-128 stays on the decompressed text. Both MPI ingest routes send the stored bytes. Ingest and migrate do not cook.
-- Optional `mpi` feature with `mpi_ingest::append_trajectory_path`, a parallel ingest over a caller-supplied communicator.
-- `ConCorpus::canonical_dump` for comparing corpora independent of LMDB page layout.
-- `mpi_ingest::append_trajectory_paths_sharded`: sharded multi-writer ingest routed with `MPI_Alltoallv`, plus `ShardedConCorpus::canonical_dump`.
-- `mpi_read::scatter_packed_frames`: rank 0 packs each rank's block of a selection and sends it with `MPI_Scatterv`.
-- `mpi_read::export_extxyz_collective`: extended XYZ export at `MPI_Exscan` offsets with `MPI_File_write_at_all`, or gathered to rank 0.
-- `bench/mpi_bench.sh` and `bench/gen_con.py` for the MPI ingest benchmark, and the MPI how-to page.
-- C ABI `rkrdb_mpi_ingest_paths_f` and the `rkrdb_mpi_ingest_paths` header wrapper.
 - `ConCorpus::extend_trajectory_str` and `rkrdb_extend_trajectory_str` append CON text after the live frame count. The new text is parsed before the write. A span that does not parse is not written, and earlier frames stay as stored.
 
-### Changed
-
-- The broadcast helpers in `readcon-db-mpi.h` share one collective tail with the readcon-core shim contract.
-- `mpi_ingest::append_trajectory_path` takes the corpus directory instead of an open corpus.
-- Pin readcon-core 0.17.1. Until tag v0.17.1 is published, the pin is a git dependency on readcon-core main.
-- Python `append_trajectory_frames` serializes with RoundTrip inside the crate.
+## v0.2.0 - 2026-10-15
+#### Features
+- (**frames**) store CON text as a tagged zstd frame - (838df21) - *HaoZeke*
+- (**mpi**) scatter read helper and collective XYZ export - (b1c9c4d) - *HaoZeke*
+- (**mpi**) sharded multi-writer ingest and canonical dump checks - (7891ce2) - *HaoZeke*
+- (**mpi**) parallel ingest with hash-only dedup exchange - (d978427) - *HaoZeke*
+#### Bug Fixes
+- (**bench**) pass the first traj id to mpi_ingest_check - (4095660) - *HaoZeke*
+- (**ci**) fresh directory and traj ids per ingest check - (b3552aa) - *HaoZeke*
+- (**ci**) isolate each MPICH ingest check - (4b9fd3e) - *HaoZeke*
+- (**ci**) install the MPICH build that Hydra can launch - (68ce3d6) - *HaoZeke*
+- (**frames**) group 64 CON frames when the zstd run is shorter - (75248ba) - *HaoZeke*
+- (**h5md**) convert velocities with the declared time unit (#15) - (1a1a8a5) - *HaoZeke*
+- (**lmdb**) retry serial writes after growing a full map - (20c8076) - *HaoZeke*
+- (**lmdb**) configurable map size sized from MPI ingest input - (c651ccd) - *HaoZeke*
+- (**reader**) preserve optional fields through atom accessors - (f1be53e) - *HaoZeke*
+- (**reader**) retain blank preambles in adjacent CON frames - (d19b265) - *HaoZeke*
+#### Performance
+- (**lmdb**) grow the map before a write and stop copying MPI blobs - (f0eacc5) - *HaoZeke*
+#### Documentation
+- (**mpi**) ingest benchmark harness and MPI how-to - (7e88ef5) - *HaoZeke*
+#### Build system
+- (**reader**) require the published 0.17.1 release - (c34dc55) - *HaoZeke*
+- (**reader**) lock the current CON parser dependency - (ac6e1f2) - *HaoZeke*
+- (**release**) synchronize package versions through cog - (4203e5c) - *HaoZeke*
+#### CI
+- (**docs**) install the Org exporter for Pages - (3634462) - *HaoZeke*
+#### Chores
+- (**version**) v0.2.0 - (dbf0f52) - *HaoZeke*
+#### Style
+- (**bench**) format gen_con.py with ruff - (4af4f83) - *HaoZeke*
 
 ## v0.1.8 - 2026-10-09
 
@@ -161,7 +178,6 @@
 - drop unused FrameKey import in collect_h5md - (3765955) - *HaoZeke*
 
 - - -
-
 ## v0.1.4 - 2026-08-15
 #### Maintenance
 - bump to v0.1.4 - (a31f192) - *HaoZeke*

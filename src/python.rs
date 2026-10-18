@@ -308,6 +308,10 @@ impl PyConCorpus {
     }
 
     /// Write caller units onto every frame of `traj_id` (canonical names in CON text).
+    ///
+    /// A v3.1 frame with a clock or velocities and no `units.time` is an
+    /// error. The missing time unit is not treated as `fs`. v1, v2, and
+    /// v3.0 clocks with no `units.time` still convert as `fs`.
     fn set_units(&self, traj_id: u64, units: Bound<'_, PyDict>) -> PyResult<u32> {
         let u = units_from_pydict(Some(units))?
             .ok_or_else(|| PyRuntimeError::new_err("units required"))?;
