@@ -54,7 +54,7 @@ if grep -q '^## Unreleased' CHANGELOG.md; then
 fi
 
 echo "==> version lockstep"
-scripts/check_version_lockstep.sh
+python3 scripts/check_version_lockstep.py
 
 echo "==> prek"
 prek run -a

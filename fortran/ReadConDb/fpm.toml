@@ -1,5 +1,7 @@
 name = "ReadConDb"
+# [[[cog cog.outl(f'version = "{VERSION}"') ]]]
 version = "0.2.0"
+# [[[end]]]
 license = "MIT"
 [build]
 auto-tests = false

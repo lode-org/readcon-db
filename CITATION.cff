@@ -9,7 +9,9 @@ authors:
     orcid: "https://orcid.org/0000-0002-2393-8056"
 license: MIT
 repository-code: "https://github.com/lode-org/readcon-db"
+# [[[cog cog.outl(f'version: {VERSION}') ]]]
 version: 0.2.0
+# [[[end]]]
 date-released: "2026-08-15"
 keywords:
   - CON

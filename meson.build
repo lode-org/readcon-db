@@ -1,7 +1,7 @@
 project(
     'readcon-db',
     'c',
-    version: '0.2.0',
+    version: run_command('scripts/crate_version.py', check: true).stdout().strip(),
     meson_version: '>=1.3.0',
     default_options: [
         'buildtype=debugoptimized',

@@ -1,8 +1,14 @@
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+from crate_version import crate_version
+
 project = "readcon-db"
 copyright = "2026, LODE developers"
 author = "LODE developers"
-release = "0.2.0"
-version = "0.2.0"
+release = crate_version()
+version = release
 
 extensions = [
     "sphinx.ext.autodoc",

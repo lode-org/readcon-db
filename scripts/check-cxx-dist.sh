@@ -53,6 +53,7 @@ if ! bash scripts/check-clib-dist.sh --no-self-test; then
     die "check-clib-dist.sh --no-self-test failed"
 fi
 [[ -f scripts/meson_cargo_build.py ]] || die "missing scripts/meson_cargo_build.py"
+[[ -f scripts/crate_version.py ]] || die "missing scripts/crate_version.py"
 if ! grep -q 'workflow_dispatch:' .github/workflows/c_lib_tarball.yml \
     || ! grep -q 'tag:' .github/workflows/c_lib_tarball.yml \
     || ! grep -q 'inputs.tag' .github/workflows/c_lib_tarball.yml; then

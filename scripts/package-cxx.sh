@@ -48,7 +48,7 @@ cp -a "$ROOT_DIR/cmake/." "$DEST/cmake/"
 cp -a "$ROOT_DIR/meson.build" "$DEST/"
 cp -a "$ROOT_DIR/meson_options.txt" "$DEST/"
 cp -a "$ROOT_DIR/include/." "$DEST/include/"
-cp -a "$ROOT_DIR/scripts/meson_cargo_build.py" "$DEST/scripts/"
+cp -a "$ROOT_DIR/scripts/meson_cargo_build.py" "$ROOT_DIR/scripts/crate_version.py" "$DEST/scripts/"
 cp -a "$ROOT_DIR/LICENSE" "$DEST/"
 if [[ -f "$ROOT_DIR/Cargo.lock" ]]; then
     cp -a "$ROOT_DIR/Cargo.lock" "$DEST/"

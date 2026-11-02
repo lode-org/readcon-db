@@ -1,6 +1,8 @@
 [workspace]
 name = "readcon-db"
+# [[[cog cog.outl(f'version = "{VERSION}"') ]]]
 version = "0.2.0"
+# [[[end]]]
 description = "Mmap-backed CON frame corpus (Heed/LMDB), xxHash exact match, multi-language FFI"
 channels = ["conda-forge"]
 platforms = ["linux-64"]

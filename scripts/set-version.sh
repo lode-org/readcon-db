@@ -8,11 +8,7 @@ if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-].*)?$ ]]; then
 fi
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
-for file in Cargo.toml python/pyproject.toml pixi.toml fortran/ReadConDb/fpm.toml; do
-    sed -i -E "0,/^version = \"[^\"]*\"/s//version = \"$version\"/" "$file"
-done
-sed -i -E "/^name = \"readcon-db\"$/{n;s/^version = \"[^\"]*\"/version = \"$version\"/;}" Cargo.lock
-sed -i -E "s/^    version: '[^']*'/    version: '$version'/" meson.build
-sed -i -E "s/^release = \"[^\"]*\"/release = \"$version\"/; s/^version = \"[^\"]*\"/version = \"$version\"/" docs/source/conf.py
-sed -i -E "s/^version: .*/version: $version/" CITATION.cff
-bash scripts/check_version_lockstep.sh
+# First version key only: the package's own, not a dependency's.
+sed -i -E "0,/^version = \"[^\"]*\"/s//version = \"$version\"/" Cargo.toml
+python3 scripts/sync-version.py
+python3 scripts/check_version_lockstep.py
