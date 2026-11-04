@@ -850,9 +850,9 @@ checksum = "60a357793950651c4ed0f3f52338f53b2f809f32d83a07f72909fa13e4c6c1e3"
 
 [[package]]
 name = "readcon-core"
-version = "0.17.1"
+version = "0.17.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8c9ec4a34748765fc3ef137aef2c4eb007b0ae395dd2ac165071471e6fcaf0c"
+checksum = "8aef54a62236d969f4b328cc9846b5fcab31979547f39c21ad8628fff6b348ec"
 dependencies = [
  "dlpk",
  "fast-float2",
