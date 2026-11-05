@@ -4,7 +4,16 @@
 //! so this crate keeps the rewrite here. Callers may write `A`, `ev`,
 //! `femtosecond`; metadata stores `angstrom`, `eV`, `fs`.
 
+use std::collections::BTreeMap;
+
 use crate::error::{Error, Result};
+
+use readcon_core::types::meta;
+
+/// v3.1 clock and velocity numbers have no historical `fs` default.
+const V31_CLOCK_NEEDS_TIME: &str = "v3.1 frame has a clock but no units.time (D10)";
+/// Same rule when the frame has velocities and no clock.
+const V31_VELOCITY_NEEDS_TIME: &str = "v3.1 frame has velocities but no units.time (D10)";
 
 /// Natural time unit eOn and ASE write: sqrt(amu * Angstrom^2 / eV).
 ///
@@ -28,10 +37,14 @@ pub fn con_spec_minor(header: &readcon_core::types::FrameHeader) -> Option<u64> 
 /// From v3.1 on, `units.time` is the velocity time unit.
 /// v1, v2, and v3.0 (no `con_spec_minor`) keep the natural unit whatever the label says.
 pub fn velocity_time_is_declared(header: &readcon_core::types::FrameHeader) -> bool {
-    if header.spec_version > 3 {
+    velocity_time_is_declared_spec(header.spec_version, con_spec_minor(header))
+}
+
+fn velocity_time_is_declared_spec(spec_version: u32, minor: Option<u64>) -> bool {
+    if spec_version > 3 {
         return true;
     }
-    header.spec_version == 3 && con_spec_minor(header).unwrap_or(0) >= 1
+    spec_version == 3 && minor.unwrap_or(0) >= 1
 }
 
 fn preferred_atom(alias: &str) -> Option<&'static str> {
@@ -166,17 +179,36 @@ pub fn merge_units(
 }
 
 fn declared_time_unit(header: &readcon_core::types::FrameHeader) -> Option<&str> {
-    header
-        .unit_for("time")
+    declared_time_unit_in(&header.metadata)
+}
+
+fn declared_time_unit_in(metadata: &BTreeMap<String, serde_json::Value>) -> Option<&str> {
+    metadata
+        .get(meta::UNITS)
+        .and_then(|units| units.get("time"))
+        .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|unit| !unit.is_empty())
 }
 
 fn frame_has_clock(header: &readcon_core::types::FrameHeader) -> bool {
-    if header.time().is_some() {
+    metadata_has_clock(&header.metadata)
+}
+
+/// `time`, or a finite `timestep` greater than zero. Same predicate as
+/// [`frame_has_clock`].
+fn metadata_has_clock(metadata: &BTreeMap<String, serde_json::Value>) -> bool {
+    if metadata
+        .get(meta::TIME)
+        .and_then(serde_json::Value::as_f64)
+        .is_some()
+    {
         return true;
     }
-    matches!(header.timestep(), Some(dt) if dt.is_finite() && dt > 0.0)
+    matches!(
+        metadata.get(meta::TIMESTEP).and_then(serde_json::Value::as_f64),
+        Some(dt) if dt.is_finite() && dt > 0.0
+    )
 }
 
 fn frame_has_velocities(fr: &readcon_core::types::ConFrame) -> bool {
@@ -190,14 +222,118 @@ fn require_declared_v31_time(fr: &readcon_core::types::ConFrame) -> Result<()> {
         return Ok(());
     }
     if frame_has_clock(&fr.header) {
-        return Err(Error::Message(
-            "v3.1 frame has a clock but no units.time (D10)".into(),
-        ));
+        return Err(Error::Message(V31_CLOCK_NEEDS_TIME.into()));
     }
     if frame_has_velocities(fr) {
-        return Err(Error::Message(
-            "v3.1 frame has velocities but no units.time (D10)".into(),
-        ));
+        return Err(Error::Message(V31_VELOCITY_NEEDS_TIME.into()));
+    }
+    Ok(())
+}
+
+/// Make `units.time` describe `time`, `timestep`, and the velocities on a
+/// frame [`readcon_core::types::ConFrameBuilder`] will write as v3.1.
+///
+/// Returns the factor that multiplies velocity components still stored in
+/// [`NATURAL_TIME_UNIT`]. Clock numbers are not changed.
+///
+/// This is [`velocity_time_is_declared`] and the velocity term of
+/// [`rescale_frame_units`] (`vf = lf / vel_tf` with length unchanged),
+/// applied before the builder stamps minor 1:
+///
+/// * A v3.1 frame that already has `units.time` is left alone (scale 1).
+/// * A v3.1 clock or velocities frame with no `units.time` is the same
+///   error as [`require_declared_v31_time`]. The missing unit is not `fs`.
+/// * Pre-v3.1 velocities are in the natural unit. The clock is the declared
+///   `units.time`, or `fs` from [`default_con_units`] when that key is
+///   absent. A clock sets `units.time` to that unit. Velocities are
+///   multiplied by `unit_conversion_factor(clock, natural)`.
+/// * Pre-v3.1 velocities and no clock keep the natural unit and a scale of 1.
+/// * A clock with no velocities still receives `units.time`.
+///
+/// An explicit `con_spec_minor` below 1 is raised to 1 when a clock or
+/// velocities are present, so the written label is authoritative. The
+/// builder already stamps 1 when the key is absent.
+#[cfg(any(test, feature = "python"))]
+pub fn align_written_v31_time(
+    meta: &mut BTreeMap<String, serde_json::Value>,
+    spec_version: u32,
+    has_velocity: bool,
+) -> Result<f64> {
+    let minor = meta
+        .get(meta::CON_SPEC_MINOR)
+        .and_then(serde_json::Value::as_u64);
+    let has_clock = metadata_has_clock(meta);
+    if velocity_time_is_declared_spec(spec_version, minor) {
+        if declared_time_unit_in(meta).is_none() && (has_clock || has_velocity) {
+            let msg = if has_clock {
+                V31_CLOCK_NEEDS_TIME
+            } else {
+                V31_VELOCITY_NEEDS_TIME
+            };
+            return Err(Error::Message(msg.into()));
+        }
+        return Ok(1.0);
+    }
+    if !has_clock && !has_velocity {
+        return Ok(1.0);
+    }
+    let (unit, scale) = if has_clock {
+        let raw = declared_time_unit_in(meta).unwrap_or("fs");
+        let unit = readcon_core::units::canonicalize_unit_expression(raw)
+            .map_err(|e| Error::Message(e.to_string()))?;
+        let scale = if has_velocity {
+            velocity_scale_from_natural(&unit)?
+        } else {
+            1.0
+        };
+        (unit, scale)
+    } else {
+        (NATURAL_TIME_UNIT.to_string(), 1.0)
+    };
+    put_time_unit(meta, &unit)?;
+    if meta.contains_key(meta::CON_SPEC_MINOR) {
+        meta.insert(
+            meta::CON_SPEC_MINOR.to_string(),
+            serde_json::Value::from(1_u64),
+        );
+    }
+    Ok(scale)
+}
+
+/// `v_clock = v_natural * unit_conversion_factor(clock, natural)`.
+///
+/// Velocity scales as 1/time, so this is `1 / unit_conversion_factor(natural, clock)`,
+/// the same factor [`rescale_frame_units`] applies when length is unchanged.
+#[cfg(any(test, feature = "python"))]
+fn velocity_scale_from_natural(target: &str) -> Result<f64> {
+    if target == NATURAL_TIME_UNIT {
+        return Ok(1.0);
+    }
+    let factor = readcon_core::units::unit_conversion_factor(target, NATURAL_TIME_UNIT)
+        .map_err(|e| Error::Message(e.to_string()))?;
+    if factor == 0.0 || !factor.is_finite() {
+        return Err(Error::Message(format!(
+            "time unit '{target}' has a zero scale"
+        )));
+    }
+    Ok(factor)
+}
+
+#[cfg(any(test, feature = "python"))]
+fn put_time_unit(meta: &mut BTreeMap<String, serde_json::Value>, unit: &str) -> Result<()> {
+    let time = serde_json::Value::String(unit.to_string());
+    match meta.get_mut(meta::UNITS) {
+        Some(serde_json::Value::Object(map)) => {
+            map.insert("time".to_string(), time);
+        }
+        Some(_) => return Err(Error::Message("units must be an object".into())),
+        None => {
+            let mut units = readcon_core::units::default_v3_units_json();
+            if let Some(map) = units.as_object_mut() {
+                map.insert("time".to_string(), time);
+            }
+            meta.insert(meta::UNITS.to_string(), units);
+        }
     }
     Ok(())
 }
@@ -329,6 +465,8 @@ pub fn rescale_frame_units(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     #[test]
@@ -463,5 +601,123 @@ mod tests {
         )
         .unwrap();
         assert!((fr.header.time().unwrap() - 12.5 * tf).abs() < 1e-12);
+    }
+
+    fn meta_of(value: serde_json::Value) -> BTreeMap<String, serde_json::Value> {
+        value.as_object().unwrap().clone().into_iter().collect()
+    }
+
+    #[test]
+    fn pre31_fs_clock_scales_velocities_into_fs() {
+        let mut meta = meta_of(serde_json::json!({
+            "time": 12.5,
+            "timestep": 1.25
+        }));
+        let scale = align_written_v31_time(&mut meta, 2, true).unwrap();
+        let expect = readcon_core::units::unit_conversion_factor("fs", NATURAL_TIME_UNIT).unwrap();
+        assert!((scale - expect).abs() < 1e-15);
+        assert_eq!(meta["units"]["time"], "fs");
+        assert_eq!(meta["time"], 12.5);
+        assert_eq!(meta["timestep"], 1.25);
+        assert!(!meta.contains_key("con_spec_minor"));
+    }
+
+    #[test]
+    fn pre31_clock_without_velocities_labels_fs() {
+        let mut meta = meta_of(serde_json::json!({"time": 4.0}));
+        let scale = align_written_v31_time(&mut meta, 2, false).unwrap();
+        assert_eq!(scale, 1.0);
+        assert_eq!(meta["units"]["time"], "fs");
+        assert_eq!(meta["time"], 4.0);
+        assert_eq!(meta["units"]["length"], "angstrom");
+    }
+
+    #[test]
+    fn pre31_velocities_without_clock_keep_natural() {
+        let mut meta = meta_of(serde_json::json!({}));
+        let scale = align_written_v31_time(&mut meta, 2, true).unwrap();
+        assert_eq!(scale, 1.0);
+        assert_eq!(meta["units"]["time"], NATURAL_TIME_UNIT);
+    }
+
+    #[test]
+    fn pre31_ps_clock_scales_velocities_into_ps() {
+        let mut meta = meta_of(serde_json::json!({
+            "time": 0.5,
+            "units": {"length": "angstrom", "energy": "eV", "time": "ps"}
+        }));
+        let scale = align_written_v31_time(&mut meta, 2, true).unwrap();
+        let expect = readcon_core::units::unit_conversion_factor("ps", NATURAL_TIME_UNIT).unwrap();
+        assert!((scale - expect).abs() < 1e-12);
+        assert_eq!(meta["units"]["time"], "ps");
+        assert_eq!(meta["time"], 0.5);
+        assert_eq!(meta["units"]["length"], "angstrom");
+    }
+
+    #[test]
+    fn pre31_femtosecond_label_is_the_clock_unit() {
+        let mut meta = meta_of(serde_json::json!({
+            "time": 3.0,
+            "units": {"length": "angstrom", "energy": "eV", "time": "femtosecond"}
+        }));
+        let scale = align_written_v31_time(&mut meta, 3, true).unwrap();
+        assert_eq!(meta["units"]["time"], "fs");
+        let expect = readcon_core::units::unit_conversion_factor("fs", NATURAL_TIME_UNIT).unwrap();
+        assert!((scale - expect).abs() < 1e-15);
+        assert_eq!(meta["time"], 3.0);
+    }
+
+    #[test]
+    fn explicit_minor_zero_with_clock_becomes_minor_one() {
+        let mut meta = meta_of(serde_json::json!({
+            "con_spec_minor": 0,
+            "time": 1.0
+        }));
+        align_written_v31_time(&mut meta, 3, true).unwrap();
+        assert_eq!(meta["con_spec_minor"], 1);
+        assert_eq!(meta["units"]["time"], "fs");
+    }
+
+    #[test]
+    fn v31_round_trip_does_not_rescale() {
+        let mut meta = meta_of(serde_json::json!({
+            "con_spec_minor": 1,
+            "time": 12.5,
+            "timestep": 1.25,
+            "units": {
+                "length": "angstrom",
+                "energy": "eV",
+                "mass": "amu",
+                "time": "ps"
+            }
+        }));
+        let scale = align_written_v31_time(&mut meta, 3, true).unwrap();
+        assert_eq!(scale, 1.0);
+        assert_eq!(meta["units"]["time"], "ps");
+        assert_eq!(meta["time"], 12.5);
+        assert_eq!(meta["timestep"], 1.25);
+    }
+
+    #[test]
+    fn v31_clock_without_time_is_not_relabelled_fs() {
+        let mut meta = meta_of(serde_json::json!({
+            "con_spec_minor": 1,
+            "time": 12.5,
+            "units": {"length": "angstrom", "energy": "eV"}
+        }));
+        let err = align_written_v31_time(&mut meta, 3, false).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("clock"), "{msg}");
+        assert!(msg.contains("no units.time"), "{msg}");
+        assert!(meta["units"].get("time").is_none());
+        assert_eq!(meta["time"], 12.5);
+    }
+
+    #[test]
+    fn frame_without_clock_or_velocities_invents_no_time() {
+        let mut meta = meta_of(serde_json::json!({}));
+        let scale = align_written_v31_time(&mut meta, 2, false).unwrap();
+        assert_eq!(scale, 1.0);
+        assert!(!meta.contains_key("units"));
     }
 }

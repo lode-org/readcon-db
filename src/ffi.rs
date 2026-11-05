@@ -472,6 +472,50 @@ pub unsafe extern "C" fn rkrdb_append_trajectory_str(
     }
 }
 
+/// Append CON text after the live frame count. `source` may be NULL (`"memory"`).
+/// A span that does not parse writes nothing.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_extend_trajectory_str(
+    id: usize,
+    traj_id: u64,
+    text: *const c_char,
+    source: *const c_char,
+    out_n_frames: *mut u32,
+) -> c_int {
+    if text.is_null() {
+        return RKRDB_NULL;
+    }
+    let text = match unsafe { CStr::from_ptr(text) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return RKRDB_ERR,
+    };
+    let source = if source.is_null() {
+        "memory"
+    } else {
+        match unsafe { CStr::from_ptr(source) }.to_str() {
+            Ok(s) if !s.is_empty() => s,
+            Ok(_) => "memory",
+            Err(_) => return RKRDB_ERR,
+        }
+    };
+    let corpus = match corpus_arc(id) {
+        Ok(c) => c,
+        Err(c) => return c,
+    };
+    match corpus.extend_trajectory_str(traj_id, text, source) {
+        Ok(n) => {
+            if !out_n_frames.is_null() {
+                unsafe { *out_n_frames = n };
+            }
+            RKRDB_OK
+        }
+        Err(e) => {
+            set_err_id(id, e);
+            RKRDB_ERR
+        }
+    }
+}
+
 /// Ingest one parsed `RKRConFrame*` from libreadcon_core. Caller keeps the handle.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_append_trajectory_frame(
@@ -1681,6 +1725,43 @@ mod tests {
                 RKRDB_NULL
             );
             assert_eq!(n, 3);
+            rkrdb_close(id);
+        }
+    }
+
+    #[test]
+    fn c_abi_extend_trajectory_str_appends_and_rejects_a_bad_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = CString::new(dir.path().to_str().unwrap()).unwrap();
+        let text =
+            CString::new(std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap()).unwrap();
+        let bad = CString::new("this is not a con frame\n").unwrap();
+        let mut id = 0usize;
+        let mut n = 0u32;
+        unsafe {
+            assert_eq!(rkrdb_open(path.as_ptr(), &mut id), RKRDB_OK);
+            assert_eq!(
+                rkrdb_append_trajectory_str(id, 1, text.as_ptr(), ptr::null(), &mut n),
+                RKRDB_OK
+            );
+            let first = n;
+            let mut buf = vec![0i8; 4096];
+            let n0 = rkrdb_get_frame_text(id, 1, 0, buf.as_mut_ptr(), buf.len());
+            assert!(n0 > 0);
+            assert_eq!(
+                rkrdb_extend_trajectory_str(id, 1, bad.as_ptr(), ptr::null(), &mut n),
+                RKRDB_ERR
+            );
+            assert_eq!(n, first);
+            let mut again = vec![0i8; 4096];
+            let n1 = rkrdb_get_frame_text(id, 1, 0, again.as_mut_ptr(), again.len());
+            assert_eq!(n0, n1);
+            assert_eq!(buf, again);
+            assert_eq!(
+                rkrdb_extend_trajectory_str(id, 1, text.as_ptr(), ptr::null(), &mut n),
+                RKRDB_OK
+            );
+            assert!(n > first);
             rkrdb_close(id);
         }
     }

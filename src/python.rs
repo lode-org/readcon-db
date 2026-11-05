@@ -1,6 +1,11 @@
-use pyo3::exceptions::PyRuntimeError;
+use std::collections::BTreeMap;
+
+use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyIterator};
+use readcon_core::types::{ConFrame, ConFrameBuilder};
+use readcon_core::writer::FloatFormat;
+use serde_json::Value;
 
 use crate::corpus::ConCorpus;
 use crate::keys::{ContentHash, FrameKey};
@@ -271,7 +276,12 @@ impl PyConCorpus {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Ingest already-parsed `readcon` frames (serialized via write_con_string).
+    /// Ingest already-parsed `readcon` frames.
+    ///
+    /// Frames are turned into `ConFrame` values here and serialized with
+    /// [`FloatFormat::RoundTrip`]. This does not call the installed wheel.
+    /// A pre-3.1 clock keeps its unit (`units.time`, or `fs`) and velocities
+    /// move into that unit. A v3.1 frame with `units.time` is stored as given.
     #[pyo3(signature = (traj_id, frames, source="memory"))]
     fn append_trajectory_frames(
         &self,
@@ -280,14 +290,23 @@ impl PyConCorpus {
         frames: Bound<'_, PyAny>,
         source: &str,
     ) -> PyResult<u32> {
-        let readcon = py
-            .import("readcon")
-            .map_err(|e| PyRuntimeError::new_err(format!("readcon required: {e}")))?;
-        let text: String = readcon
-            .call_method1("write_con_string", (frames,))
-            .and_then(|v| v.extract())
-            .map_err(|e| PyRuntimeError::new_err(format!("write_con_string: {e}")))?;
-        self.append_trajectory_str(traj_id, &text, source)
+        let rust_frames = conframes_from_py(py, &frames)?;
+        self.inner
+            .append_trajectory_frames_with_float_format(
+                traj_id,
+                &rust_frames,
+                source,
+                FloatFormat::RoundTrip,
+            )
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Append CON text after the live frame count, or create the trajectory.
+    #[pyo3(signature = (traj_id, text, source="memory"))]
+    fn extend_trajectory_str(&self, traj_id: u64, text: &str, source: &str) -> PyResult<u32> {
+        self.inner
+            .extend_trajectory_str(traj_id, text, source)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Write caller units onto every frame of `traj_id` (canonical names in CON text).
@@ -708,6 +727,123 @@ fn bcast_packed_frames(
         return Err(PyRuntimeError::new_err(msg));
     }
     blob.ok_or_else(|| PyRuntimeError::new_err("empty pack on root"))
+}
+
+fn opt_f64(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Option<f64>> {
+    let value = obj.getattr(name)?;
+    if value.is_none() {
+        Ok(None)
+    } else {
+        value.extract()
+    }
+}
+
+fn metadata_from_py(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<BTreeMap<String, Value>> {
+    let json = py.import("json")?;
+    let dumped: String = json.call_method1("dumps", (obj,))?.extract()?;
+    serde_json::from_str(&dumped).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+fn conframe_from_py(py: Python<'_>, frame: &Bound<'_, PyAny>) -> PyResult<ConFrame> {
+    let cell: [f64; 3] = frame.getattr("cell")?.extract()?;
+    let angles: [f64; 3] = frame.getattr("angles")?.extract()?;
+    let prebox: [String; 2] = frame.getattr("prebox_header")?.extract()?;
+    let postbox: [String; 2] = frame.getattr("postbox_header")?.extract()?;
+    let spec_version: u32 = frame.getattr("spec_version")?.extract()?;
+    let mut meta = metadata_from_py(py, &frame.getattr("metadata")?)?;
+    let atoms = frame.getattr("atoms")?;
+    let mut built_atoms = Vec::new();
+    let mut saw_velocity = false;
+    for item in PyIterator::from_object(&atoms)? {
+        let atom = item?;
+        if atom.getattr("has_velocity")?.extract::<bool>()? {
+            saw_velocity = true;
+        }
+        built_atoms.push(atom);
+    }
+    let velocity_scale =
+        crate::units_canon::align_written_v31_time(&mut meta, spec_version, saw_velocity)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let mut builder = ConFrameBuilder::new(cell, angles);
+    builder
+        .prebox_header(prebox[0].as_str())
+        .postbox_header(postbox)
+        .metadata(meta);
+    for atom in &built_atoms {
+        let symbol: String = atom.getattr("symbol")?.extract()?;
+        let mass = opt_f64(atom, "mass")?.unwrap_or(0.0);
+        let fixed: [bool; 3] = atom.getattr("fixed")?.extract()?;
+        let atom_id: u64 = atom.getattr("atom_id")?.extract()?;
+        builder.add_atom(
+            &symbol,
+            atom.getattr("x")?.extract()?,
+            atom.getattr("y")?.extract()?,
+            atom.getattr("z")?.extract()?,
+            fixed,
+            atom_id,
+            mass,
+        );
+        if atom.getattr("has_velocity")?.extract::<bool>()? {
+            builder.with_velocity([
+                opt_f64(atom, "vx")?.unwrap_or(0.0) * velocity_scale,
+                opt_f64(atom, "vy")?.unwrap_or(0.0) * velocity_scale,
+                opt_f64(atom, "vz")?.unwrap_or(0.0) * velocity_scale,
+            ]);
+        }
+        if atom.getattr("has_forces")?.extract::<bool>()? {
+            builder.with_force([
+                opt_f64(atom, "fx")?.unwrap_or(0.0),
+                opt_f64(atom, "fy")?.unwrap_or(0.0),
+                opt_f64(atom, "fz")?.unwrap_or(0.0),
+            ]);
+        }
+        if let Some(energy) = opt_f64(atom, "energy")? {
+            builder.with_energy(energy);
+        }
+        if let Some(charge) = opt_f64(atom, "charge")? {
+            builder.with_charge(charge);
+        }
+        if let Some(spin) = opt_f64(atom, "spin")? {
+            builder.with_spin(spin);
+        }
+        let mx = opt_f64(atom, "mx")?;
+        let my = opt_f64(atom, "my")?;
+        let mz = opt_f64(atom, "mz")?;
+        if mx.is_some() && my.is_some() && mz.is_some() {
+            builder.with_magmom([mx.unwrap_or(0.0), my.unwrap_or(0.0), mz.unwrap_or(0.0)]);
+        }
+        if atom.getattr("has_displacement")?.extract::<bool>()? {
+            builder.with_displacement([
+                opt_f64(atom, "dx")?.unwrap_or(0.0),
+                opt_f64(atom, "dy")?.unwrap_or(0.0),
+                opt_f64(atom, "dz")?.unwrap_or(0.0),
+            ]);
+        }
+        if atom.getattr("has_spread")?.extract::<bool>()? {
+            builder.with_spread([
+                opt_f64(atom, "sx")?.unwrap_or(0.0),
+                opt_f64(atom, "sy")?.unwrap_or(0.0),
+                opt_f64(atom, "sz")?.unwrap_or(0.0),
+            ]);
+        }
+    }
+    builder
+        .build()
+        .map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+fn conframes_from_py(py: Python<'_>, frames: &Bound<'_, PyAny>) -> PyResult<Vec<ConFrame>> {
+    let mut rust_frames = Vec::new();
+    for item in PyIterator::from_object(frames)? {
+        let item = item?;
+        if item.getattr("cell").is_err() || item.getattr("atoms").is_err() {
+            return Err(PyTypeError::new_err(
+                "frames must be an iterable of readcon.ConFrame objects",
+            ));
+        }
+        rust_frames.push(conframe_from_py(py, &item)?);
+    }
+    Ok(rust_frames)
 }
 
 fn units_from_pydict(units: Option<Bound<'_, PyDict>>) -> PyResult<Option<serde_json::Value>> {
