@@ -167,4 +167,6 @@ C++ =readcon_db::Corpus::pack_frame= (~buf == NULL~ size query) / =pack_frames= 
 :PROPERTIES:
 :CUSTOM_ID: cooked-soa-rcso
 :END:
-See =docs/orgmode/cooked-soa.org=. Tier is opt-in; CON text remains authority. Bindings expose cook / delete / has-valid / positions / forces / velocities.
+See @@rst::doc:`/cooked-soa`@@.
+Tier is opt-in; the =.con= text remains authority.
+Bindings expose cook / delete / has-valid / positions / forces / velocities.

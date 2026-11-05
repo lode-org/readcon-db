@@ -52,4 +52,6 @@ H5MD interchange and caller units: =db_append_units=, =db_set_units=, =db_h5md_t
 :PROPERTIES:
 :CUSTOM_ID: cooked-soa-rcso
 :END:
-See =docs/orgmode/cooked-soa.org=. Tier is opt-in; CON text remains authority. Fortran exposes cook / delete / has-valid / =db_get_positions= / =db_get_forces= / =db_get_velocities=.
+See @@rst::doc:`/cooked-soa`@@.
+Tier is opt-in; the =.con= text remains authority.
+Fortran exposes cook / delete / has-valid / =db_get_positions= / =db_get_forces= / =db_get_velocities=.

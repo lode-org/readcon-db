@@ -20,9 +20,11 @@
 
 * readcon-db
 
-Rare-event codes already checkpoint on CON. This crate keeps thousands of
-those frames in one mmap tree: ingest CON text, filter without loading every
-atom, decode a hit with [[https://lode-org.github.io/readcon-core/][readcon-core]].
+Rare-event codes already checkpoint frames in the plain-text structure format (CON).
+This crate keeps thousands of those frames in one memory-mapped tree: ingest CON text, filter without loading every atom, decode a hit with [[https://lode-org.github.io/readcon-core/][readcon-core]].
+
+Ask questions and report bugs on the [[https://github.com/lode-org/readcon-db/issues][GitHub issue tracker]].
+Report a security problem by email instead, as =SECURITY.md= in the repository describes.
 
 #+BEGIN_EXPORT rst
 :doc:`/tutorials/getting-started` · :doc:`/tutorials/tutorial` · :doc:`/howto/howto` · :doc:`/explanation/architecture` ·
@@ -44,11 +46,11 @@ atom, decode a hit with [[https://lode-org.github.io/readcon-core/][readcon-core
 .. grid:: 1 1 2 2
    :gutter: 2
 
-   .. grid-item-card:: Tutorial: first corpus
+   .. grid-item-card:: Tutorial: Your first corpus
       :link: tutorials/tutorial
       :link-type: doc
 
-      Open a directory, ingest a fixture, select copper, print the hash.
+      Ingest three files, filter them by element and energy, and find a repeated trajectory.
 
    .. grid-item-card:: How-to by language
       :link: howto/howto
@@ -97,6 +99,7 @@ Site map
    explanation/overview
    explanation/architecture
    explanation/design
+   cooked-soa
 
 .. toctree::
    :maxdepth: 1

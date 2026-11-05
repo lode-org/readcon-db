@@ -106,6 +106,11 @@ Foreign trajectories: **`readcon.read_chemfiles("traj.xyz")` → frames → inge
 
 Full ABI table, logo, Sphinx docs, and site: see `docs/`, `website/`, `assets/logo/`, `CHANGELOG.md`. Fortran module notes: `fortran/README.md`, `fortran/ReadConDb/`.
 
+## Questions and bug reports
+
+Ask questions and report bugs on the [GitHub issue tracker](https://github.com/lode-org/readcon-db/issues).
+Report a security problem by email instead, as [`SECURITY.md`](SECURITY.md) describes.
+
 ## License
 
 MIT

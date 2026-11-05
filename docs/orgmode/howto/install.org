@@ -14,7 +14,7 @@ cargo add readcon-db
 cargo install readcon-db --locked
 #+end_src
 
-Requires [[https://crates.io/crates/readcon-core][readcon-core]] *^0.14* (pulled automatically).
+Pulls in [[https://crates.io/crates/readcon-core][readcon-core]] at the version requirement ~{{{readcon-core-req}}}~ from =Cargo.toml=.
 
 ** Python (PyPI)
 :PROPERTIES:
@@ -38,7 +38,8 @@ cargo test --locked
 cargo build --release   # libreadcon_db + CLI readcon-db
 #+end_src
 
-=readcon-core= comes from crates.io (=^0.14=). To develop against a local core tree, add an *untracked* =.cargo/config.toml=:
+=readcon-core= comes from crates.io (~{{{readcon-core-req}}}~).
+Add an *untracked* =.cargo/config.toml= with the patch below to build against a local core tree.
 
 #+begin_src toml
 [patch.crates-io]
@@ -64,7 +65,7 @@ CMake:
 include(FetchContent)
 FetchContent_Declare(
   readcon-db
-  URL https://github.com/lode-org/readcon-db/releases/download/v0.1.8/readcon-db-cxx-0.1.8.tar.gz
+  URL https://github.com/lode-org/readcon-db/releases/download/v{{{readcon-db-version}}}/readcon-db-cxx-{{{readcon-db-version}}}.tar.gz
   URL_HASH SHA256=<sha256 from the .sha256 sidecar on the GitHub Release>
 )
 FetchContent_MakeAvailable(readcon-db)
@@ -91,7 +92,7 @@ A process that uses both C APIs must link the *shared* objects (=libreadcon_db.s
 Unpack =readcon-db-clib-$VERSION-$target.tar.gz= from the GitHub Release, then =export READCON_DB_LIB= / =PKG_CONFIG_PATH=. Attach assets to an already-published tag with Actions → *C ABI library tarball* → ~tag=vX.Y.Z~.
 
 #+begin_src sh
-VER=0.1.8
+VER={{{readcon-db-version}}}
 TARGET=x86_64-unknown-linux-gnu
 curl -fsSL -O "https://github.com/lode-org/readcon-db/releases/download/v${VER}/readcon-db-clib-${VER}-${TARGET}.tar.gz"
 tar -xzf "readcon-db-clib-${VER}-${TARGET}.tar.gz"
@@ -137,7 +138,8 @@ Campaign shard/drain/join is the =readcon-db= CLI (in =bin/= of the clib tarball
 pixi r -e docs docbld
 #+end_src
 
-=pixi.lock= pins Sphinx, Furo, and MyST to the same set Pages publishes. Refresh with =pixi lock= after editing =pixi.toml= =[feature.docs]=.
+=pixi.lock= pins Sphinx, Shibuya, and Markedly Structured Text (MyST) to the same set Pages publishes.
+Refresh with =pixi lock= after editing =pixi.toml= =[feature.docs]=.
 
 ** Static marketing page
 :PROPERTIES:

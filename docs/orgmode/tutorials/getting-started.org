@@ -17,7 +17,8 @@
 :PROPERTIES:
 :CUSTOM_ID: install
 :END:
-Pick *one* language. Pins match this tree (=0.1.8=). Core is =readcon-core= 0.16.2 (pulled automatically for Rust).
+Pick *one* language.
+This release is ={{{readcon-db-version}}}=, and it requires =readcon-core= ~{{{readcon-core-req}}}~ (pulled automatically for Rust).
 
 | Package        | Install                                                     | Destination                                                    |
 |----------------+-------------------------------------------------------------+----------------------------------------------------------------|

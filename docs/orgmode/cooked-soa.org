@@ -1,13 +1,17 @@
-#+title: Cooked SoA tier (RCSO / frames_soa)
-#+options: toc:2
+#+OPTIONS: toc:nil num:nil
 
-* Contract
+* Cooked structure-of-arrays (SoA) tier (=RCSO= / =frames_soa=)
+:PROPERTIES:
+:CUSTOM_ID: cooked-soa
+:END:
+
+** Contract
 
 RCSO is *non-authoritative*. CON text in =frames= is the sole authority
 for hash, dedup, join/split, =reindex=, and CON export. Cooked numerics
 in =frames_soa= are derived POD only; they never replace the text tier.
 
-* Summary
+** Summary
 
 =readcon-db= stores two tiers per frame key:
 
@@ -18,11 +22,11 @@ in =frames_soa= are derived POD only; they never replace the text tier.
 
 *Default ingest does not cook.* Call =cook_frame= / =recook_all= / CLI =cook-frame= / =recook-all= (or =append_trajectory_path_cook(..., true)= in Rust) to populate RCSO. =delete_cooked_soa= drops only the cooked tier; CON text and indexes stay.
 
-* Why CON text is still required
+** Why the =.con= text is still required
 
 RCSO is *not* fully equivalent to CON: it omits element symbols, masses, cell/angles, constraints, JSON metadata, and exact on-disk bytes. Those are required for xxHash3 dedup, symbol/formula indexes, =reindex=, join/split, and CON export. Do *not* omit =frames= when cooked exists.
 
-* Numeric hot path
+** Numeric hot path
 
 =get_positions= / =get_forces= / =get_velocities= (Rust, Python, C
 =rkrdb_get_positions= / =rkrdb_get_forces= / =rkrdb_get_velocities=, CLI
@@ -31,7 +35,7 @@ Missing or corrupt cooked falls back to parsing CON text. Authority APIs
 (=frame_hash=, =find_by_hash=, =get_frame_text=, =reindex=, shard join)
 never read =frames_soa=.
 
-* Language surfaces
+** Language surfaces
 
 | Surface | Cook / delete / has-valid | Positions / forces / velocities |
 |---------+---------------------------+--------------------------------|
@@ -41,7 +45,7 @@ never read =frames_soa=.
 | Fortran | =db_cook_frame=, =db_delete_cooked=, =db_has_valid_cooked=, =db_recook_all= | =db_get_positions=, =db_get_forces=, =db_get_velocities= |
 | CLI | =cook-frame=, =delete-cooked=, =recook-all= | =positions= |
 
-* See also
+** See also
 
-- Internal design notes: =docs/orgmode/explanation/design.org= (engineer-facing; mirrors this contract)
-- Architecture Sphinx page (synced summary from this org)
+- Internal design notes: @@rst::doc:`/explanation/design`@@ (engineer-facing; mirrors this contract)
+- Architecture summary: @@rst::doc:`/explanation/architecture`@@

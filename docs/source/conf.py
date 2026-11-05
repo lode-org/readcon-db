@@ -37,7 +37,7 @@ html_context = {
     "source_user": "lode-org",
     "source_repo": "readcon-db",
     "source_version": "main",
-    "source_docs_path": "/docs/source/",
+    "source_docs_path": "/docs/orgmode/",
 }
 
 html_sidebars = {
@@ -149,5 +149,12 @@ intersphinx_mapping = {
 intersphinx_timeout = 5
 
 
+def _edit_org_source(app, pagename, templatename, context, doctree):
+    # The rst under docs/source is generated and untracked; edits belong in the Org file.
+    if context.get("page_source_suffix"):
+        context["page_source_suffix"] = ".org"
+
+
 def setup(app):
     app.add_css_file("custom.css")
+    app.connect("html-page-context", _edit_org_source)

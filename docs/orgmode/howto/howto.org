@@ -63,12 +63,21 @@ text = db.get_frame_text(keys[0])
 #+begin_src C
 #include "readcon-db.h"
 
-RkrdbCorpus *db = rkrdb_open("/tmp/corpus");
-rkrdb_append_trajectory_path(db, 1, "run.con");
-/* Select via rkrdb_select_* / rkrdb_select_meta; see api_c */
-rkrdb_close(db);
+size_t id;
+uint32_t n_frames;
+rkrdb_open("/tmp/corpus", &id);
+rkrdb_append_trajectory(id, 1, "run.con", &n_frames);
+/* traj_id -1 matches every trajectory; limit 0 means no limit */
+rkrdb_select_basic(id, -1, "Cu", 0, UINT32_MAX, 0);
+for (int i = 0; i < rkrdb_result_count(id); i++) {
+    uint64_t traj;
+    uint32_t frame;
+    rkrdb_result_key(id, i, &traj, &frame);
+}
+rkrdb_close(id);
 #+end_src
 
+Each call returns =RKRDB_OK= on success, and =rkrdb_last_error= copies the message of the last failure into a caller buffer.
 C++ RAII: =readcon_db::Corpus=. MPI pack/bcast takes the *caller* communicator (=readcon-db-mpi.h=). The library does not call =MPI_Init=. Details: @@rst::doc:`/reference/c`@@.
 
 ** Fortran
