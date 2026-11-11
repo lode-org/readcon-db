@@ -1211,6 +1211,23 @@ impl ConCorpus {
         self.commit_prepared(traj_id, &mut prepared, source, false, self.compress_on())
     }
 
+    /// Append CON text onto an existing trajectory, or create it when it is absent.
+    ///
+    /// Callers that stream a long trajectory pass one chunk at a time so the
+    /// prepared index rows for the whole file are not resident together.
+    pub fn extend_trajectory_str(
+        &self,
+        traj_id: TrajId,
+        file_contents: &str,
+        source: impl Into<String>,
+    ) -> Result<u32> {
+        let mut frames = Vec::new();
+        for item in ConFrameIterator::new(file_contents) {
+            frames.push(item.map_err(|e| Error::Parse(e.to_string()))?);
+        }
+        self.extend_trajectory_frames(traj_id, &frames, source)
+    }
+
     /// Ingest already-parsed frames (chemfiles / builder path). Serialize in prepare, not under write_txn.
     pub fn append_trajectory_frames(
         &self,

@@ -1,6 +1,8 @@
-use pyo3::exceptions::PyRuntimeError;
+use std::sync::Arc;
+
+use pyo3::exceptions::{PyIndexError, PyRuntimeError};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList};
 
 use crate::corpus::ConCorpus;
 use crate::keys::{ContentHash, FrameKey};
@@ -271,7 +273,11 @@ impl PyConCorpus {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Ingest already-parsed `readcon` frames (serialized via write_con_string).
+    /// Ingest already-parsed `readcon` frames.
+    ///
+    /// Frames are serialized in groups of 64. Each group is dropped before
+    /// the next group is converted, so a long trajectory does not allocate a
+    /// second copy of every frame.
     #[pyo3(signature = (traj_id, frames, source="memory"))]
     fn append_trajectory_frames(
         &self,
@@ -283,11 +289,61 @@ impl PyConCorpus {
         let readcon = py
             .import("readcon")
             .map_err(|e| PyRuntimeError::new_err(format!("readcon required: {e}")))?;
-        let text: String = readcon
-            .call_method1("write_con_string", (frames,))
-            .and_then(|v| v.extract())
-            .map_err(|e| PyRuntimeError::new_err(format!("write_con_string: {e}")))?;
-        self.append_trajectory_str(traj_id, &text, source)
+        let mut total = 0u32;
+        let mut started = false;
+        let flush = |text: &str, started: bool| -> PyResult<u32> {
+            let result = if started {
+                self.inner.extend_trajectory_str(traj_id, text, source)
+            } else {
+                self.inner.append_trajectory_str(traj_id, text, source)
+            };
+            result.map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        };
+        // A sequence is serialized in place, 64 frames at a time. Iterating a
+        // `read_con` result builds a Python frame per index and keeps it.
+        if let Ok(n) = frames.len() {
+            if n == 0 {
+                return Ok(0);
+            }
+            let mut start = 0usize;
+            while start < n {
+                let stop = (start + 64).min(n);
+                let kwargs = PyDict::new(py);
+                kwargs.set_item("start", start)?;
+                kwargs.set_item("stop", stop)?;
+                let text: String = readcon
+                    .call_method("write_con_string", (frames.clone(),), Some(&kwargs))
+                    .and_then(|v| v.extract())
+                    .map_err(|e| PyRuntimeError::new_err(format!("write_con_string: {e}")))?;
+                total = flush(&text, started)?;
+                started = true;
+                start = stop;
+            }
+            return Ok(total);
+        }
+        let mut chunk: Vec<Py<PyAny>> = Vec::new();
+        for item in frames.try_iter()? {
+            chunk.push(item?.unbind());
+            if chunk.len() == 64 {
+                let list = PyList::new(py, chunk.iter().map(|item| item.bind(py)))?;
+                let text: String = readcon
+                    .call_method1("write_con_string", (list,))
+                    .and_then(|v| v.extract())
+                    .map_err(|e| PyRuntimeError::new_err(format!("write_con_string: {e}")))?;
+                total = flush(&text, started)?;
+                started = true;
+                chunk.clear();
+            }
+        }
+        if !chunk.is_empty() {
+            let list = PyList::new(py, chunk.iter().map(|item| item.bind(py)))?;
+            let text: String = readcon
+                .call_method1("write_con_string", (list,))
+                .and_then(|v| v.extract())
+                .map_err(|e| PyRuntimeError::new_err(format!("write_con_string: {e}")))?;
+            total = flush(&text, started)?;
+        }
+        Ok(total)
     }
 
     /// Write caller units onto every frame of `traj_id` (canonical names in CON text).
@@ -552,17 +608,29 @@ impl PyConCorpus {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Random-access parse: stored blob → `readcon.ConFrame`.
-    fn get_frame<'py>(
-        &self,
-        py: Python<'py>,
-        traj_id: u64,
-        frame_idx: u32,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let text = self.get_frame_text(traj_id, frame_idx)?;
-        let readcon = py.import("readcon")?;
-        let frames = readcon.call_method1("read_con_string", (text,))?;
-        frames.get_item(0)
+    /// Random-access parse of one stored frame.
+    ///
+    /// The frame is parsed in Rust. `atoms[i]` materialises that atom only,
+    /// and `xyz` is the coordinate rows. This does not build a Python atom
+    /// for every site and does not call `read_con_string`.
+    fn get_frame(&self, py: Python<'_>, traj_id: u64, frame_idx: u32) -> PyResult<StoredFrame> {
+        let frame = py
+            .detach(|| {
+                self.inner
+                    .get_frame(crate::keys::FrameKey { traj_id, frame_idx })
+                    .map_err(|e| e.to_string())
+            })
+            .map_err(PyRuntimeError::new_err)?;
+        let rows = frame
+            .atom_data
+            .iter()
+            .map(|atom| (atom.symbol.to_string(), atom.x, atom.y, atom.z))
+            .collect();
+        Ok(StoredFrame {
+            rows: Arc::new(rows),
+            cell: frame.header.boxl,
+            angles: frame.header.angles,
+        })
     }
 
     /// Materialize all frame blobs for `traj_id` in one LMDB read txn (full extract).
@@ -735,9 +803,87 @@ fn canonicalize_unit(expr: &str) -> PyResult<String> {
     crate::units_canon::canonicalize_unit(expr).map_err(|e| PyRuntimeError::new_err(e.to_string()))
 }
 
+#[pyclass(name = "StoredAtom")]
+struct StoredAtom {
+    #[pyo3(get)]
+    symbol: String,
+    #[pyo3(get)]
+    x: f64,
+    #[pyo3(get)]
+    y: f64,
+    #[pyo3(get)]
+    z: f64,
+}
+
+#[pyclass]
+struct StoredAtoms {
+    rows: Arc<Vec<(String, f64, f64, f64)>>,
+}
+
+#[pymethods]
+impl StoredAtoms {
+    fn __len__(&self) -> usize {
+        self.rows.len()
+    }
+
+    fn __getitem__(&self, index: isize) -> PyResult<StoredAtom> {
+        let n = self.rows.len() as isize;
+        let resolved = if index < 0 { n + index } else { index };
+        if resolved < 0 || resolved >= n {
+            return Err(PyIndexError::new_err("atom index out of range"));
+        }
+        let (symbol, x, y, z) = &self.rows[resolved as usize];
+        Ok(StoredAtom {
+            symbol: symbol.clone(),
+            x: *x,
+            y: *y,
+            z: *z,
+        })
+    }
+}
+
+/// One stored frame. Coordinates live in `xyz`. `atoms[i]` builds that atom only.
+#[pyclass(name = "StoredFrame")]
+struct StoredFrame {
+    rows: Arc<Vec<(String, f64, f64, f64)>>,
+    cell: [f64; 3],
+    angles: [f64; 3],
+}
+
+#[pymethods]
+impl StoredFrame {
+    #[getter]
+    fn xyz(&self) -> Vec<(f64, f64, f64)> {
+        self.rows.iter().map(|(_, x, y, z)| (*x, *y, *z)).collect()
+    }
+
+    #[getter]
+    fn atoms(&self) -> StoredAtoms {
+        StoredAtoms {
+            rows: Arc::clone(&self.rows),
+        }
+    }
+
+    #[getter]
+    fn cell(&self) -> [f64; 3] {
+        self.cell
+    }
+
+    #[getter]
+    fn angles(&self) -> [f64; 3] {
+        self.angles
+    }
+
+    fn __len__(&self) -> usize {
+        self.rows.len()
+    }
+}
+
 #[pymodule]
 fn readcon_db(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyConCorpus>()?;
+    m.add_class::<StoredFrame>()?;
+    m.add_class::<StoredAtom>()?;
     m.add_function(wrap_pyfunction!(bcast_packed_frame, m)?)?;
     m.add_function(wrap_pyfunction!(bcast_packed_frames, m)?)?;
     m.add_function(wrap_pyfunction!(unit_conversion_factor, m)?)?;
