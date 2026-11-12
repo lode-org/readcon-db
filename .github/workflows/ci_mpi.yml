@@ -41,7 +41,11 @@ jobs:
               mpich_4.2.0-5.1_amd64.deb \
               libmpich-dev_4.2.0-5.1_amd64.deb
             do
-              curl -fsSL -o "$d/$f" "https://launchpad.net/ubuntu/+archive/primary/+files/$f"
+              # Launchpad answers 503 under load (curl exit 22). The file is
+              # still the Hydra build; retry the transient archive failure.
+              curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+                -o "$d/$f" \
+                "https://launchpad.net/ubuntu/+archive/primary/+files/$f"
             done
             sudo dpkg -i \
               "$d/libmpich12_4.2.0-5.1_amd64.deb" \
