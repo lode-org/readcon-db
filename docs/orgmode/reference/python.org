@@ -32,6 +32,9 @@ keys = db.select(
 )
 h = db.frame_hash(1, 0)          # bytes(16)
 assert db.find_by_hash(h) == (1, 0)
+db.index_canonical_identity()
+hits = db.find_by_atom_order_path("product.con")
+# hits[0].permutation[i] is the query index of stored atom i
 text = db.get_frame_text(1, 0)
 raw = ConCorpus.xxh3_128(b"blob")
 frame = db.get_frame(1, 0)       # StoredFrame, not a readcon.ConFrame

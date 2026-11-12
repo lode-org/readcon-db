@@ -35,6 +35,8 @@ Environment (Heed / LMDB)
 ├── idx_formula     : `Cu:2|H:2` ‖ 0xFF ‖ FrameKey
 ├── idx_topo        : topology-key utf-8 ‖ 0xFF ‖ FrameKey  # optional; empty if missing on readonly
 ├── topo_by_frame   : FrameKey → topology key               # optional; authority for matching reindex
+├── idx_canon       : version ‖ canonical xxh3-128 ‖ FrameKey  # optional; atom-id order
+├── canon_by_frame  : FrameKey → version ‖ canonical hash ‖ content hash
 ├── idx_flags       : (flag_id ‖ FrameKey) → ()    # forces / velocities / has_energy
 ├── frame_by_hash   : xxh3-128 → FrameKey (first wins)
 ├── frames_soa      : FrameKey → RCSO cooked numerics (optional, derived)
@@ -42,6 +44,8 @@ Environment (Heed / LMDB)
 #+end_example
 
 =idx_topo= and =topo_by_frame= are created on write-open. A readonly open of an older corpus that lacks them treats the topology index as empty.
+
+=idx_canon= and =canon_by_frame= are created on write-open and stay empty until =index_canonical_identity=. The version byte is 1: atoms in increasing =atom_id= order, then xxHash3-128 of the canonical CON writer bytes. The content hash in =hash_by_frame= is still the stored CON bytes. A readonly open of an older corpus that lacks the two databases has no canonical index. See @@rst::doc:`/howto/atom-order`@@.
 
 =TrajMeta= may record =topo_cutoff=, =topo_graph=, =topo_hops=, and =topo_method= after =annotate_topology=. Those fields have serde defaults so old JSON still loads. Ingest and extend preserve them.
 

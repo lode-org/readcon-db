@@ -67,6 +67,19 @@ readcon-db find-by-topology <corpus_dir> <file.con>
 
 Missing seams: nonzero exit and a stderr message that names =seams fingerprint=. How-to: @@rst::doc:`/howto/topology`@@.
 
+** Atom-id order
+:PROPERTIES:
+:CUSTOM_ID: atom-id-order
+:END:
+=frame_hash= stays the stored CON bytes. =index_canonical_identity= records a second hash, version 1, after reordering rows into increasing =atom_id=. =find_by_atom_order_path= returns each stored hit and the permutation from that stored order to the query.
+
+#+begin_src text
+readcon-db index-canonical <corpus_dir>
+readcon-db find-by-atom-order <corpus_dir> <file.con>
+#+end_src
+
+How-to: @@rst::doc:`/howto/atom-order`@@.
+
 #+begin_src rust
 use readcon_db::{
     canonicalize_unit, join_drained_roots, ConCorpus, ShardedConCorpus,

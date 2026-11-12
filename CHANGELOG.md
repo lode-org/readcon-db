@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+#### Features
+- (**identity**) opt-in canonical hash for frames that differ by atom-id order
+#### Build system
+- (**reader**) require readcon-core 0.21.0 for atom-id correspondence
+
 ## v0.2.1 - 2026-11-11
 #### Bug Fixes
 - stream corpus append and parse one stored frame - (623ff00) - *HaoZeke*

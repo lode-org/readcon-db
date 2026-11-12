@@ -88,6 +88,7 @@ Site map
    howto/streaming
    howto/migration
    howto/topology
+   howto/atom-order
    howto/install
    howto/campaign
    howto/workflows

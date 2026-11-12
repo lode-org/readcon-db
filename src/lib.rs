@@ -8,6 +8,7 @@
 #![deny(missing_docs)]
 
 pub mod archive;
+mod canonical;
 mod cooked_soa;
 mod corpus;
 mod error;
@@ -28,6 +29,10 @@ mod topology;
 mod units_canon;
 
 pub use archive::ObservationArchive;
+pub use canonical::{
+    atom_order_permutation, canonical_identity, AtomOrderHit, CanonicalIdentity,
+    CANONICAL_IDENTITY_VERSION,
+};
 pub use cooked_soa::CookedSoa;
 pub use corpus::{frame_fmax, ConCorpus, TrajMeta};
 pub use error::{Error, Result};

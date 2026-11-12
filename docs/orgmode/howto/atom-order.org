@@ -1,0 +1,87 @@
+#+OPTIONS: toc:nil num:nil
+
+* How-to: atom-id identity
+:PROPERTIES:
+:CUSTOM_ID: how-to-atom-id-identity
+:END:
+The content hash is xxHash3-128 of the stored CON bytes. CON writes one element block per run, in the order the elements were first seen, so the same atoms with the same =atom_id= values are a different hash when a later file emits oxygen before carbon. Column 5 is that id. It stays with the atom.
+
+The canonical identity is optional. It reorders the rows into increasing =atom_id= and hashes that text. =hash_by_frame= and =frame_by_hash= are not modified, and a corpus that never runs the indexer has no new keys.
+
+** What is stored
+:PROPERTIES:
+:CUSTOM_ID: what-is-stored
+:END:
+Version 1 is the byte in front of the hash.
+
+- =canon_by_frame= maps a 12-byte =FrameKey= to the version byte, the 16-byte canonical hash, and the 16-byte content hash taken when the frame was indexed.
+- =idx_canon= maps version byte, canonical hash, and =FrameKey= to an empty value. A prefix scan on the version and the hash returns every stored frame with that identity.
+
+The canonical bytes are the CON writer in canonical mode: round-trip floats, metadata keys sorted. The row order is =reorder_like= into increasing =atom_id=, with the strict check (symbol, mass within 1e-8, and fixed mask). A duplicate =atom_id= is an error before anything is hashed. A readonly open of an older corpus that lacks these two databases has no canonical index.
+
+** Index a corpus
+:PROPERTIES:
+:CUSTOM_ID: index-a-corpus
+:END:
+#+begin_src sh
+readcon-db ingest /tmp/corpus reactant.con
+readcon-db index-canonical /tmp/corpus
+#+end_src
+
+Rust:
+
+#+begin_src rust
+use readcon_db::ConCorpus;
+
+let db = ConCorpus::open("/tmp/corpus")?;
+db.append_trajectory_path(1, "reactant.con")?;
+db.index_canonical_identity()?;
+#+end_src
+
+Python:
+
+#+begin_src python
+db.index_canonical_identity()
+#+end_src
+
+Ingest does not fill the index. =set_trajectory_units=, or any other rewrite of the stored CON text, leaves the index stale. Run =index-canonical= again. =reindex= rebuilds the content-hash indexes and leaves this one in place.
+
+** Look up a reordered frame
+:PROPERTIES:
+:CUSTOM_ID: look-up-a-reordered-frame
+:END:
+#+begin_src sh
+readcon-db find-by-atom-order /tmp/corpus product.con
+#+end_src
+
+A hit is one line:
+
+#+begin_src text
+query 0: traj=1 frame=0 permutation=1,2,0
+#+end_src
+
+=query= is the zero-based frame in the file. =permutation[i]= is the index in that query frame of the atom whose =atom_id= equals stored atom =i=. That is =atom_id_permutation= with the stored frame as the reference. No hit prints =query 0: 0 keys=.
+
+Rust and Python return the same permutation as a list of indexes:
+
+#+begin_src rust
+let hits = db.find_by_atom_order_path("product.con")?;
+let perm = &hits[0].permutation;
+#+end_src
+
+#+begin_src python
+hits = db.find_by_atom_order_path("product.con")
+perm = hits[0].permutation
+#+end_src
+
+=find_by_atom_order= takes CON text instead of a path. =frame_canonical_identity(traj_id, frame_idx)= recomputes the version and the hash from the stored text and does not read the index.
+
+A coordinate that moved, including one stored a cell away, is a different canonical hash. This lookup does not wrap displacements.
+
+** Errors
+:PROPERTIES:
+:CUSTOM_ID: errors
+:END:
+Duplicate ids, an id present on only one of the two frames, and a symbol mismatch fail with a message that names the =atom_id=. The strict check also names a mass or fixed-mask mismatch. A corpus with frames and an empty canonical index, a count that no longer matches the frame count, or a stored content hash that no longer matches the indexed one, fails with a message that names =index-canonical=.
+
+The content hash is unchanged by a successful index. =find_by_hash= and =Select::exact_hash= still mean byte-for-byte CON text.

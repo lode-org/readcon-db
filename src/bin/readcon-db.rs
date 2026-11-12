@@ -21,6 +21,8 @@
 //! readcon-db reindex <corpus_dir>
 //! readcon-db annotate-topology <corpus_dir> --cutoff A [--graph G] [--hops N] [--seams PATH]
 //! readcon-db find-by-topology <corpus_dir> <file.con>
+//! readcon-db index-canonical <corpus_dir>
+//! readcon-db find-by-atom-order <corpus_dir> <file.con>
 //! readcon-db hash-file <file.con>
 //! readcon-db migrate <corpus_dir>
 //! ```
@@ -53,6 +55,8 @@ fn usage() -> ExitCode {
   readcon-db reindex <corpus_dir>
   readcon-db annotate-topology <corpus_dir> --cutoff A [--graph G] [--hops N] [--seams PATH]
   readcon-db find-by-topology <corpus_dir> <file.con>
+  readcon-db index-canonical <corpus_dir>
+  readcon-db find-by-atom-order <corpus_dir> <file.con>
   readcon-db shard-init <root> [--shards N]
   readcon-db shard-ingest <root> --shard S --start-id T [--units JSON] [--no-compress] <file.con>...
   readcon-db shard-select <root> [--symbol S] ...
@@ -232,6 +236,33 @@ fn main() -> ExitCode {
                 }
                 if keys.len() > 20 {
                     println!("  ...");
+                }
+            }
+            "index-canonical" => {
+                let corpus = args.first().ok_or("corpus_dir")?.clone();
+                let db = ConCorpus::open_existing(&corpus)?;
+                let n = db.index_canonical_identity()?;
+                println!("indexed {n} frames");
+            }
+            "find-by-atom-order" => {
+                let corpus = args.first().ok_or("corpus_dir")?.clone();
+                let file = args.get(1).ok_or("file.con")?.clone();
+                let db = ConCorpus::open_readonly(&corpus)?;
+                let hits = db.find_by_atom_order_path(&file)?;
+                if hits.is_empty() {
+                    println!("query 0: 0 keys");
+                }
+                for hit in &hits {
+                    let perm = hit
+                        .permutation
+                        .iter()
+                        .map(|i| i.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    println!(
+                        "query {}: traj={} frame={} permutation={perm}",
+                        hit.query_index, hit.key.traj_id, hit.key.frame_idx
+                    );
                 }
             }
             "select" | "dedup-export" => {

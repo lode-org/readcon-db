@@ -4,6 +4,7 @@ use pyo3::exceptions::{PyIndexError, PyRuntimeError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
+use crate::canonical::AtomOrderHit;
 use crate::corpus::ConCorpus;
 use crate::keys::{ContentHash, FrameKey};
 use crate::select::Select;
@@ -605,6 +606,45 @@ impl PyConCorpus {
         Ok(h.to_bytes().to_vec())
     }
 
+    /// Build the atom-id canonical index. Returns the number of frames indexed.
+    ///
+    /// The xxHash3 content hash is unchanged. Run this again after the stored
+    /// CON text is rewritten.
+    fn index_canonical_identity(&self) -> PyResult<u32> {
+        self.inner
+            .index_canonical_identity()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Recomputed canonical identity of one stored frame: `(version, hash)`.
+    ///
+    /// `hash` is 16 bytes, little-endian. This does not read the index.
+    fn frame_canonical_identity(&self, traj_id: u64, frame_idx: u32) -> PyResult<(u8, Vec<u8>)> {
+        let ident = self
+            .inner
+            .frame_canonical_identity(FrameKey { traj_id, frame_idx })
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok((ident.version, ident.hash.to_bytes().to_vec()))
+    }
+
+    /// Stored frames that match `text` up to atom-id row order.
+    fn find_by_atom_order(&self, text: &str) -> PyResult<Vec<PyAtomOrderHit>> {
+        let hits = self
+            .inner
+            .find_by_atom_order_text(text)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(hits.into_iter().map(PyAtomOrderHit::from_hit).collect())
+    }
+
+    /// [`find_by_atom_order`](Self::find_by_atom_order) for a CON path.
+    fn find_by_atom_order_path(&self, path: &str) -> PyResult<Vec<PyAtomOrderHit>> {
+        let hits = self
+            .inner
+            .find_by_atom_order_path(path)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(hits.into_iter().map(PyAtomOrderHit::from_hit).collect())
+    }
+
     /// First `(traj_id, frame_idx)` stored under this 16-byte hash.
     fn find_by_hash(&self, hash: Vec<u8>) -> PyResult<Option<(u64, u32)>> {
         if hash.len() != 16 {
@@ -870,6 +910,56 @@ impl StoredAtoms {
     }
 }
 
+/// A stored frame that matches a query up to atom-id row order.
+///
+/// `permutation[i]` is the index in the query of the atom whose `atom_id`
+/// equals stored atom `i`.
+#[pyclass(name = "AtomOrderHit")]
+struct PyAtomOrderHit {
+    query_index: u32,
+    traj_id: u64,
+    frame_idx: u32,
+    permutation: Vec<usize>,
+}
+
+#[pymethods]
+impl PyAtomOrderHit {
+    #[getter]
+    /// Zero-based index of the query frame in the text or file.
+    fn query_index(&self) -> u32 {
+        self.query_index
+    }
+
+    #[getter]
+    /// Trajectory id of the stored frame.
+    fn traj_id(&self) -> u64 {
+        self.traj_id
+    }
+
+    #[getter]
+    /// Frame index of the stored frame.
+    fn frame_idx(&self) -> u32 {
+        self.frame_idx
+    }
+
+    #[getter]
+    /// Index in the query of each stored atom, in stored order.
+    fn permutation(&self) -> Vec<usize> {
+        self.permutation.clone()
+    }
+}
+
+impl PyAtomOrderHit {
+    fn from_hit(hit: AtomOrderHit) -> Self {
+        Self {
+            query_index: hit.query_index,
+            traj_id: hit.key.traj_id,
+            frame_idx: hit.key.frame_idx,
+            permutation: hit.permutation,
+        }
+    }
+}
+
 /// One stored frame.
 ///
 /// `xyz` is every coordinate row. `atoms[i]` builds that atom only.
@@ -921,6 +1011,7 @@ impl StoredFrame {
 #[pymodule]
 fn readcon_db(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyConCorpus>()?;
+    m.add_class::<PyAtomOrderHit>()?;
     m.add_class::<StoredFrame>()?;
     m.add_class::<StoredAtom>()?;
     m.add_class::<StoredAtoms>()?;

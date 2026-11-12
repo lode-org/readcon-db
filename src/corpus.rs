@@ -191,6 +191,11 @@ pub struct ConCorpus {
     idx_topo: Option<Database<Bytes, Unit>>,
     /// Optional FrameKey → HEX. Authority for a matching `reindex` rebuild.
     topo_by_frame: Option<Database<Bytes, Bytes>>,
+    /// Optional version ‖ canonical hash ‖ FrameKey. Missing on a readonly
+    /// open of a corpus that was never indexed.
+    idx_canon: Option<Database<Bytes, Unit>>,
+    /// Optional FrameKey → version ‖ canonical hash ‖ content hash.
+    canon_by_frame: Option<Database<Bytes, Bytes>>,
 }
 
 fn frame_has_forces(frame: &ConFrame) -> bool {
@@ -241,7 +246,7 @@ fn ingest_thread_count() -> usize {
 
 /// A read transaction plus the shared lock that keeps a resize from starting
 /// while it is open. `txn` is declared first so it is dropped first.
-struct HeldRead<'a> {
+pub(crate) struct HeldRead<'a> {
     txn: heed::RoTxn<'a>,
     _guard: RwLockReadGuard<'a, ()>,
 }
@@ -260,6 +265,15 @@ fn heed_map_full(err: &heed::Error) -> bool {
 
 fn is_map_full(err: &Error) -> bool {
     matches!(err, Error::Heed(e) if heed_map_full(e))
+}
+
+fn count_entries(db: Database<Bytes, Bytes>, txn: &heed::RoTxn<'_>) -> Result<usize> {
+    let mut n = 0usize;
+    for item in db.iter(txn)? {
+        let _ = item?;
+        n += 1;
+    }
+    Ok(n)
 }
 
 fn prepared_bytes(prepared: &[PreparedIndexPuts]) -> usize {
@@ -309,7 +323,7 @@ impl ConCorpus {
 
     /// Read transaction. The guard is held until the transaction is dropped,
     /// so a resize (which takes the write side) waits for it.
-    fn read_txn(&self) -> Result<HeldRead<'_>> {
+    pub(crate) fn read_txn(&self) -> Result<HeldRead<'_>> {
         let guard = self.read_guard();
         let txn = self.env.read_txn()?;
         Ok(HeldRead { txn, _guard: guard })
@@ -339,7 +353,7 @@ impl ConCorpus {
     /// Run `body` in one write transaction. On `MDB_MAP_FULL`, abort it, grow
     /// the map, and retry the whole transaction up to [`MAP_GROW_RETRIES`]
     /// times. `input_bytes` is the payload size used when choosing the new map.
-    fn with_write<T>(
+    pub(crate) fn with_write<T>(
         &self,
         input_bytes: usize,
         mut body: impl FnMut(&mut RwTxn<'_>) -> Result<T>,
@@ -500,6 +514,8 @@ impl ConCorpus {
             // Older corpora lack these; treat a missing index as empty.
             let idx_topo = env.open_database(&rtxn, Some("idx_topo"))?;
             let topo_by_frame = env.open_database(&rtxn, Some("topo_by_frame"))?;
+            let idx_canon = env.open_database(&rtxn, Some("idx_canon"))?;
+            let canon_by_frame = env.open_database(&rtxn, Some("canon_by_frame"))?;
             // heed: uncommitted open_database txn → EINVAL on the next RoTxn.
             rtxn.commit()?;
             return Ok(Self {
@@ -525,6 +541,8 @@ impl ConCorpus {
                 frames_soa,
                 idx_topo,
                 topo_by_frame,
+                idx_canon,
+                canon_by_frame,
             });
         }
 
@@ -547,6 +565,8 @@ impl ConCorpus {
         let frames_soa = env.create_database(&mut wtxn, Some("frames_soa"))?;
         let idx_topo = env.create_database(&mut wtxn, Some("idx_topo"))?;
         let topo_by_frame = env.create_database(&mut wtxn, Some("topo_by_frame"))?;
+        let idx_canon = env.create_database(&mut wtxn, Some("idx_canon"))?;
+        let canon_by_frame = env.create_database(&mut wtxn, Some("canon_by_frame"))?;
         wtxn.commit()?;
 
         Ok(Self {
@@ -572,6 +592,8 @@ impl ConCorpus {
             frames_soa,
             idx_topo: Some(idx_topo),
             topo_by_frame: Some(topo_by_frame),
+            idx_canon: Some(idx_canon),
+            canon_by_frame: Some(canon_by_frame),
         })
     }
 
@@ -1054,6 +1076,12 @@ impl ConCorpus {
         }
         if let Some(d) = self.topo_by_frame {
             tables.push(("topo_by_frame", d));
+        }
+        if let Some(d) = self.idx_canon {
+            tables.push(("idx_canon", d.remap_types()));
+        }
+        if let Some(d) = self.canon_by_frame {
+            tables.push(("canon_by_frame", d));
         }
         for (name, db) in tables {
             for part in [name.as_bytes()] {
@@ -2693,8 +2721,252 @@ impl ConCorpus {
                 lines.push(format!("topo_by_frame\t{}\t{}", hex(k), hex(v)));
             }
         }
+        if let Some(db) = self.idx_canon {
+            let mut iter = db.iter(&rtxn)?;
+            while let Some(Ok((k, ()))) = iter.next() {
+                lines.push(format!("idx_canon\t{}", hex(k)));
+            }
+        }
+        if let Some(db) = self.canon_by_frame {
+            let mut iter = db.iter(&rtxn)?;
+            while let Some(Ok((k, v))) = iter.next() {
+                lines.push(format!("canon_by_frame\t{}\t{}", hex(k), hex(v)));
+            }
+        }
         lines.sort();
         Ok(lines)
+    }
+
+    /// Build `idx_canon` / `canon_by_frame` for every stored frame.
+    ///
+    /// The content hash and `frame_by_hash` are not written. A duplicate
+    /// `atom_id` aborts the rebuild and leaves the previous index in place.
+    /// Run this again after a rewrite of the stored CON text.
+    pub fn index_canonical_identity(&self) -> Result<u32> {
+        let (idx, by) = self.require_canon_dbs()?;
+        let keys = self.list_frame_keys()?;
+        let mut rows = Vec::with_capacity(keys.len());
+        for key in keys {
+            let frame = self.get_frame(key)?;
+            let ident = crate::canonical::canonical_identity(&frame)?;
+            let content = self.frame_hash(key)?;
+            rows.push((key, ident, content));
+        }
+        self.with_write(0, |wtxn| {
+            idx.clear(wtxn)?;
+            by.clear(wtxn)?;
+            for (key, ident, content) in &rows {
+                let fk_b = key.to_bytes();
+                let value = crate::canonical::canon_record(
+                    ident.version,
+                    &ident.hash.to_bytes(),
+                    &content.to_bytes(),
+                );
+                by.put(wtxn, &fk_b[..], &value[..])?;
+                let ik =
+                    crate::canonical::canon_index_key(ident.version, &ident.hash.to_bytes(), *key);
+                idx.put(wtxn, &ik[..], &())?;
+            }
+            Ok(rows.len() as u32)
+        })
+    }
+
+    /// Canonical identity of one stored frame, recomputed from its CON text.
+    ///
+    /// This does not read `idx_canon`. A duplicate `atom_id` is an error.
+    pub fn frame_canonical_identity(
+        &self,
+        key: FrameKey,
+    ) -> Result<crate::canonical::CanonicalIdentity> {
+        let frame = self.get_frame(key)?;
+        crate::canonical::canonical_identity(&frame)
+    }
+
+    /// Stored frames whose atoms match `frame` up to `atom_id` row order.
+    ///
+    /// `permutation[i]` is the index in `frame` of stored atom `i`. The
+    /// corpus must already have been passed to [`Self::index_canonical_identity`].
+    pub fn find_by_atom_order_frame(
+        &self,
+        frame: &ConFrame,
+    ) -> Result<Vec<crate::canonical::AtomOrderHit>> {
+        let mut hits = self.canonical_hits_for_frame(frame)?;
+        for hit in &mut hits {
+            hit.query_index = 0;
+        }
+        Ok(hits)
+    }
+
+    /// [`Self::find_by_atom_order_frame`] for every frame in `text`.
+    pub fn find_by_atom_order_text(
+        &self,
+        text: &str,
+    ) -> Result<Vec<crate::canonical::AtomOrderHit>> {
+        let frames = crate::canonical::parse_con_frames(text)?;
+        let mut hits = Vec::new();
+        for (i, frame) in frames.iter().enumerate() {
+            let mut part = self.canonical_hits_for_frame(frame)?;
+            for hit in &mut part {
+                hit.query_index = i as u32;
+            }
+            hits.extend(part);
+        }
+        Ok(hits)
+    }
+
+    /// [`Self::find_by_atom_order_text`] for a CON path.
+    pub fn find_by_atom_order_path(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<Vec<crate::canonical::AtomOrderHit>> {
+        let text = fs::read_to_string(path)?;
+        self.find_by_atom_order_text(&text)
+    }
+
+    fn require_canon_dbs(&self) -> Result<(Database<Bytes, Unit>, Database<Bytes, Bytes>)> {
+        match (self.idx_canon, self.canon_by_frame) {
+            (Some(idx), Some(by)) => Ok((idx, by)),
+            _ => Err(Error::Message(
+                "canonical identity index is missing; open the corpus for write and run index-canonical"
+                    .into(),
+            )),
+        }
+    }
+
+    fn canonical_hits_for_frame(
+        &self,
+        query: &ConFrame,
+    ) -> Result<Vec<crate::canonical::AtomOrderHit>> {
+        let ident = crate::canonical::canonical_identity(query)?;
+        let candidates = self.canonical_candidates(&ident)?;
+        let mut hits = Vec::with_capacity(candidates.len());
+        for crate::canonical::IndexedIdentity {
+            key,
+            version,
+            hash: canon_hash,
+            content: recorded_content,
+        } in candidates
+        {
+            if version != crate::canonical::CANONICAL_IDENTITY_VERSION {
+                return Err(Error::Message(format!(
+                    "canonical identity index version {version} is not {}; run index-canonical",
+                    crate::canonical::CANONICAL_IDENTITY_VERSION
+                )));
+            }
+            let live = self.frame_hash(key)?;
+            if live.to_bytes() != recorded_content {
+                return Err(Error::Message(format!(
+                    "canonical identity index is stale for traj {} frame {}; run index-canonical",
+                    key.traj_id, key.frame_idx
+                )));
+            }
+            let stored = self.get_frame(key)?;
+            let again = crate::canonical::canonical_identity(&stored)?;
+            if again.version != ident.version || again.hash.to_bytes() != canon_hash {
+                return Err(Error::Message(format!(
+                    "canonical identity index does not match traj {} frame {}; run index-canonical",
+                    key.traj_id, key.frame_idx
+                )));
+            }
+            let permutation = crate::canonical::atom_order_permutation(&stored, query)?;
+            hits.push(crate::canonical::AtomOrderHit {
+                query_index: 0,
+                key,
+                permutation,
+            });
+        }
+        hits.sort_by_key(|hit| hit.key);
+        Ok(hits)
+    }
+
+    fn canonical_candidates(
+        &self,
+        ident: &crate::canonical::CanonicalIdentity,
+    ) -> Result<Vec<crate::canonical::IndexedIdentity>> {
+        let (idx, by) = self.require_canon_dbs()?;
+        let rtxn = self.read_txn()?;
+        let n_frames = count_entries(self.frames, &rtxn)?;
+        let n_canon = count_entries(by, &rtxn)?;
+        if n_frames == 0 {
+            return Ok(Vec::new());
+        }
+        if n_canon == 0 {
+            return Err(Error::Message(
+                "canonical identity index is not built; run index-canonical".into(),
+            ));
+        }
+        if n_canon != n_frames {
+            return Err(Error::Message(format!(
+                "canonical identity index is stale: {n_frames} frames, {n_canon} indexed; run index-canonical"
+            )));
+        }
+        {
+            for item in by.iter(&rtxn)? {
+                let (k, v) = item?;
+                let Some(fk) = FrameKey::from_bytes(k) else {
+                    continue;
+                };
+                let Some((version, _, content)) = crate::canonical::parse_canon_record(v) else {
+                    return Err(Error::Message(format!(
+                        "canonical identity record for traj {} frame {} has the wrong length; run index-canonical",
+                        fk.traj_id, fk.frame_idx
+                    )));
+                };
+                if version != crate::canonical::CANONICAL_IDENTITY_VERSION {
+                    return Err(Error::Message(format!(
+                        "canonical identity index version {version} is not {}; run index-canonical",
+                        crate::canonical::CANONICAL_IDENTITY_VERSION
+                    )));
+                }
+                match self.hash_by_frame.get(&rtxn, k)? {
+                    Some(live) if live == content => {}
+                    _ => {
+                        return Err(Error::Message(format!(
+                            "canonical identity index is stale for traj {} frame {}; run index-canonical",
+                            fk.traj_id, fk.frame_idx
+                        )));
+                    }
+                }
+            }
+        }
+        let hash = ident.hash.to_bytes();
+        let prefix = crate::canonical::canon_index_prefix(ident.version, &hash);
+        let mut keys = Vec::new();
+        let mut iter = idx.prefix_iter(&rtxn, &prefix[..])?;
+        while let Some(Ok((k, ()))) = iter.next() {
+            if k.len() != 29 {
+                continue;
+            }
+            let Some(fk) = FrameKey::from_bytes(&k[17..]) else {
+                continue;
+            };
+            keys.push(fk);
+        }
+        drop(iter);
+        let mut out = Vec::with_capacity(keys.len());
+        for key in keys {
+            let fk_b = key.to_bytes();
+            let Some(raw) = by.get(&rtxn, &fk_b[..])? else {
+                return Err(Error::Message(format!(
+                    "canonical identity index does not match traj {} frame {}; run index-canonical",
+                    key.traj_id, key.frame_idx
+                )));
+            };
+            let Some((version, canon_hash, content)) = crate::canonical::parse_canon_record(raw)
+            else {
+                return Err(Error::Message(format!(
+                    "canonical identity record for traj {} frame {} has the wrong length; run index-canonical",
+                    key.traj_id, key.frame_idx
+                )));
+            };
+            out.push(crate::canonical::IndexedIdentity {
+                key,
+                version,
+                hash: canon_hash,
+                content,
+            });
+        }
+        Ok(out)
     }
 
     /// Matching frames with duplicate content hashes removed. The first stored key wins.
@@ -3589,7 +3861,6 @@ mod tests {
 
     #[test]
     fn ase_competitive_mass_volume_pbc_meta_charge() {
-        use readcon_core::types::ConFrameBuilder;
         let dir = tempfile::tempdir().unwrap();
         let db = ConCorpus::open(dir.path()).unwrap();
 
