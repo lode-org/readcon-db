@@ -10,7 +10,7 @@ authors:
 license: MIT
 repository-code: "https://github.com/lode-org/readcon-db"
 # [[[cog cog.outl(f'version: {VERSION}') ]]]
-version: 0.2.0
+version: 0.2.1
 # [[[end]]]
 date-released: "2026-08-15"
 keywords:
