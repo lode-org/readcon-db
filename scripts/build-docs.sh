@@ -80,6 +80,44 @@ echo "rustdoc"
   cargo fetch --locked
   RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps
 )
+# rustdoc 1.99 writes help.html and settings.html with the logo and the
+# "Rustdoc" heading pointed at ./index.html. cargo doc does not emit that
+# root page (it needs the unstable --enable-index-page flag), so those two
+# links are missing after the tree is copied to _site/rust and _site/docs/rust.
+python3 - "$ROOT/target/doc" <<'PY'
+import html, json, pathlib, re, sys
+
+doc = pathlib.Path(sys.argv[1])
+index = doc / "index.html"
+if index.is_file():
+    raise SystemExit(0)
+text = (doc / "crates.js").read_text()
+match = re.search(r"window\.ALL_CRATES\s*=\s*(\[.*?\])\s*;", text)
+if not match:
+    sys.exit("target/doc/crates.js has no ALL_CRATES list")
+crates = json.loads(match.group(1))
+if len(crates) != 1:
+    sys.exit(f"expected one rustdoc crate, found {crates}")
+name = crates[0]
+if not (doc / name / "index.html").is_file():
+    sys.exit(f"cargo doc did not write {name}/index.html")
+href = html.escape(f"{name}/index.html", quote=True)
+label = html.escape(name)
+index.write_text(
+    "<!DOCTYPE html>\n"
+    '<html lang="en">\n'
+    "<head>\n"
+    '<meta charset="utf-8">\n'
+    f"<title>{label}</title>\n"
+    f'<meta http-equiv="refresh" content="0; url={href}">\n'
+    f'<link rel="canonical" href="{href}">\n'
+    "</head>\n"
+    "<body>\n"
+    f'<p><a href="{href}">{label}</a></p>\n'
+    "</body>\n"
+    "</html>\n"
+)
+PY
 # The generated Python page imports readcon_db. The docs environment does not
 # ship that extension, so build it into the interpreter Sphinx is using.
 if ! python3 -c "import readcon_db" >/dev/null 2>&1; then
