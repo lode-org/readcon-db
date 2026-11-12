@@ -4,7 +4,13 @@ from pathlib import Path
 
 
 def _runnable_blocks():
-    org = Path(__file__).resolve().parents[2] / "docs" / "orgmode" / "howto" / "streaming.org"
+    org = (
+        Path(__file__).resolve().parents[2]
+        / "docs"
+        / "orgmode"
+        / "howto"
+        / "streaming.org"
+    )
     text = org.read_text(encoding="utf-8")
     blocks = []
     current = None

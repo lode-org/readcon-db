@@ -73,7 +73,26 @@ if ! command -v cargo >/dev/null 2>&1; then
   exit 1
 fi
 echo "rustdoc"
-( cd "$ROOT" && RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --offline )
+# The docs and Pages jobs have no cargo registry cache. `--offline` then
+# fails with "no matching package named heed". Fetch the lockfile first.
+(
+  cd "$ROOT"
+  cargo fetch --locked
+  RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps
+)
+# The generated Python page imports readcon_db. The docs environment does not
+# ship that extension, so build it into the interpreter Sphinx is using.
+if ! python3 -c "import readcon_db" >/dev/null 2>&1; then
+  echo "install readcon_db for autodoc"
+  python3 -m pip --version >/dev/null 2>&1 || python3 -m ensurepip --upgrade
+  python3 -m pip install maturin
+  # Pixi sets both VIRTUAL_ENV and CONDA_PREFIX. Maturin refuses that pair.
+  # CONDA_PREFIX is the docs environment.
+  (
+    cd "$ROOT/python"
+    env -u VIRTUAL_ENV maturin develop --release
+  )
+fi
 sphinx-build -W -b html "$OUT" "$ROOT/docs/_build/html"
 mkdir -p "$ROOT/docs/_build/html/rust"
 cp -a "$ROOT/target/doc/." "$ROOT/docs/_build/html/rust/"

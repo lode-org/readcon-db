@@ -4,7 +4,7 @@
 #### Bug Fixes
 - stream corpus append and parse one stored frame - (623ff00) - *HaoZeke*
 #### Documentation
-- document streaming append and publish the API reference - (16baa43) - *HaoZeke*
+- document streaming append and publish the API reference - (e43f6f8) - *HaoZeke*
 - rebuild the tutorial on recorded output and fix stale install, C, and link defects (#26) - (9cf3abf) - *HaoZeke*
 
 ## v0.2.0 - 2026-10-15
