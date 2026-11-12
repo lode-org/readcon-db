@@ -8,9 +8,11 @@ pub type FrameIdx = u32;
 pub struct ContentHash(pub [u8; 16]);
 
 impl ContentHash {
+    /// Little-endian bytes of the 128-bit hash.
     pub fn to_bytes(self) -> [u8; 16] {
         self.0
     }
+    /// Hash from 16 bytes, or `None` when the slice is a different length.
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
         if b.len() != 16 {
             return None;
@@ -19,6 +21,7 @@ impl ContentHash {
         a.copy_from_slice(b);
         Some(Self(a))
     }
+    /// Lowercase hexadecimal encoding of the hash.
     pub fn to_hex(self) -> String {
         self.0.iter().map(|b| format!("{b:02x}")).collect()
     }
@@ -32,12 +35,16 @@ pub fn hash_frame_bytes(blob: &[u8]) -> ContentHash {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// One stored frame: a trajectory id and a zero-based index in that trajectory.
 pub struct FrameKey {
+    /// Trajectory this frame belongs to.
     pub traj_id: TrajId,
+    /// Zero-based index of the frame inside its trajectory.
     pub frame_idx: FrameIdx,
 }
 
 impl FrameKey {
+    /// Big-endian encoding: trajectory id, then frame index. Byte order matches LMDB key order.
     pub fn to_bytes(self) -> [u8; 12] {
         let mut out = [0u8; 12];
         out[..8].copy_from_slice(&self.traj_id.to_be_bytes());
@@ -45,6 +52,7 @@ impl FrameKey {
         out
     }
 
+    /// Key from 12 bytes, or `None` when the slice is a different length.
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
         if b.len() != 12 {
             return None;

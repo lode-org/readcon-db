@@ -68,4 +68,12 @@ if grep -rl '{{{readcon-' "$OUT" --include='*.rst'; then
   exit 1
 fi
 
-sphinx-build -b html "$OUT" "$ROOT/docs/_build/html"
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "cargo is required to generate rustdoc" >&2
+  exit 1
+fi
+echo "rustdoc"
+( cd "$ROOT" && RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --offline )
+sphinx-build -W -b html "$OUT" "$ROOT/docs/_build/html"
+mkdir -p "$ROOT/docs/_build/html/rust"
+cp -a "$ROOT/target/doc/." "$ROOT/docs/_build/html/rust/"

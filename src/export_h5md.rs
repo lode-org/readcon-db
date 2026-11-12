@@ -9,7 +9,9 @@ use crate::select::Select;
 /// Time-dependent cooked trajectory for one `traj_id`.
 #[derive(Clone, Debug)]
 pub struct H5mdArrays {
+    /// Number of frames `T` in this trajectory.
     pub n_frames: usize,
+    /// Atoms per frame `N`. Every frame in the trajectory has this count.
     pub natoms: usize,
     /// `[T][N][3]` row-major f64.
     pub positions: Vec<f64>,
@@ -21,13 +23,17 @@ pub struct H5mdArrays {
     pub forces: Option<Vec<f64>>,
     /// `[T][N][3]` if any frame has velocities; frames without are zeros.
     pub velocities: Option<Vec<f64>>,
+    /// Unit string written on the velocity dataset.
     pub velocity_unit: String,
     /// H5MD `box` boundary strings, from CON `pbc` (periodic when absent).
     pub boundary: [String; 3],
-    /// `[T]` times in [`H5MD_TIME_ATTR`] (CON time or `i * timestep`, else frame index).
+    /// `[T]` times in picoseconds (CON time or `i * timestep`, else frame index).
     pub times: Vec<f64>,
+    /// Unit string written on the time dataset. Destination time is picoseconds.
     pub time_unit: String,
+    /// Unit string written on positions and box edges.
     pub length_unit: String,
+    /// Unit string written on the force dataset.
     pub force_unit: String,
 }
 
@@ -52,6 +58,7 @@ pub const CON_TIME_DEFAULT: &str = "fs";
 /// `units.time` still scales the clock.
 #[derive(Clone, Debug, Default)]
 pub struct H5mdCollectOpts {
+    /// Override for the D10 velocity rule and for a v3.1 clock that has no `units.time`.
     pub velocity_time_unit: Option<String>,
 }
 pub const H5MD_FORCE_ATTR: &str = "kJ mol-1 Angstrom-1";
@@ -227,7 +234,7 @@ impl ConCorpus {
         self.collect_h5md_with(traj_id, &H5mdCollectOpts::default())
     }
 
-    /// [`collect_h5md`] with an explicit velocity time override.
+    /// [`Self::collect_h5md`] with an explicit velocity time override.
     pub fn collect_h5md_with(&self, traj_id: u64, opts: &H5mdCollectOpts) -> Result<H5mdArrays> {
         let keys = self.select(&Select::new().trajectory(traj_id))?;
         if keys.is_empty() {

@@ -32,8 +32,11 @@ thread_local! {
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+/// JSON written as `shards.json` in a sharded corpus root.
 pub struct ShardManifest {
+    /// Number of shard directories.
     pub n_shards: u32,
+    /// Manifest schema version.
     pub version: u32,
 }
 
@@ -103,15 +106,18 @@ impl ShardedConCorpus {
         Ok(out)
     }
 
+    /// Number of shards declared by this corpus.
     pub fn n_shards(&self) -> u32 {
         self.n_shards
     }
 
+    /// Directory that holds `shards.json` and the shard directories.
     pub fn root(&self) -> &Path {
         &self.root
     }
 
     #[inline]
+    /// Shard index that owns `traj_id`.
     pub fn shard_for_traj(traj_id: TrajId, n_shards: u32) -> u32 {
         (traj_id % u64::from(n_shards)) as u32
     }
@@ -188,6 +194,7 @@ impl ShardedConCorpus {
         ConCorpus::open(root.join(format!("shard_{shard_id:04}")))
     }
 
+    /// Ingest a UTF-8 CON file into the shard that owns `traj_id`.
     pub fn append_trajectory_path(
         &mut self,
         traj_id: TrajId,
@@ -196,6 +203,7 @@ impl ShardedConCorpus {
         self.append_trajectory_path_units(traj_id, file, None)
     }
 
+    /// Ingest a UTF-8 CON file and stamp canonical units on every frame.
     pub fn append_trajectory_path_units(
         &mut self,
         traj_id: TrajId,
@@ -207,6 +215,7 @@ impl ShardedConCorpus {
         c.append_trajectory_path_units(traj_id, file, units)
     }
 
+    /// Ingest CON text into the shard that owns `traj_id`.
     pub fn append_trajectory_str(
         &mut self,
         traj_id: TrajId,
@@ -218,6 +227,7 @@ impl ShardedConCorpus {
         c.append_trajectory_str(traj_id, contents, source)
     }
 
+    /// Ingest parsed frames into the shard that owns `traj_id`, in one commit.
     pub fn append_trajectory_frames(
         &mut self,
         traj_id: TrajId,
@@ -248,6 +258,7 @@ impl ShardedConCorpus {
         Ok(out)
     }
 
+    /// CON text of one frame, opened read-only from the shard that owns its trajectory.
     pub fn get_frame_text(&mut self, key: FrameKey) -> Result<String> {
         self.release_shards();
         let sid = Self::shard_for_traj(key.traj_id, self.n_shards);
@@ -262,6 +273,7 @@ impl ShardedConCorpus {
         Ok(text)
     }
 
+    /// Rebuild secondary indexes in every shard that already has data. Returns the frame count.
     pub fn reindex_all(&mut self) -> Result<u32> {
         let mut n = 0u32;
         for sid in 0..self.n_shards {
@@ -561,6 +573,7 @@ pub enum CorpusExportKind {
 }
 
 impl CorpusExportKind {
+    /// Stable name used in logs and handoff records.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ShardedLmdb => "sharded-lmdb",

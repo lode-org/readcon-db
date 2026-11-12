@@ -66,10 +66,10 @@ from pathlib import Path
 import readcon_db
 
 root = Path(tempfile.mkdtemp())
-db = readcon_db.ConCorpus.open(str(root))
-db.append_trajectory_path(1, "resources/test/tiny_cuh2.con")
-keys = db.select(readcon_db.Select().require_symbol("Cu"))
-print(len(keys), db.frame_hash(keys[0]))
+db = readcon_db.ConCorpus(str(root))
+db.append_trajectory(1, "resources/test/tiny_cuh2.con")
+keys = db.select(symbol="Cu")
+print(len(keys), db.frame_hash(*keys[0]))
 #+end_src
 
 #+begin_src rust
@@ -87,6 +87,8 @@ println!("{} {:?}", keys.len(), db.frame_hash(keys[0])?);
 | Goal                            | Page                              | Kind        |
 |---------------------------------+-----------------------------------+-------------|
 | Learn open / ingest / select    | @@rst::doc:`/tutorials/tutorial`@@       | Tutorial    |
+| Stream an append, then read one frame | @@rst::doc:`/howto/streaming`@@ | How-to |
+| Upgrade from 0.2.0              | @@rst::doc:`/howto/migration`@@          | How-to      |
 | Same tasks in C / Fortran       | @@rst::doc:`/howto/howto`@@              | How-to      |
 | Many writers, shards            | @@rst::doc:`/howto/campaign`@@           | How-to      |
 | MPI, H5MD, ASE.db comparison    | @@rst::doc:`/howto/workflows`@@          | How-to      |

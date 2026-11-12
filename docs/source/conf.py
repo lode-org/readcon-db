@@ -10,6 +10,12 @@ author = "LODE developers"
 release = crate_version()
 version = release
 
+autodoc_default_options = {
+    "members": True,
+    "undoc-members": True,
+}
+autodoc_typehints = "description"
+
 extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.napoleon",
@@ -69,6 +75,16 @@ html_theme_options = {
                     "title": "How-to by language",
                     "url": "howto/howto",
                     "summary": "Rust, Python, C, Fortran recipes",
+                },
+                {
+                    "title": "Streaming append",
+                    "url": "howto/streaming",
+                    "summary": "64-frame commits, StoredFrame, compressed CON",
+                },
+                {
+                    "title": "Migrating to 0.2.1",
+                    "url": "howto/migration",
+                    "summary": "get_frame and append commits",
                 },
                 {
                     "title": "Campaign ops",

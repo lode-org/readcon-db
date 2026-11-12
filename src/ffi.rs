@@ -11,9 +11,13 @@ use crate::corpus::ConCorpus;
 use crate::keys::{hash_frame_bytes, FrameKey};
 use crate::select::Select;
 
+/// The call succeeded.
 pub const RKRDB_OK: c_int = 0;
+/// The call failed. `rkrdb_last_error` holds the message.
 pub const RKRDB_ERR: c_int = -1;
+/// The frame or key is not in the corpus.
 pub const RKRDB_NOT_FOUND: c_int = -2;
+/// A pointer argument was null, or the handle is not open.
 pub const RKRDB_NULL: c_int = -3;
 
 /// Breaking-change major for the public C ABI.
@@ -338,6 +342,7 @@ pub unsafe extern "C" fn rkrdb_unpack_positions(
 }
 
 #[no_mangle]
+/// Drop the corpus handle. The id must not be used again.
 pub unsafe extern "C" fn rkrdb_close(id: usize) -> c_int {
     let mut g = HANDLES.lock().unwrap();
     if let Some(slot) = g.get_mut(id) {
@@ -420,6 +425,7 @@ pub unsafe extern "C" fn rkrdb_append_trajectory_units(
 }
 
 #[no_mangle]
+/// Ingest a UTF-8 CON path as a new trajectory. Writes the committed frame count to `out_nframes`.
 pub unsafe extern "C" fn rkrdb_append_trajectory(
     id: usize,
     traj_id: u64,
@@ -583,6 +589,7 @@ pub unsafe extern "C" fn rkrdb_extend_trajectory_units(
 }
 
 #[no_mangle]
+/// Append a UTF-8 CON path to an existing trajectory, or create it when it is absent.
 pub unsafe extern "C" fn rkrdb_extend_trajectory(
     id: usize,
     traj_id: u64,
@@ -1097,6 +1104,7 @@ pub unsafe extern "C" fn rkrdb_select_campaign(
 }
 
 #[no_mangle]
+/// Number of keys from the last select on this handle, or `RKRDB_NULL` when the handle is closed.
 pub unsafe extern "C" fn rkrdb_result_count(id: usize) -> c_int {
     with_handle(id, |h| Ok(h.last_keys.len() as c_int)).unwrap_or(RKRDB_NULL)
 }
@@ -1347,6 +1355,7 @@ unsafe fn h5md_copy_slice(
 }
 
 #[no_mangle]
+/// Copy H5MD box edges for one trajectory. `cap` is the number of `f64` slots in `out`.
 pub unsafe extern "C" fn rkrdb_h5md_edges(
     id: usize,
     traj_id: u64,
@@ -1357,6 +1366,7 @@ pub unsafe extern "C" fn rkrdb_h5md_edges(
 }
 
 #[no_mangle]
+/// Copy H5MD forces for one trajectory. Returns an error when the trajectory has no forces.
 pub unsafe extern "C" fn rkrdb_h5md_forces(
     id: usize,
     traj_id: u64,
@@ -1367,6 +1377,7 @@ pub unsafe extern "C" fn rkrdb_h5md_forces(
 }
 
 #[no_mangle]
+/// Copy H5MD velocities for one trajectory. Returns an error when the trajectory has no velocities.
 pub unsafe extern "C" fn rkrdb_h5md_velocities(
     id: usize,
     traj_id: u64,
@@ -1412,6 +1423,7 @@ pub unsafe extern "C" fn rkrdb_h5md_species(
 }
 
 #[no_mangle]
+/// Copy one frame's velocities. `out_has_velocities` is 1 when the frame stored them.
 pub unsafe extern "C" fn rkrdb_get_velocities(
     id: usize,
     traj_id: u64,

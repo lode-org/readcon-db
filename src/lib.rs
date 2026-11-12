@@ -2,6 +2,10 @@
 //!
 //! Optional `python` feature builds PyO3 bindings. C ABI is always compiled into
 //! `cdylib`/`staticlib` (`src/ffi.rs`).
+//!
+//! The usage guide for creating a corpus, streaming appends, and `StoredFrame`
+//! reads lives in `docs/orgmode/howto/streaming.org`.
+#![deny(missing_docs)]
 
 pub mod archive;
 mod cooked_soa;

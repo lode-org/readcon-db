@@ -1,0 +1,38 @@
+#+OPTIONS: toc:nil num:nil
+
+* Migrating to 0.2.1
+:PROPERTIES:
+:CUSTOM_ID: migrating-to-0-2-1
+:END:
+
+0.2.1 keeps the same corpus files as 0.2.0. Two Python calls behave differently. Rust =get_frame= still returns a =readcon_core::ConFrame=. Rust =append_trajectory_frames= still commits the slice you pass in one transaction.
+
+** =get_frame= returns a =StoredFrame=
+:PROPERTIES:
+:CUSTOM_ID: get-frame-returns-a-storedframe
+:END:
+In 0.2.0, Python =get_frame= parsed the stored text with =readcon.read_con_string= and returned a =readcon.ConFrame=. Reading =atoms= on that object built a Python atom for every site.
+
+In 0.2.1 it returns a =StoredFrame=:
+
+| Still works | =frame.xyz=, =frame.atoms[i].symbol=, =frame.atoms[i].x= / =y= / =z=, =frame.cell=, =frame.angles=, =len(frame)= |
+| Changed | =type(frame)= is =StoredFrame=, not =ConFrame=. There is no =to_ase=, no metadata dict, and no velocity or force attributes on =StoredAtom=. |
+
+=atoms[i]= builds that one atom. Use =get_frame_text= when you need the text, and =readcon.read_con_string= when you need a =ConFrame=:
+
+#+begin_src python
+text = db.get_frame_text(traj_id, frame_idx)
+frame = readcon.read_con_string(text)[0]
+#+end_src
+
+Positions, forces, and velocities are also still on =get_positions=, =get_forces=, and =get_velocities=.
+
+** Append commits 64 frames at a time
+:PROPERTIES:
+:CUSTOM_ID: append-commits-64-frames-at-a-time
+:END:
+In 0.2.0, Python =append_trajectory_frames= turned the whole trajectory into one CON string, then prepared and committed every frame in one transaction. The string and the prepared rows were resident together, and walking a =read_con= result built a Python frame for every index.
+
+In 0.2.1 the same call commits groups of 64 frames. The first group creates the trajectory. Each later group extends it. The return value is still the number of frames in the trajectory after the last commit. A =read_con= list is serialized from the parser's stored frames, so those Python frames are not built.
+
+Python =append_trajectory= and Rust =append_trajectory_path= are unchanged: they read the path as UTF-8 and do not decompress gzip or zstd. Compressed files go through =readcon.read_con=, then =append_trajectory_frames=. The guide is @@rst::doc:`/howto/streaming`@@.

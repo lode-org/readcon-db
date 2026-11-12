@@ -34,7 +34,12 @@ h = db.frame_hash(1, 0)          # bytes(16)
 assert db.find_by_hash(h) == (1, 0)
 text = db.get_frame_text(1, 0)
 raw = ConCorpus.xxh3_128(b"blob")
+frame = db.get_frame(1, 0)       # StoredFrame, not a readcon.ConFrame
 #+end_src
+
+=get_frame= returns a =StoredFrame=. =frame.xyz= is the coordinate rows, =frame.atoms[i]= builds that atom only, and =frame.cell= and =frame.angles= are the box. =append_trajectory_frames= commits 64 frames at a time. Both are specified in @@rst::doc:`/howto/migration`@@ and exercised in @@rst::doc:`/howto/streaming`@@.
+
+The generated page is @@rst::doc:`/reference/python-api`@@.
 
 Optional =select= kwargs: ~exact_hash=~ (16-byte LE xxh3-128), =energy_min= / =energy_max=, =fmax_min= / =fmax_max=, =mass_min= / =mass_max=, =volume_min= / =volume_max=, =frame_index_min= / =frame_index_max=, =charge_min= / =charge_max=, =element_exact=, =element_min=, =formula=, =require_forces=, =require_velocities=, =require_energy=, =limit=.
 

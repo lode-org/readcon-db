@@ -1,0 +1,149 @@
+#+OPTIONS: toc:nil num:nil
+
+* Streaming append and random reads
+:PROPERTIES:
+:CUSTOM_ID: streaming-append-and-random-reads
+:END:
+
+#+BEGIN_EXPORT rst
+.. note::
+
+   Upgrading from 0.2.0: :doc:`/howto/migration`.
+#+END_EXPORT
+
+=readcon-db= stores CON text. =readcon= (the =readcon-core= Python package) parses and writes that text. ASE is a different store. This page is the path from a trajectory file to one stored frame.
+
+** Create a corpus
+:PROPERTIES:
+:CUSTOM_ID: create-a-corpus
+:END:
+A corpus is a directory. Creating =ConCorpus= creates it. The directory holds =data.mdb= and =lock.mdb=. One process writes. Many processes may open the same directory with =readonly=True=.
+
+#+begin_src python
+from readcon_db import ConCorpus
+
+db = ConCorpus("/tmp/corpus")
+ro = ConCorpus("/tmp/corpus", readonly=True)
+#+end_src
+
+Rust is =ConCorpus::open= and =ConCorpus::open_readonly=. The command line is =readcon-db ingest=.
+
+** Stream an append
+:PROPERTIES:
+:CUSTOM_ID: stream-an-append
+:END:
+=append_trajectory_frames= commits 64 frames at a time. The first group is a new trajectory. Each later group extends it. A list returned by =read_con= is written from the frames the parser already stored, so the append does not build a Python atom for every site.
+
+Rust =ConCorpus::append_trajectory_frames= still commits the slice you pass in one transaction. The grouping is the Python binding.
+
+** Random access
+:PROPERTIES:
+:CUSTOM_ID: random-access
+:END:
+=get_frame(traj_id, frame_idx)= returns a =StoredFrame=.
+
+| Attribute | Contents |
+|-----------+----------|
+| =xyz= | one =(x, y, z)= row per atom |
+| =atoms= | a =StoredAtoms= list |
+| =atoms[i]= | one =StoredAtom= with =symbol=, =x=, =y=, =z= |
+| =cell= | three box lengths |
+| =angles= | three box angles, in degrees |
+| =len(frame)= | the atom count |
+
+Indexing =atoms= builds that atom and no others. =get_frame_text= returns the CON text. =readcon.read_con_string= on that text returns a =readcon.ConFrame= when you need the full object.
+
+** Compressed inputs
+:PROPERTIES:
+:CUSTOM_ID: compressed-inputs
+:END:
+Python =append_trajectory= and Rust =append_trajectory_path= read the file as UTF-8. They do not decompress gzip or zstd. Read the compressed file with =readcon.read_con=, which selects gzip or zstd from the extension, then append the frames:
+
+#+begin_src python
+frames = readcon.read_con("traj.con.gz")  # or traj.con.zst
+db.append_trajectory_frames(1, frames, source="traj.con.gz")
+#+end_src
+
+A =.con.zst= file requires a =readcon= build with the =zstd= feature. Plain =.con= files can go straight to =append_trajectory= (Python) or =append_trajectory_path= (Rust).
+
+** readcon-core
+:PROPERTIES:
+:CUSTOM_ID: readcon-core
+:END:
+=readcon-core= is the CON parser and writer. The corpus stores the text that parser produces and decodes a hit with the same library. Foreign formats (XYZ, PDB, GRO) enter through =readcon.read_chemfiles= on a chemfiles build, then =append_trajectory_frames=. They do not enter through ASE.
+
+** ASE
+:PROPERTIES:
+:CUSTOM_ID: ase
+:END:
+=readcon-db= does not register an =ase.ioformats= entry point, and neither does =readcon=. ASE reads a CON file with its built-in =eon= format:
+
+#+begin_src python
+import ase.io
+ase.io.read("traj.con", format="eon")
+#+end_src
+
+That call does not open a corpus and does not use =readcon=. =ase.db= and =ase.io.Trajectory= are the stores a benchmark compares against. They are not how this corpus stores frames.
+
+A calculator that needs an =ase.Atoms= object can be built from a =StoredFrame=. =readcon.ConFrame.to_ase= applies to a frame parsed by =readcon=, including one recovered with =read_con_string(db.get_frame_text(...))=.
+
+** Example
+:PROPERTIES:
+:CUSTOM_ID: example
+:END:
+This block is executed by =python/tests/test_streaming_guide.py=.
+
+#+begin_src python
+# runnable
+import gzip
+import importlib.metadata as metadata
+from pathlib import Path
+
+import readcon
+from readcon_db import ConCorpus
+
+root = Path("guide")
+root.mkdir()
+sites = [readcon.Atom("Cu", float(i), 0.0, 1.0, atom_id=i) for i in range(4)]
+frame = readcon.ConFrame((12.0, 12.0, 12.0), (90.0, 90.0, 90.0), sites)
+plain = root / "traj.con"
+readcon.write_con(str(plain), [frame] * 70)
+gz = root / "traj.con.gz"
+gz.write_bytes(gzip.compress(plain.read_bytes()))
+
+db = ConCorpus(str(root / "db"))
+rejected = False
+try:
+    db.append_trajectory(1, str(gz))
+except RuntimeError:
+    rejected = True
+assert rejected
+
+loaded = readcon.read_con(str(gz))
+n = db.append_trajectory_frames(1, loaded, source=gz.name)
+assert n == 70
+got = db.get_frame(1, 64)
+assert type(got).__name__ == "StoredFrame"
+assert type(got.atoms).__name__ == "StoredAtoms"
+assert got.atoms[0].symbol == "Cu"
+assert got.atoms[-1].x == 3.0
+assert tuple(got.cell) == (12.0, 12.0, 12.0)
+text = db.get_frame_text(1, 0)
+full = readcon.read_con_string(text)[0]
+assert full.atoms[0].symbol == got.atoms[0].symbol
+
+from ase import Atoms
+
+atoms = Atoms(
+    symbols=[atom.symbol for atom in got.atoms],
+    positions=got.xyz,
+    cell=list(got.cell),
+    pbc=True,
+)
+assert len(atoms) == len(got)
+
+eps = metadata.entry_points()
+group = eps.select(group="ase.ioformats") if hasattr(eps, "select") else eps.get("ase.ioformats", [])
+registered = [ep for ep in group if "readcon_db" in ep.value]
+assert registered == []
+#+end_src

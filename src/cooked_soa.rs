@@ -41,13 +41,18 @@ const HEADER_LEN: usize = 4 + 4 + 4 + 4 + 1 + 3 + 4; // 24
 /// Decoded cooked numerics (always f64 for v1).
 #[derive(Clone, Debug, PartialEq)]
 pub struct CookedSoa {
+    /// Atom count. Positions, forces, and velocities use this length.
     pub natoms: u32,
+    /// Cartesian coordinates, one row per atom.
     pub positions: Vec<[f64; 3]>,
+    /// Forces, present only when the cooked blob stored them.
     pub forces: Option<Vec<[f64; 3]>>,
+    /// Velocities, present only when the cooked blob stored them.
     pub velocities: Option<Vec<[f64; 3]>>,
 }
 
 impl CookedSoa {
+    /// Encode one frame as an RCSO blob. CON text stays the authority.
     pub fn encode_frame(frame: &ConFrame) -> Result<Vec<u8>> {
         let n = frame.atom_data.len();
         if n > u32::MAX as usize {
@@ -98,6 +103,7 @@ impl CookedSoa {
         Ok(out)
     }
 
+    /// Decode an RCSO blob. A bad magic, version, or length is an error.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() < HEADER_LEN {
             return Err(Error::Message("cooked SoA truncated header".into()));

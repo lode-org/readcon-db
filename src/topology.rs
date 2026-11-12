@@ -21,13 +21,18 @@ static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 /// `cutoff` and hops defaults to 2.
 #[derive(Clone, Debug)]
 pub struct AnnotateTopologyOpts {
+    /// Bond cutoff in angstrom. Required.
     pub cutoff: f64,
+    /// Graph mode passed to `seams fingerprint`. The default is `cutoff`.
     pub graph: String,
+    /// Hop count passed to `seams fingerprint`. The default is 2.
     pub hops: u32,
+    /// Path of the `seams` binary. `None` uses `SEAMS` or `PATH`.
     pub seams: Option<PathBuf>,
 }
 
 impl AnnotateTopologyOpts {
+    /// Options with graph `cutoff`, 2 hops, and no explicit binary path.
     pub fn new(cutoff: f64) -> Self {
         Self {
             cutoff,
@@ -37,16 +42,19 @@ impl AnnotateTopologyOpts {
         }
     }
 
+    /// Set the graph mode.
     pub fn graph(mut self, graph: impl Into<String>) -> Self {
         self.graph = graph.into();
         self
     }
 
+    /// Set the hop count.
     pub fn hops(mut self, hops: u32) -> Self {
         self.hops = hops;
         self
     }
 
+    /// Use this `seams` binary instead of `SEAMS` or `PATH`.
     pub fn seams(mut self, path: impl Into<PathBuf>) -> Self {
         self.seams = Some(path.into());
         self
@@ -56,21 +64,29 @@ impl AnnotateTopologyOpts {
 /// One parsed `seams fingerprint` object (frame HEX + method).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FingerprintRecord {
+    /// Frame index reported by `seams`.
     pub frame: i64,
+    /// Topology key, lowercase hexadecimal.
     pub key: String,
+    /// Method string reported by `seams`.
     pub method: String,
 }
 
 /// Recorded per-corpus topology parameters (every annotated traj must agree).
 #[derive(Clone, Debug, PartialEq)]
 pub struct TopologyParams {
+    /// Recorded cutoff, if any trajectory has been annotated.
     pub cutoff: Option<f64>,
+    /// Recorded graph mode.
     pub graph: Option<String>,
+    /// Recorded hop count.
     pub hops: Option<u32>,
+    /// Recorded fingerprint method.
     pub method: Option<String>,
 }
 
 impl TopologyParams {
+    /// True when no topology parameters have been recorded.
     pub fn is_empty(&self) -> bool {
         self.cutoff.is_none()
             && self.graph.is_none()
@@ -78,6 +94,7 @@ impl TopologyParams {
             && self.method.is_none()
     }
 
+    /// True when cutoff, graph, hops, and method are equal.
     pub fn agrees(&self, other: &Self) -> bool {
         self.cutoff == other.cutoff
             && self.graph == other.graph
@@ -85,15 +102,18 @@ impl TopologyParams {
             && self.method == other.method
     }
 
+    /// Recorded cutoff, or an error when annotation has not stored one.
     pub fn cutoff_or_err(&self) -> Result<f64> {
         self.cutoff
             .ok_or_else(|| Error::Message("recorded topology parameters lack cutoff".into()))
     }
 
+    /// Recorded graph mode, or `cutoff` when none was stored.
     pub fn graph_or_default(&self) -> String {
         self.graph.clone().unwrap_or_else(|| "cutoff".into())
     }
 
+    /// Recorded hop count, or 2 when none was stored.
     pub fn hops_or_default(&self) -> u32 {
         self.hops.unwrap_or(2)
     }

@@ -73,6 +73,8 @@ let h = db.frame_hash(keys[0])?;
 
 Foreign trajectories: **`readcon.read_chemfiles("traj.xyz")` → frames → ingest into readcon-db** (chemfiles-enabled build), not `ase.io.read`.
 
+Python `append_trajectory_frames` commits 64 frames at a time. `get_frame` returns a `StoredFrame` (`atoms[i]` builds that atom only). Gzip and zstd files are read with `readcon.read_con`, then appended. Python `append_trajectory` and Rust `append_trajectory_path` read UTF-8 and do not decompress. `readcon-db` does not register an `ase.ioformats` entry point. Guide: [`docs/orgmode/howto/streaming.org`](docs/orgmode/howto/streaming.org). Upgrade from 0.2.0: [`docs/orgmode/howto/migration.org`](docs/orgmode/howto/migration.org).
+
 ## Design
 
 - **No SQL engine** — explicit indexes + in-process intersection, with **ASE.db-competitive screening fields** (mass, volume, PBC, reserved metadata, charge/magmom; see [design matrix](docs/orgmode/explanation/design.org)).

@@ -92,16 +92,23 @@ const MAX_DBS: u32 = 48;
 const MAX_READERS: u32 = 512;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+/// Metadata stored for one trajectory.
 pub struct TrajMeta {
+    /// Frames committed for this trajectory.
     pub n_frames: u32,
+    /// Caller-supplied source label from the ingest that created the trajectory.
     pub source: String,
     #[serde(default)]
+    /// Cutoff in angstrom recorded by the last topology annotation.
     pub topo_cutoff: Option<f64>,
     #[serde(default)]
+    /// Graph mode recorded by the last topology annotation.
     pub topo_graph: Option<String>,
     #[serde(default)]
+    /// Hop count recorded by the last topology annotation.
     pub topo_hops: Option<u32>,
     #[serde(default)]
+    /// Fingerprint method recorded by the last topology annotation.
     pub topo_method: Option<String>,
 }
 
@@ -147,6 +154,7 @@ struct PreparedIndexPuts {
     meta_keys: Vec<[u8; 21]>,
 }
 
+/// One LMDB environment. The directory holds `data.mdb` and `lock.mdb`.
 pub struct ConCorpus {
     path: PathBuf,
     env: Env,
@@ -261,6 +269,7 @@ fn prepared_bytes(prepared: &[PreparedIndexPuts]) -> usize {
 }
 
 impl ConCorpus {
+    /// Create or open a corpus at `path` with the default map size.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         Self::open_with(path, false, None)
     }
@@ -278,8 +287,9 @@ impl ConCorpus {
     }
 
     /// Open or create a writable corpus with an explicit LMDB map size in
-    /// bytes, overriding [`MAP_SIZE_ENV`] and [`DEFAULT_MAP_SIZE`]. The map
-    /// is still at least twice an existing `data.mdb`.
+    /// bytes. This replaces the `READCON_DB_MAP_SIZE` environment variable
+    /// and the built-in default. The map is still at least twice an existing
+    /// `data.mdb`.
     pub fn open_with_map_size(path: impl AsRef<Path>, map_size: usize) -> Result<Self> {
         Self::open_with(path, false, Some(map_size))
     }
@@ -587,6 +597,7 @@ impl ConCorpus {
         crate::cooked_soa::encode_batch(&blobs)
     }
 
+    /// Directory that holds this environment.
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -1121,6 +1132,7 @@ impl ConCorpus {
         })
     }
 
+    /// Ingest a UTF-8 CON file as a new trajectory. Gzip and zstd are not decompressed here.
     pub fn append_trajectory_path(&self, traj_id: TrajId, file: impl AsRef<Path>) -> Result<u32> {
         self.append_trajectory_path_units(traj_id, file, None)
     }
@@ -1198,6 +1210,7 @@ impl ConCorpus {
         Ok(fr.header.metadata.get("units").cloned())
     }
 
+    /// Ingest CON text as a new trajectory. Returns the number of frames committed.
     pub fn append_trajectory_str(
         &self,
         traj_id: TrajId,
@@ -1228,7 +1241,11 @@ impl ConCorpus {
         self.extend_trajectory_frames(traj_id, &frames, source)
     }
 
-    /// Ingest already-parsed frames (chemfiles / builder path). Serialize in prepare, not under write_txn.
+    /// Ingest already-parsed frames in one commit.
+    ///
+    /// Serialization happens before the write transaction. The Python
+    /// binding does not call this with the whole trajectory: it commits
+    /// groups of 64 frames so a long append does not hold every blob.
     pub fn append_trajectory_frames(
         &self,
         traj_id: TrajId,
@@ -1511,6 +1528,7 @@ impl ConCorpus {
         })
     }
 
+    /// Metadata for `traj_id`, or `None` when that trajectory has not been created.
     pub fn traj_meta(&self, traj_id: TrajId) -> Result<Option<TrajMeta>> {
         let rtxn = self.read_txn()?;
         let tid_key = traj_id.to_be_bytes();
@@ -1774,6 +1792,7 @@ impl ConCorpus {
         Ok(out.into_iter().collect())
     }
 
+    /// CON text of one stored frame. A grouped zstd blob is decoded for that frame only.
     pub fn get_frame_text(&self, key: FrameKey) -> Result<String> {
         let rtxn = self.read_txn()?;
         self.get_frame_text_txn(&rtxn, key)
@@ -1834,6 +1853,7 @@ impl ConCorpus {
         Ok((total, checksum))
     }
 
+    /// Parse one stored frame into a `readcon_core` `ConFrame`.
     pub fn get_frame(&self, key: FrameKey) -> Result<ConFrame> {
         let text = self.get_frame_text(key)?;
         let mut it = ConFrameIterator::new(&text);
@@ -2036,6 +2056,7 @@ impl ConCorpus {
         Ok(n)
     }
 
+    /// xxHash3-128 of the stored CON text, computed before compression.
     pub fn frame_hash(&self, key: FrameKey) -> Result<ContentHash> {
         let rtxn = self.read_txn()?;
         let fk_b = key.to_bytes();
@@ -2048,6 +2069,7 @@ impl ConCorpus {
         }
     }
 
+    /// First frame stored under this content hash, if any.
     pub fn find_by_hash(&self, hash: ContentHash) -> Result<Option<FrameKey>> {
         let rtxn = self.read_txn()?;
         let hb = hash.to_bytes();
@@ -2057,6 +2079,7 @@ impl ConCorpus {
         }
     }
 
+    /// xxHash3-128 of CON text, using the same bytes the corpus stores.
     pub fn hash_con_text(text: &str) -> Result<ContentHash> {
         let mut it = ConFrameIterator::new(text);
         let frame = it
@@ -2078,6 +2101,7 @@ impl ConCorpus {
         Ok(composition_formula(&frame_species(&fr)))
     }
 
+    /// Frames that match every predicate. The scan uses the secondary indexes.
     pub fn select(&self, sel: &Select) -> Result<Vec<FrameKey>> {
         let rtxn = self.read_txn()?;
         let mut sets: Vec<BTreeSet<FrameKey>> = Vec::new();
@@ -2449,6 +2473,7 @@ impl ConCorpus {
         Ok(out)
     }
 
+    /// Write the selected frames as extended XYZ. The destination must not exist.
     pub fn export_extxyz(
         &self,
         keys: &[FrameKey],
@@ -2483,6 +2508,7 @@ impl ConCorpus {
         written
     }
 
+    /// Ingest every `.con` and `.convel` file in `dir`, numbered from `start_traj_id`.
     pub fn ingest_directory(
         &self,
         dir: impl AsRef<Path>,
@@ -2505,7 +2531,7 @@ impl ConCorpus {
         self.ingest_directory_units_nthreads(dir, start_traj_id, units, ingest_thread_count())
     }
 
-    /// [`ingest_directory_units`] with an explicit worker count.
+    /// [`Self::ingest_directory_units`] with an explicit worker count.
     pub fn ingest_directory_units_nthreads(
         &self,
         dir: impl AsRef<Path>,
@@ -2671,6 +2697,7 @@ impl ConCorpus {
         Ok(lines)
     }
 
+    /// Matching frames with duplicate content hashes removed. The first stored key wins.
     pub fn unique_frame_keys(&self, sel: &Select) -> Result<Vec<FrameKey>> {
         let keys = self.select(sel)?;
         let mut uniq = Vec::new();

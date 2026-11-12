@@ -8,6 +8,7 @@ use crate::corpus::ConCorpus;
 use crate::keys::{ContentHash, FrameKey};
 use crate::select::Select;
 
+/// One LMDB corpus directory (`data.mdb` and `lock.mdb`).
 #[pyclass(name = "ConCorpus")]
 struct PyConCorpus {
     inner: ConCorpus,
@@ -17,6 +18,7 @@ struct PyConCorpus {
 impl PyConCorpus {
     #[new]
     #[pyo3(signature = (path, readonly=false))]
+    /// Open `path`. `readonly=True` refuses writes.
     fn new(path: &str, readonly: bool) -> PyResult<Self> {
         let inner = if readonly {
             ConCorpus::open_readonly(path)
@@ -47,6 +49,7 @@ impl PyConCorpus {
     }
 
     #[staticmethod]
+    /// Positions from an RCSB batch packed by `pack_frames`, one list per frame.
     fn unpack_batch(buf: Vec<u8>) -> PyResult<Vec<Vec<(f64, f64, f64)>>> {
         let parts = crate::cooked_soa::decode_batch(&buf)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
@@ -242,6 +245,7 @@ impl PyConCorpus {
     }
 
     #[staticmethod]
+    /// Positions from an RCSO blob packed by `pack_frame`.
     fn unpack_positions(buf: Vec<u8>) -> PyResult<Vec<(f64, f64, f64)>> {
         let cooked = crate::cooked_soa::CookedSoa::decode(&buf)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
@@ -253,6 +257,7 @@ impl PyConCorpus {
     }
 
     #[pyo3(signature = (traj_id, path, units=None))]
+    /// Ingest a UTF-8 CON path as a new trajectory. Gzip and zstd are not decompressed.
     fn append_trajectory(
         &self,
         traj_id: u64,
@@ -273,11 +278,12 @@ impl PyConCorpus {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Ingest already-parsed `readcon` frames.
+    /// Ingest already-parsed `readcon` frames, committing 64 frames at a time.
     ///
-    /// Frames are serialized in groups of 64. Each group is dropped before
-    /// the next group is converted, so a long trajectory does not allocate a
-    /// second copy of every frame.
+    /// The first group is `append_trajectory_str`. Each later group is
+    /// `extend_trajectory_str`. A `read_con` result is written from the stored
+    /// frames, so this does not build a Python frame per index. The return
+    /// value is the number of frames in the trajectory after the last commit.
     #[pyo3(signature = (traj_id, frames, source="memory"))]
     fn append_trajectory_frames(
         &self,
@@ -359,6 +365,7 @@ impl PyConCorpus {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// Units JSON stored on one frame, or `None` when the frame has no units object.
     fn get_units(&self, traj_id: u64, frame_idx: u32) -> PyResult<Option<String>> {
         let v = self
             .inner
@@ -367,7 +374,8 @@ impl PyConCorpus {
         Ok(v.map(|x| x.to_string()))
     }
 
-    /// Append frames to an existing trajectory (or create it).
+    /// Append a UTF-8 CON path to a trajectory, or create it when it is absent.
+    /// Gzip and zstd are not decompressed.
     #[pyo3(signature = (traj_id, path, units=None))]
     fn extend_trajectory(
         &self,
@@ -407,6 +415,7 @@ impl PyConCorpus {
         require_energy=false,
         limit=None
     ))]
+    /// Return `(traj_id, frame_idx)` pairs that match every predicate.
     fn select(
         &self,
         traj_id: Option<u64>,
@@ -514,12 +523,14 @@ impl PyConCorpus {
         Ok(keys.into_iter().map(|k| (k.traj_id, k.frame_idx)).collect())
     }
 
+    /// Rebuild the secondary indexes from the stored CON text. Returns the frame count.
     fn reindex(&self) -> PyResult<u32> {
         self.inner
             .reindex()
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// Composition string of one frame, for example `Cu:2|H:2`.
     fn frame_formula(&self, traj_id: u64, frame_idx: u32) -> PyResult<String> {
         self.inner
             .frame_formula(FrameKey { traj_id, frame_idx })
@@ -533,18 +544,21 @@ impl PyConCorpus {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// Delete the cooked numeric copy of one frame. The CON text stays.
     fn delete_cooked_soa(&self, traj_id: u64, frame_idx: u32) -> PyResult<()> {
         self.inner
             .delete_cooked_soa(FrameKey { traj_id, frame_idx })
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// True when a cooked numeric copy of this frame is stored and decodes.
     fn has_valid_cooked_soa(&self, traj_id: u64, frame_idx: u32) -> PyResult<bool> {
         self.inner
             .has_valid_cooked_soa(FrameKey { traj_id, frame_idx })
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// Rewrite the cooked numeric copy of every frame. Returns the frame count.
     fn recook_all(&self) -> PyResult<u32> {
         self.inner
             .recook_all()
@@ -560,6 +574,7 @@ impl PyConCorpus {
         Ok(v.into_iter().map(|r| (r[0], r[1], r[2])).collect())
     }
 
+    /// Forces of one frame, or `None` when that frame has no forces.
     fn get_forces(&self, traj_id: u64, frame_idx: u32) -> PyResult<Option<Vec<(f64, f64, f64)>>> {
         let v = self
             .inner
@@ -568,6 +583,7 @@ impl PyConCorpus {
         Ok(v.map(|rows| rows.into_iter().map(|r| (r[0], r[1], r[2])).collect()))
     }
 
+    /// Velocities of one frame, or `None` when that frame has no velocities.
     fn get_velocities(
         &self,
         traj_id: u64,
@@ -580,6 +596,7 @@ impl PyConCorpus {
         Ok(v.map(|rows| rows.into_iter().map(|r| (r[0], r[1], r[2])).collect()))
     }
 
+    /// xxHash3-128 of the stored CON text, 16 bytes, little-endian.
     fn frame_hash(&self, traj_id: u64, frame_idx: u32) -> PyResult<Vec<u8>> {
         let h = self
             .inner
@@ -588,6 +605,7 @@ impl PyConCorpus {
         Ok(h.to_bytes().to_vec())
     }
 
+    /// First `(traj_id, frame_idx)` stored under this 16-byte hash.
     fn find_by_hash(&self, hash: Vec<u8>) -> PyResult<Option<(u64, u32)>> {
         if hash.len() != 16 {
             return Err(PyRuntimeError::new_err("hash must be 16 bytes"));
@@ -602,6 +620,7 @@ impl PyConCorpus {
             .map(|k| (k.traj_id, k.frame_idx)))
     }
 
+    /// CON text of one stored frame.
     fn get_frame_text(&self, traj_id: u64, frame_idx: u32) -> PyResult<String> {
         self.inner
             .get_frame_text(FrameKey { traj_id, frame_idx })
@@ -641,6 +660,7 @@ impl PyConCorpus {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// CON text of each `(traj_id, frame_idx)` key, in order.
     fn get_frame_texts(&self, keys: Vec<(u64, u32)>) -> PyResult<Vec<String>> {
         let fks: Vec<FrameKey> = keys
             .into_iter()
@@ -655,6 +675,7 @@ impl PyConCorpus {
     }
 
     #[pyo3(signature = (keys, path, energy_key=None))]
+    /// Write the selected frames as extended XYZ. The destination must not exist.
     fn export_extxyz(
         &self,
         keys: Vec<(u64, u32)>,
@@ -675,6 +696,7 @@ impl PyConCorpus {
     }
 
     #[pyo3(signature = (dir, start_traj_id=None, units=None))]
+    /// Ingest every `.con` and `.convel` file in `dir`, numbered from `start_traj_id`.
     fn ingest_directory(
         &self,
         dir: &str,
@@ -689,6 +711,7 @@ impl PyConCorpus {
     }
 
     #[staticmethod]
+    /// xxHash3-128 of `data`, 16 bytes, little-endian.
     fn xxh3_128(data: Vec<u8>) -> Vec<u8> {
         crate::keys::hash_frame_bytes(&data).to_bytes().to_vec()
     }
@@ -799,10 +822,12 @@ fn unit_conversion_factor(from_unit: &str, to_unit: &str) -> PyResult<f64> {
 }
 
 #[pyfunction]
+/// Canonical name for one unit expression. Aliases such as `A` and `ev` are accepted.
 fn canonicalize_unit(expr: &str) -> PyResult<String> {
     crate::units_canon::canonicalize_unit(expr).map_err(|e| PyRuntimeError::new_err(e.to_string()))
 }
 
+/// One atom built by indexing `StoredAtoms`.
 #[pyclass(name = "StoredAtom")]
 struct StoredAtom {
     #[pyo3(get)]
@@ -815,17 +840,20 @@ struct StoredAtom {
     z: f64,
 }
 
-#[pyclass]
+/// Atoms of a stored frame. Indexing builds that one atom.
+#[pyclass(name = "StoredAtoms")]
 struct StoredAtoms {
     rows: Arc<Vec<(String, f64, f64, f64)>>,
 }
 
 #[pymethods]
 impl StoredAtoms {
+    /// Number of atoms.
     fn __len__(&self) -> usize {
         self.rows.len()
     }
 
+    /// Build the atom at `index`. A negative index counts from the end.
     fn __getitem__(&self, index: isize) -> PyResult<StoredAtom> {
         let n = self.rows.len() as isize;
         let resolved = if index < 0 { n + index } else { index };
@@ -842,7 +870,12 @@ impl StoredAtoms {
     }
 }
 
-/// One stored frame. Coordinates live in `xyz`. `atoms[i]` builds that atom only.
+/// One stored frame.
+///
+/// `xyz` is every coordinate row. `atoms[i]` builds that atom only.
+/// `cell` is the three box lengths and `angles` is the three box angles.
+/// This is not a `readcon.ConFrame`. `get_frame_text` plus
+/// `readcon.read_con_string` still returns one.
 #[pyclass(name = "StoredFrame")]
 struct StoredFrame {
     rows: Arc<Vec<(String, f64, f64, f64)>>,
@@ -853,11 +886,13 @@ struct StoredFrame {
 #[pymethods]
 impl StoredFrame {
     #[getter]
+    /// Coordinate rows `(x, y, z)` for every atom.
     fn xyz(&self) -> Vec<(f64, f64, f64)> {
         self.rows.iter().map(|(_, x, y, z)| (*x, *y, *z)).collect()
     }
 
     #[getter]
+    /// Atom list. Indexing builds that atom only.
     fn atoms(&self) -> StoredAtoms {
         StoredAtoms {
             rows: Arc::clone(&self.rows),
@@ -865,25 +900,30 @@ impl StoredFrame {
     }
 
     #[getter]
+    /// Three box lengths.
     fn cell(&self) -> [f64; 3] {
         self.cell
     }
 
     #[getter]
+    /// Three box angles, in degrees.
     fn angles(&self) -> [f64; 3] {
         self.angles
     }
 
+    /// Number of atoms.
     fn __len__(&self) -> usize {
         self.rows.len()
     }
 }
 
+/// LMDB corpus of CON frames. Parsing and writing CON text is `readcon`.
 #[pymodule]
 fn readcon_db(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyConCorpus>()?;
     m.add_class::<StoredFrame>()?;
     m.add_class::<StoredAtom>()?;
+    m.add_class::<StoredAtoms>()?;
     m.add_function(wrap_pyfunction!(bcast_packed_frame, m)?)?;
     m.add_function(wrap_pyfunction!(bcast_packed_frames, m)?)?;
     m.add_function(wrap_pyfunction!(unit_conversion_factor, m)?)?;

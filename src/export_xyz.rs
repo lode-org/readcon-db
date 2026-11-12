@@ -65,6 +65,7 @@ pub fn write_frame_extxyz<W: Write>(
     Ok(())
 }
 
+/// Write each frame with [`write_frame_extxyz`]. `energy_key` is the extended-XYZ energy property.
 pub fn write_frames_extxyz<W: Write>(
     w: &mut W,
     frames: &[ConFrame],

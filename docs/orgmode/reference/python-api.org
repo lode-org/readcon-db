@@ -1,0 +1,14 @@
+#+OPTIONS: toc:nil num:nil
+
+* Generated Python API
+:PROPERTIES:
+:CUSTOM_ID: generated-python-api
+:END:
+
+This page is generated from the docstrings on =readcon_db=. The narrative guide is @@rst::doc:`/howto/streaming`@@.
+
+#+BEGIN_EXPORT rst
+.. automodule:: readcon_db
+   :members:
+   :undoc-members:
+#+END_EXPORT

@@ -101,6 +101,7 @@ pub fn canonicalize_unit(expr: &str) -> Result<String> {
     Ok(out.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
+/// Rewrite a units object so aliases become the canonical names stored in CON metadata.
 pub fn canonicalize_units_object(units: serde_json::Value) -> Result<serde_json::Value> {
     let obj = units
         .as_object()

@@ -85,6 +85,8 @@ Site map
    :caption: How-to guides
 
    howto/howto
+   howto/streaming
+   howto/migration
    howto/topology
    howto/install
    howto/campaign
@@ -108,6 +110,7 @@ Site map
    reference/rust
    reference/c
    reference/python
+   reference/python-api
    reference/fortran
    reference/citation
 

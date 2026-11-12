@@ -44,17 +44,17 @@ Exact match: =Select::new().exact_hash(h.to_bytes())=.
 :CUSTOM_ID: python
 :END:
 #+begin_src python
-import readcon_db
+from readcon_db import ConCorpus
 
-db = readcon_db.ConCorpus.open("/tmp/corpus")
-db.append_trajectory_path(1, "run.con")
-sel = readcon_db.Select().require_symbol("Cu")
-keys = db.select(sel)
-h = db.frame_hash(keys[0])
-text = db.get_frame_text(keys[0])
+db = ConCorpus("/tmp/corpus")
+db.append_trajectory(1, "run.con")
+keys = db.select(symbol="Cu")
+traj_id, frame_idx = keys[0]
+h = db.frame_hash(traj_id, frame_idx)
+text = db.get_frame_text(traj_id, frame_idx)
 #+end_src
 
-=maturin develop --features python= from a checkout. Module name is =readcon_db=.
+=maturin develop --features python= from a checkout. Module name is =readcon_db=. Streaming append, =StoredFrame=, and compressed files: @@rst::doc:`/howto/streaming`@@. The 0.2.1 changes: @@rst::doc:`/howto/migration`@@.
 
 ** C / C++
 :PROPERTIES:
