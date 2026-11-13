@@ -1,0 +1,77 @@
+{
+  "fixture": "resources/test/tiny_cuh2_vel_forces.con",
+  "harness": "python/tests/test_field_fidelity.py",
+  "readcon_core_rev": "5627c12c984a768a40d8f5b7f47379a7efd57721",
+  "protocol": {
+    "serial": true,
+    "warmup": 1,
+    "samples": 6
+  },
+  "fields": [
+    {
+      "field": "positions",
+      "stored_name": "positions",
+      "result": "exact",
+      "samples": [
+        "exact",
+        "exact",
+        "exact",
+        "exact",
+        "exact",
+        "exact"
+      ]
+    },
+    {
+      "field": "masses",
+      "stored_name": "masses",
+      "result": "exact",
+      "samples": [
+        "exact",
+        "exact",
+        "exact",
+        "exact",
+        "exact",
+        "exact"
+      ]
+    },
+    {
+      "field": "velocities",
+      "stored_name": "velocities",
+      "result": "exact",
+      "samples": [
+        "exact",
+        "exact",
+        "exact",
+        "exact",
+        "exact",
+        "exact"
+      ]
+    },
+    {
+      "field": "constraints",
+      "stored_name": "fixed",
+      "result": "exact",
+      "samples": [
+        "exact",
+        "exact",
+        "exact",
+        "exact",
+        "exact",
+        "exact"
+      ]
+    },
+    {
+      "field": "cell",
+      "stored_name": "cell",
+      "result": "exact",
+      "samples": [
+        "exact",
+        "exact",
+        "exact",
+        "exact",
+        "exact",
+        "exact"
+      ]
+    }
+  ]
+}
