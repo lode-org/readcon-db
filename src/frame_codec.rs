@@ -197,6 +197,24 @@ fn parse_redirect(stored: &[u8]) -> Result<(u32, u32)> {
 }
 
 fn decode_group(stored: &[u8]) -> Result<Vec<String>> {
+    let plain = group_plain(stored)?;
+    let mut out = Vec::with_capacity(plain.ranges.len());
+    for range in plain.ranges {
+        let text = std::str::from_utf8(&plain.buf[range])
+            .map_err(|_| Error::Message("corrupt frame value".into()))?;
+        out.push(text.to_owned());
+    }
+    Ok(out)
+}
+
+/// Decompressed group payload and each member's byte range. The ranges
+/// borrow `buf`, so a column scan can parse them without another copy.
+pub(crate) struct GroupPlain {
+    pub buf: Vec<u8>,
+    pub ranges: Vec<std::ops::Range<usize>>,
+}
+
+pub(crate) fn group_plain(stored: &[u8]) -> Result<GroupPlain> {
     if stored.len() < 6 + 4 {
         return Err(Error::Message("corrupt frame value".into()));
     }
@@ -206,7 +224,7 @@ fn decode_group(stored: &[u8]) -> Result<Vec<String>> {
     }
     let plain = zstd::stream::decode_all(&stored[6..])
         .map_err(|e| Error::Message(format!("corrupt frame value: {e}")))?;
-    let mut out = Vec::with_capacity(n);
+    let mut ranges = Vec::with_capacity(n);
     let mut i = 0;
     while i < plain.len() {
         if plain.len() - i < 4 {
@@ -217,15 +235,17 @@ fn decode_group(stored: &[u8]) -> Result<Vec<String>> {
         if plain.len() - i < len {
             return Err(Error::Message("corrupt frame value".into()));
         }
-        let text = std::str::from_utf8(&plain[i..i + len])
-            .map_err(|_| Error::Message("corrupt frame value".into()))?;
-        out.push(text.to_owned());
+        ranges.push(i..i + len);
         i += len;
     }
-    if out.len() != n || i != plain.len() {
+    if ranges.len() != n || i != plain.len() {
         return Err(Error::Message("corrupt frame value".into()));
     }
-    Ok(out)
+    Ok(GroupPlain { buf: plain, ranges })
+}
+
+pub(crate) fn redirect_slot(stored: &[u8]) -> Result<(u32, u32)> {
+    parse_redirect(stored)
 }
 
 /// True when `stored` is one tagged zstd frame whose payload is not itself tagged.

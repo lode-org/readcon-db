@@ -264,6 +264,7 @@ def build_records(n_frames: int, n_atoms: int) -> tuple[str, list[Atoms], list[d
         records.append(
             {
                 "symbols": symbols,
+                "symbol_runs": _symbol_runs(symbols),
                 "positions": pos,
                 "cell": cell.copy(),
                 "pbc": pbc,
@@ -579,11 +580,69 @@ def close_ase(db) -> None:
         con.close()
 
 
+def _symbol_runs(symbols: list[str]) -> list[tuple[str, int]]:
+    runs: list[tuple[str, int]] = []
+    prev = None
+    count = 0
+    for symbol in symbols:
+        if symbol == prev:
+            count += 1
+        else:
+            if prev is not None:
+                runs.append((prev, count))
+            prev = symbol
+            count = 1
+    if prev is not None:
+        runs.append((prev, count))
+    return runs
+
+
+def _check_columns(cols: dict, records: list[dict], geometry_only: bool) -> None:
+    pos = np.asarray(cols["positions"], dtype=np.float64)
+    exp = np.stack([rec["positions"] for rec in records], axis=0)
+    if pos.shape != exp.shape or pos.tobytes() != exp.tobytes():
+        raise AssertionError(("positions", pos.shape, exp.shape))
+    if not geometry_only:
+        forces = cols["forces"]
+        if forces is None:
+            raise AssertionError("forces missing")
+        got_f = np.asarray(forces, dtype=np.float64)
+        exp_f = np.stack([rec["forces"] for rec in records], axis=0)
+        if got_f.shape != exp_f.shape or got_f.tobytes() != exp_f.tobytes():
+            raise AssertionError("forces")
+        masses = np.asarray(cols["masses"], dtype=np.float64)
+        exp_m = np.stack([rec["masses"] for rec in records], axis=0)
+        if masses.tobytes() != exp_m.tobytes():
+            raise AssertionError("masses")
+        energy = np.asarray(cols["energy"], dtype=np.float64)
+        for i, rec in enumerate(records):
+            if not cols["energy_set"][i]:
+                raise AssertionError("energy missing")
+            if np.float64(energy[i]).tobytes() != np.float64(rec["energy"]).tobytes():
+                raise AssertionError(("energy", float(energy[i]), rec["energy"]))
+            if int(cols["frame_index"][i]) != rec["frame_index"]:
+                raise AssertionError("frame_index")
+            if tuple(bool(x) for x in cols["pbc"][i]) != tuple(bool(x) for x in rec["pbc"]):
+                raise AssertionError("pbc")
+            expect_runs = rec.get("symbol_runs")
+            if expect_runs is None:
+                expect_runs = _symbol_runs(rec["symbols"])
+            if [tuple(run) for run in cols["symbol_runs"][i]] != list(expect_runs):
+                raise AssertionError("symbols")
+    cell = np.asarray(cols["cell"], dtype=np.float64)
+    for i, rec in enumerate(records):
+        lengths = np.diag(np.asarray(rec["cell"], dtype=np.float64))
+        if cell[i, :3].tobytes() != lengths.tobytes():
+            raise AssertionError(("cell", cell[i, :3], lengths))
+
+
 def full_read_readcon(db, n_frames: int, records: list[dict]):
-    frames = read_con_frames(db, n_frames)
-    for frame, rec in zip(frames, records):
-        assert_con_matches(frame, rec)
-    return frames
+    cols = db.read_columns(1)
+    if int(cols["n_frames"]) != n_frames:
+        raise AssertionError(cols["n_frames"])
+    geometry_only = records[0].get("geometry_only", False) or records[0].get("forces") is None
+    _check_columns(cols, records, geometry_only)
+    return cols
 
 
 def full_read_ase(db, n_frames: int, records: list[dict]):
@@ -594,13 +653,12 @@ def full_read_ase(db, n_frames: int, records: list[dict]):
 
 
 def selected_readcon(db, mid: int, rec: dict):
-    keys = db.select(frame_index_min=float(mid), frame_index_max=float(mid))
-    if len(keys) != 1:
-        raise AssertionError(len(keys))
-    text = db.get_frame_texts(keys)[0]
-    frame = readcon.read_con_string(text)[0]
-    assert_con_matches(frame, rec)
-    return frame
+    cols = db.read_columns(1, mid)
+    if int(cols["n_frames"]) != 1:
+        raise AssertionError(cols["n_frames"])
+    geometry_only = rec.get("geometry_only", False) or rec.get("forces") is None
+    _check_columns(cols, [rec], geometry_only)
+    return cols
 
 
 def selected_ase(db, mid: int, rec: dict):

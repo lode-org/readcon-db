@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use pyo3::exceptions::{PyIndexError, PyRuntimeError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 
 use crate::canonical::AtomOrderHit;
 use crate::corpus::ConCorpus;
@@ -664,6 +664,32 @@ impl PyConCorpus {
             .map(|k| (k.traj_id, k.frame_idx)))
     }
 
+    /// Bulk columns for `traj_id`, or one frame when `frame_idx` is set.
+    ///
+    /// Positions, forces, masses, and cell lengths are NumPy arrays.
+    /// An uncompressed span is parsed from the LMDB mapping. The scan
+    /// releases the GIL and does not build a Python atom per site.
+    #[pyo3(signature = (traj_id, frame_idx=None))]
+    fn read_columns(
+        &self,
+        py: Python<'_>,
+        traj_id: u64,
+        frame_idx: Option<u32>,
+    ) -> PyResult<Py<PyDict>> {
+        let cols = py
+            .detach(|| {
+                let result = match frame_idx {
+                    Some(frame_idx) => self
+                        .inner
+                        .read_frame_columns(FrameKey { traj_id, frame_idx }),
+                    None => self.inner.read_columns(traj_id),
+                };
+                result.map_err(|e| e.to_string())
+            })
+            .map_err(PyRuntimeError::new_err)?;
+        Ok(columns_to_py(py, &cols)?.unbind())
+    }
+
     /// CON text of one stored frame.
     fn get_frame_text(&self, traj_id: u64, frame_idx: u32) -> PyResult<String> {
         self.inner
@@ -843,6 +869,81 @@ fn bcast_packed_frames(
         return Err(PyRuntimeError::new_err(msg));
     }
     blob.ok_or_else(|| PyRuntimeError::new_err("empty pack on root"))
+}
+
+fn f64_array<'py>(py: Python<'py>, data: &[f64], shape: &[usize]) -> PyResult<Bound<'py, PyAny>> {
+    let np = py
+        .import("numpy")
+        .map_err(|_| PyRuntimeError::new_err("read_columns requires numpy"))?;
+    let raw = unsafe {
+        std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), std::mem::size_of_val(data))
+    };
+    let buf = PyBytes::new(py, raw);
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("dtype", "float64")?;
+    let flat = np.call_method("frombuffer", (buf,), Some(&kwargs))?;
+    let shape_t = PyTuple::new(py, shape.iter().copied())?;
+    flat.call_method1("reshape", (shape_t,))
+}
+
+fn columns_to_py<'py>(
+    py: Python<'py>,
+    cols: &crate::span_columns::Columns,
+) -> PyResult<Bound<'py, PyDict>> {
+    let n_frames = cols.n_atoms.len();
+    let same = cols.n_atoms.first().copied().unwrap_or(0);
+    let rectangular = cols.n_atoms.iter().all(|n| *n == same);
+    let n_atoms = same as usize;
+    let pos_shape: Vec<usize> = if rectangular {
+        vec![n_frames, n_atoms, 3]
+    } else {
+        vec![cols.positions.len() / 3, 3]
+    };
+    let out = PyDict::new(py);
+    out.set_item("n_frames", n_frames)?;
+    out.set_item("n_atoms", PyList::new(py, cols.n_atoms.iter().copied())?)?;
+    out.set_item("positions", f64_array(py, &cols.positions, &pos_shape)?)?;
+    if cols.forces_uniform && cols.forces.len() == cols.positions.len() {
+        out.set_item("forces", f64_array(py, &cols.forces, &pos_shape)?)?;
+    } else {
+        out.set_item("forces", py.None())?;
+    }
+    let mass_shape: Vec<usize> = if rectangular {
+        vec![n_frames, n_atoms]
+    } else {
+        vec![cols.masses.len()]
+    };
+    out.set_item("masses", f64_array(py, &cols.masses, &mass_shape)?)?;
+    out.set_item("cell", f64_array(py, &cols.cells, &[n_frames, 6])?)?;
+    out.set_item("energy", f64_array(py, &cols.energy, &[n_frames])?)?;
+    out.set_item(
+        "energy_set",
+        PyList::new(py, cols.energy_set.iter().copied())?,
+    )?;
+    out.set_item(
+        "frame_index",
+        f64_array(py, &cols.frame_index, &[n_frames])?,
+    )?;
+    out.set_item(
+        "frame_index_set",
+        PyList::new(py, cols.frame_index_set.iter().copied())?,
+    )?;
+    let pbc = PyList::empty(py);
+    for flag in cols.pbc.chunks(3) {
+        pbc.append(PyTuple::new(py, flag.iter().copied())?)?;
+    }
+    out.set_item("pbc", pbc)?;
+    out.set_item("pbc_set", PyList::new(py, cols.pbc_set.iter().copied())?)?;
+    let runs = PyList::empty(py);
+    for frame in &cols.symbol_runs {
+        let one = PyList::empty(py);
+        for (sym, n) in frame {
+            one.append((sym.as_str(), *n))?;
+        }
+        runs.append(one)?;
+    }
+    out.set_item("symbol_runs", runs)?;
+    Ok(out)
 }
 
 fn units_from_pydict(units: Option<Bound<'_, PyDict>>) -> PyResult<Option<serde_json::Value>> {

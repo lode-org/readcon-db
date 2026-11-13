@@ -25,6 +25,7 @@ pub mod mpi_read;
 mod mpi_wire;
 mod select;
 mod shard;
+mod span_columns;
 mod topology;
 mod units_canon;
 

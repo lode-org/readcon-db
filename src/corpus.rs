@@ -32,10 +32,12 @@ use crate::topology::{
     run_seams_fingerprint, AnnotateTopologyOpts, TopologyParams,
 };
 
-/// Default LMDB map size (2 GiB) when neither the caller nor
-/// [`MAP_SIZE_ENV`] asks for more. The map is address space, not disk:
-/// `data.mdb` only grows as pages are written.
-pub const DEFAULT_MAP_SIZE: usize = 2 * 1024 * 1024 * 1024;
+/// Default LMDB map size when neither the caller nor [`MAP_SIZE_ENV`]
+/// asks for more. Eight mebibytes is enough for a small corpus. A larger
+/// write grows the map before the transaction, and reopening an existing
+/// corpus maps at least twice `data.mdb`, so a database created under the
+/// old 2 GiB default still opens. The map is address space, not disk.
+pub const DEFAULT_MAP_SIZE: usize = 8 * 1024 * 1024;
 /// Environment variable that overrides [`DEFAULT_MAP_SIZE`]. Accepts a byte
 /// count with an optional `K`, `M`, `G` or `T` suffix (powers of 1024).
 pub const MAP_SIZE_ENV: &str = "READCON_DB_MAP_SIZE";
@@ -1881,6 +1883,118 @@ impl ConCorpus {
         Ok((total, checksum))
     }
 
+    /// Bulk columns for every frame of `traj_id`.
+    ///
+    /// An uncompressed span is parsed from the LMDB mapping. A zstd value
+    /// is decompressed once. A 64-frame group is decompressed once and each
+    /// member is parsed from that buffer. The numeric tokens use
+    /// readcon-core's fast-float kernel. No per-atom object is built.
+    pub fn read_columns(&self, traj_id: TrajId) -> Result<crate::span_columns::Columns> {
+        let n = self
+            .traj_meta(traj_id)?
+            .ok_or_else(|| Error::Message(format!("no trajectory {traj_id}")))?
+            .n_frames;
+        let rtxn = self.read_txn()?;
+        let mut cols = crate::span_columns::Columns::new();
+        let mut idx = 0u32;
+        while idx < n {
+            let fk_b = FrameKey {
+                traj_id,
+                frame_idx: idx,
+            }
+            .to_bytes();
+            let stored = self
+                .frames
+                .get(&rtxn, &fk_b[..])?
+                .ok_or(Error::MissingFrame(FrameKey {
+                    traj_id,
+                    frame_idx: idx,
+                }))?;
+            if crate::frame_codec::is_redirect(stored) {
+                return Err(Error::Message(
+                    "grouped frame was not consumed with its head".into(),
+                ));
+            }
+            if crate::frame_codec::is_group(stored) {
+                let plain = crate::frame_codec::group_plain(stored)?;
+                let nspan = plain.ranges.len() as u32;
+                for range in plain.ranges {
+                    crate::span_columns::append_span(&mut cols, &plain.buf[range])?;
+                }
+                idx += nspan;
+            } else if crate::frame_codec::is_tagged(stored) {
+                let plain =
+                    zstd::stream::decode_all(&stored[crate::frame_codec::FRAME_TAG.len()..])
+                        .map_err(|e| Error::Message(format!("zstd decode: {e}")))?;
+                crate::span_columns::append_span(&mut cols, &plain)?;
+                idx += 1;
+            } else {
+                // Uncompressed UTF-8 stays in the LMDB mapping for the scan.
+                crate::span_columns::append_span(&mut cols, stored)?;
+                idx += 1;
+            }
+        }
+        if cols.n_atoms.len() != n as usize {
+            return Err(Error::Message(format!(
+                "column scan saw {} frames, trajectory has {n}",
+                cols.n_atoms.len()
+            )));
+        }
+        Ok(cols)
+    }
+
+    /// Bulk columns for one stored frame. A group is decompressed once and
+    /// only that member is parsed.
+    pub fn read_frame_columns(&self, key: FrameKey) -> Result<crate::span_columns::Columns> {
+        let rtxn = self.read_txn()?;
+        let fk_b = key.to_bytes();
+        let stored = self
+            .frames
+            .get(&rtxn, &fk_b[..])?
+            .ok_or(Error::MissingFrame(key))?;
+        if crate::frame_codec::is_redirect(stored) {
+            let (head, slot) = crate::frame_codec::redirect_slot(stored)?;
+            let head_b = FrameKey {
+                traj_id: key.traj_id,
+                frame_idx: head,
+            }
+            .to_bytes();
+            let head_bytes = self
+                .frames
+                .get(&rtxn, &head_b[..])?
+                .ok_or(Error::MissingFrame(FrameKey {
+                    traj_id: key.traj_id,
+                    frame_idx: head,
+                }))?;
+            let plain = crate::frame_codec::group_plain(head_bytes)?;
+            let range = plain
+                .ranges
+                .get(slot as usize)
+                .ok_or_else(|| Error::Message("corrupt frame value".into()))?
+                .clone();
+            let mut cols = crate::span_columns::Columns::new();
+            crate::span_columns::append_span(&mut cols, &plain.buf[range])?;
+            return Ok(cols);
+        }
+        if crate::frame_codec::is_group(stored) {
+            let plain = crate::frame_codec::group_plain(stored)?;
+            let range = plain
+                .ranges
+                .first()
+                .ok_or_else(|| Error::Message("corrupt frame value".into()))?
+                .clone();
+            let mut cols = crate::span_columns::Columns::new();
+            crate::span_columns::append_span(&mut cols, &plain.buf[range])?;
+            return Ok(cols);
+        }
+        if crate::frame_codec::is_tagged(stored) {
+            let plain = zstd::stream::decode_all(&stored[crate::frame_codec::FRAME_TAG.len()..])
+                .map_err(|e| Error::Message(format!("zstd decode: {e}")))?;
+            return crate::span_columns::scan_bytes(&plain);
+        }
+        crate::span_columns::scan_bytes(stored)
+    }
+
     /// Parse one stored frame into a `readcon_core` `ConFrame`.
     pub fn get_frame(&self, key: FrameKey) -> Result<ConFrame> {
         let text = self.get_frame_text(key)?;
@@ -3149,6 +3263,23 @@ mod tests {
         assert_eq!(parse_map_size("0"), None);
         assert_eq!(parse_map_size("big"), None);
         assert_eq!(parse_map_size(""), None);
+    }
+
+    #[test]
+    fn new_corpus_map_is_at_most_eight_mebibytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let previous = std::env::var(MAP_SIZE_ENV).ok();
+        std::env::remove_var(MAP_SIZE_ENV);
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let size = db.map_size();
+        if let Some(value) = previous {
+            std::env::set_var(MAP_SIZE_ENV, value);
+        }
+        assert!(
+            size <= 8 << 20,
+            "default map is {size} bytes; a cold open should not reserve 2 GiB"
+        );
+        assert_eq!(size, DEFAULT_MAP_SIZE);
     }
 
     #[test]

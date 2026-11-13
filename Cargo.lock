@@ -871,6 +871,7 @@ dependencies = [
 name = "readcon-db"
 version = "0.2.1"
 dependencies = [
+ "fast-float2",
  "heed",
  "libc",
  "mpi",
