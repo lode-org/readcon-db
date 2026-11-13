@@ -282,6 +282,128 @@ fn prepared_bytes(prepared: &[PreparedIndexPuts]) -> usize {
         .fold(0usize, |n, p| n.saturating_add(p.stored.len()))
 }
 
+/// True when every species count fits on the following line and every atom
+/// count fits in the unread text. `readcon-core` 0.21 allocates the species
+/// count before it looks at that line.
+fn species_counts_within_text(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    let mut i = 0usize;
+    loop {
+        if i >= len {
+            return true;
+        }
+        let mut header = [0usize; 7];
+        let mut got = 0usize;
+        while got < 7 {
+            if i >= len {
+                return true;
+            }
+            let start = i;
+            let rel = bytes[start..]
+                .iter()
+                .position(|&b| b == b'\n')
+                .unwrap_or(bytes.len() - start);
+            header[got] = start;
+            i = start + rel;
+            if i < len {
+                i += 1;
+            }
+            got += 1;
+            let _ = header;
+        }
+        let types_line = line_at(bytes, header[6]);
+        let mut tokens = types_line.split_ascii_whitespace();
+        let Some(token) = tokens.next() else {
+            return true;
+        };
+        if tokens.next().is_some() || !token.bytes().all(|b| b.is_ascii_digit()) {
+            return true;
+        }
+        let Ok(ntypes) = token.parse::<usize>() else {
+            return true;
+        };
+        if ntypes == 0 {
+            let _ = skip_lines(bytes, &mut i, 2);
+            continue;
+        }
+        if i >= len {
+            return true;
+        }
+        let counts_start = i;
+        let rel = bytes[i..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .unwrap_or(bytes.len() - i);
+        let counts_line = line_at(bytes, counts_start);
+        i = counts_start + rel;
+        if i < len {
+            i += 1;
+        }
+        if ntypes > counts_line.len() || ntypes > len {
+            return false;
+        }
+        let mut sum = 0usize;
+        let mut seen = 0usize;
+        for token in counts_line.split_ascii_whitespace() {
+            seen += 1;
+            if seen > ntypes {
+                break;
+            }
+            if !token.bytes().all(|b| b.is_ascii_digit()) {
+                return true;
+            }
+            let Ok(count) = token.parse::<usize>() else {
+                return true;
+            };
+            sum = match sum.checked_add(count) {
+                Some(total) => total,
+                None => return false,
+            };
+        }
+        if seen != ntypes {
+            return true;
+        }
+        if sum > len {
+            return false;
+        }
+        let skip = ntypes
+            .saturating_mul(2)
+            .saturating_add(sum)
+            .saturating_add(1);
+        skip_lines(bytes, &mut i, skip);
+    }
+}
+
+fn line_at(bytes: &[u8], start: usize) -> &str {
+    let end = bytes[start..]
+        .iter()
+        .position(|&b| b == b'\n')
+        .map(|rel| start + rel)
+        .unwrap_or(bytes.len());
+    let mut end = end;
+    if end > start && bytes[end - 1] == b'\r' {
+        end -= 1;
+    }
+    std::str::from_utf8(&bytes[start..end]).unwrap_or("")
+}
+
+fn skip_lines(bytes: &[u8], i: &mut usize, n: usize) -> usize {
+    let mut skipped = 0usize;
+    while skipped < n && *i < bytes.len() {
+        let rel = bytes[*i..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .unwrap_or(bytes.len() - *i);
+        *i += rel;
+        if *i < bytes.len() {
+            *i += 1;
+        }
+        skipped += 1;
+    }
+    skipped
+}
+
 impl ConCorpus {
     /// Create or open a corpus at `path` with the default map size.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -913,6 +1035,19 @@ impl ConCorpus {
         self.put_index_puts(wtxn, &puts)
     }
 
+    /// `readcon-core` 0.21 reserves `Vec` capacity from the species count
+    /// before it counts the tokens on the next line. A count larger than
+    /// that line allocates far past the file and aborts. Reject it here.
+    fn species_counts_fit(text: &str) -> Result<()> {
+        if species_counts_within_text(text) {
+            Ok(())
+        } else {
+            Err(Error::Parse(
+                "species or atom count exceeds the input".into(),
+            ))
+        }
+    }
+
     /// Parse path/string CON into owned blobs + frames (no exclusive LMDB write section).
     fn prepare_trajectory_str(
         traj_id: TrajId,
@@ -921,6 +1056,7 @@ impl ConCorpus {
     ) -> Result<Vec<PreparedIndexPuts>> {
         let mut out = Vec::new();
         let mut frame_idx: u32 = 0;
+        Self::species_counts_fit(file_contents)?;
         let mut iter = ConFrameIterator::new(file_contents);
         loop {
             let (frame, blob) = match iter.next_with_raw_span(file_contents) {
@@ -1179,6 +1315,7 @@ impl ConCorpus {
         };
         let units = crate::units_canon::canonicalize_units_object(units)?;
         let mut frames = Vec::new();
+        Self::species_counts_fit(&text)?;
         for item in ConFrameIterator::new(&text) {
             let mut fr = item.map_err(|e| Error::Parse(e.to_string()))?;
             fr.header.set_units(units.clone());
@@ -1263,6 +1400,7 @@ impl ConCorpus {
         source: impl Into<String>,
     ) -> Result<u32> {
         let mut frames = Vec::new();
+        Self::species_counts_fit(file_contents)?;
         for item in ConFrameIterator::new(file_contents) {
             frames.push(item.map_err(|e| Error::Parse(e.to_string()))?);
         }
@@ -1399,6 +1537,7 @@ impl ConCorpus {
             Some(u) => Some(crate::units_canon::canonicalize_units_object(u)?),
             None => None,
         };
+        Self::species_counts_fit(&text)?;
         for item in ConFrameIterator::new(&text) {
             let mut fr = item.map_err(|e| Error::Parse(e.to_string()))?;
             if let Some(ref u) = units {
@@ -1471,6 +1610,7 @@ impl ConCorpus {
                         })),
                     }
                 })?;
+                Self::species_counts_fit(&blob_owned)?;
                 let mut it = ConFrameIterator::new(&blob_owned);
                 let frame = it
                     .next()
@@ -1884,6 +2024,7 @@ impl ConCorpus {
     /// Parse one stored frame into a `readcon_core` `ConFrame`.
     pub fn get_frame(&self, key: FrameKey) -> Result<ConFrame> {
         let text = self.get_frame_text(key)?;
+        Self::species_counts_fit(&text)?;
         let mut it = ConFrameIterator::new(&text);
         let fr = it
             .next()
@@ -2109,6 +2250,7 @@ impl ConCorpus {
 
     /// xxHash3-128 of CON text, using the same bytes the corpus stores.
     pub fn hash_con_text(text: &str) -> Result<ContentHash> {
+        Self::species_counts_fit(text)?;
         let mut it = ConFrameIterator::new(text);
         let frame = it
             .next()
@@ -2638,6 +2780,7 @@ impl ConCorpus {
         };
         let units = crate::units_canon::canonicalize_units_object(units.clone())?;
         let mut frames = Vec::new();
+        Self::species_counts_fit(&text)?;
         for item in ConFrameIterator::new(&text) {
             let mut fr = item.map_err(|e| Error::Parse(e.to_string()))?;
             fr.header.set_units(units.clone());
@@ -3140,6 +3283,31 @@ mod tests {
 
     fn fixtures_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/test")
+    }
+
+    #[test]
+    fn huge_species_count_is_an_error_without_allocating() {
+        let text = "\
+x
+{\"con_spec_version\":2}
+1 1 1
+90 90 90
+0 0
+0 0 0
+294699999999999740
+1
+";
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open_with_map_size(dir.path(), 8 * 1024 * 1024).unwrap();
+        let err = db.append_trajectory_str(1, text, "fuzz").unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("count exceeds"), "{message}");
+        assert!(species_counts_within_text(
+            &std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap()
+        ));
+        assert!(species_counts_within_text(
+            &std::fs::read_to_string(fixture("tiny_multi_cuh2.con")).unwrap()
+        ));
     }
 
     #[test]
