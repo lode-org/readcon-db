@@ -982,6 +982,11 @@ def workloads_for(mode: str) -> list[dict]:
         return [paper]
     if mode == "ladder":
         return atoms + frames
+    if mode == "inserts":
+        rows = [paper, *atoms, *frames]
+        for row in rows:
+            row["insert_only"] = True
+        return rows
     if mode == "smoke":
         return [
             paper,
@@ -994,7 +999,11 @@ def workloads_for(mode: str) -> list[dict]:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=Path, default=Path(__file__).resolve().parent / "results" / "fair")
-    ap.add_argument("--mode", choices=("all", "paper", "ladder", "smoke"), default="all")
+    ap.add_argument(
+        "--mode",
+        choices=("all", "paper", "ladder", "smoke", "inserts"),
+        default="all",
+    )
     ap.add_argument("--self-check", action="store_true")
     args = ap.parse_args()
     published = {

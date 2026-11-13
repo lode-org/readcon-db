@@ -687,52 +687,62 @@ impl ConCorpus {
         text: String,
         compress: bool,
     ) -> Result<PreparedIndexPuts> {
-        use readcon_core::index_proj::FrameIndexProjection;
+        let facts = crate::span_columns::facts_from_frame(frame);
+        Self::build_index_from_facts(fk, &facts, &text, compress)
+    }
+
+    /// Index keys for one stored span. `text` is the exact CON substring.
+    fn build_index_from_facts(
+        fk: FrameKey,
+        facts: &crate::span_columns::SpanFacts,
+        text: &str,
+        compress: bool,
+    ) -> Result<PreparedIndexPuts> {
         let hash = hash_frame_bytes(text.as_bytes()).to_bytes();
-        let stored = crate::frame_codec::store_frame(&text, compress)?;
-        let proj = FrameIndexProjection::from_frame(frame);
+        let stored = crate::frame_codec::store_frame(text, compress)?;
         let mut symbol_keys = Vec::new();
         let mut elem_count_keys = Vec::new();
         let mut seen = BTreeSet::new();
-        for (sym, cnt) in &proj.species_counts {
+        for (sym, cnt) in &facts.species {
             elem_count_keys.push(elem_count_key(sym, *cnt, fk));
             if seen.insert(sym.clone()) {
                 symbol_keys.push(symbol_key(sym, fk));
             }
         }
-        let formula_k = if proj.formula.is_empty() {
+        let formula = readcon_core::index_proj::composition_formula(&facts.species);
+        let formula_k = if formula.is_empty() {
             None
         } else {
-            Some(formula_key(&proj.formula, fk))
+            Some(formula_key(&formula, fk))
         };
         let mut flag_keys = Vec::new();
-        let energy_k = proj.energy.and_then(|e| {
+        let energy_k = facts.energy.and_then(|e| {
             flag_keys.push(flag_key(FLAG_HAS_ENERGY, fk));
             energy_bin_key(e, fk)
         });
-        let fmax_k = if proj.has_forces {
+        let fmax_k = if facts.has_forces {
             flag_keys.push(flag_key(FLAG_HAS_FORCES, fk));
-            proj.fmax.and_then(|fm| fmax_bin_key(fm, fk))
+            facts.fmax.and_then(|fm| fmax_bin_key(fm, fk))
         } else {
             None
         };
-        if proj.has_velocities {
+        if facts.has_velocities {
             flag_keys.push(flag_key(FLAG_HAS_VELOCITIES, fk));
         }
-        let mass_k = proj.total_mass.and_then(|m| mass_bin_key(m, fk));
-        let volume_k = proj.cell_volume.and_then(|v| volume_bin_key(v, fk));
-        let pbc_k = proj
+        let mass_k = facts.total_mass.and_then(|m| mass_bin_key(m, fk));
+        let volume_k = facts.cell_volume.and_then(|v| volume_bin_key(v, fk));
+        let pbc_k = facts
             .pbc
             .map(|p| pbc_key(crate::keys::pbc_mask_from_bools(p), fk));
         let mut meta_keys = Vec::new();
         for (ch, val) in [
-            (META_TIME, proj.time),
-            (META_TIMESTEP, proj.timestep),
-            (META_FRAME_INDEX, proj.frame_index),
-            (META_NEB_BEAD, proj.neb_bead),
-            (META_NEB_BAND, proj.neb_band),
-            (META_CHARGE, proj.charge),
-            (META_MAGMOM, proj.magmom),
+            (META_TIME, facts.time),
+            (META_TIMESTEP, facts.timestep),
+            (META_FRAME_INDEX, facts.frame_index),
+            (META_NEB_BEAD, facts.neb_bead),
+            (META_NEB_BAND, facts.neb_band),
+            (META_CHARGE, facts.charge),
+            (META_MAGMOM, facts.magmom),
         ] {
             if let Some(x) = val {
                 if let Some(k) = meta_scalar_key(ch, x, fk) {
@@ -744,7 +754,7 @@ impl ConCorpus {
             fk,
             stored,
             hash,
-            natoms_k: natoms_key(proj.n_atoms, fk),
+            natoms_k: natoms_key(facts.n_atoms, fk),
             symbol_keys,
             elem_count_keys,
             formula_k,
@@ -917,6 +927,44 @@ impl ConCorpus {
 
     /// Parse path/string CON into owned blobs + frames (no exclusive LMDB write section).
     fn prepare_trajectory_str(
+        traj_id: TrajId,
+        file_contents: &str,
+        compress: bool,
+    ) -> Result<Vec<PreparedIndexPuts>> {
+        // A tiny frame is cheaper to parse outright. The span walk pays off
+        // once the coordinate block is large enough that per-atom objects dominate.
+        if file_contents.len() <= 65_536 {
+            return Self::prepare_trajectory_str_parsed(traj_id, file_contents, compress);
+        }
+        Self::prepare_trajectory_str_span(traj_id, file_contents, compress)
+    }
+
+    /// Index each stored span without building a per-atom frame.
+    fn prepare_trajectory_str_span(
+        traj_id: TrajId,
+        file_contents: &str,
+        compress: bool,
+    ) -> Result<Vec<PreparedIndexPuts>> {
+        let spans = readcon_core::index_proj::frame_byte_spans_skip(file_contents)
+            .map_err(|e| Error::Parse(e.to_string()))?;
+        let mut out = Vec::with_capacity(spans.len());
+        for (i, span) in spans.into_iter().enumerate() {
+            let text = span
+                .slice(file_contents)
+                .ok_or_else(|| Error::Parse("frame span is not valid UTF-8".into()))?;
+            let facts = crate::span_columns::project_frame(text.as_bytes())?;
+            let fk = FrameKey {
+                traj_id,
+                frame_idx: u32::try_from(i).map_err(|_| Error::Parse("too many frames".into()))?,
+            };
+            out.push(Self::build_index_from_facts(fk, &facts, text, compress)?);
+        }
+        Ok(out)
+    }
+
+    /// Full parse. Used for small texts, where building the frame is cheaper
+    /// than a separate span walk, and it applies every parser rejection.
+    fn prepare_trajectory_str_parsed(
         traj_id: TrajId,
         file_contents: &str,
         compress: bool,
@@ -3252,6 +3300,115 @@ mod tests {
 
     fn fixtures_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/test")
+    }
+
+    #[test]
+    fn span_prepare_matches_parsed_index_keys() {
+        for name in [
+            "tiny_cuh2.con",
+            "tiny_cuh2_forces.con",
+            "tiny_cuh2_vel_forces.con",
+            "tiny_multi_cuh2.con",
+        ] {
+            let text = std::fs::read_to_string(fixture(name)).unwrap();
+            let prepared = ConCorpus::prepare_trajectory_str_span(3, &text, false).unwrap();
+            let mut it = ConFrameIterator::new(&text);
+            for puts in &prepared {
+                let (frame, span) = it
+                    .next_with_raw_span(&text)
+                    .unwrap()
+                    .expect("fixture frame");
+                assert_eq!(puts.stored, span.as_bytes(), "{name} span");
+                let slow =
+                    ConCorpus::build_index_puts(puts.fk, &frame, span.to_owned(), false).unwrap();
+                assert_eq!(puts.hash, slow.hash, "{name} hash");
+                assert_eq!(puts.natoms_k, slow.natoms_k, "{name} natoms");
+                assert_eq!(puts.symbol_keys, slow.symbol_keys, "{name} symbols");
+                assert_eq!(puts.elem_count_keys, slow.elem_count_keys, "{name} counts");
+                assert_eq!(puts.formula_k, slow.formula_k, "{name} formula");
+                assert_eq!(puts.energy_k, slow.energy_k, "{name} energy");
+                assert_eq!(puts.fmax_k, slow.fmax_k, "{name} fmax");
+                assert_eq!(puts.mass_k, slow.mass_k, "{name} mass");
+                assert_eq!(puts.volume_k, slow.volume_k, "{name} volume");
+                assert_eq!(puts.pbc_k, slow.pbc_k, "{name} pbc");
+                assert_eq!(puts.flag_keys, slow.flag_keys, "{name} flags");
+                assert_eq!(puts.meta_keys, slow.meta_keys, "{name} meta");
+            }
+            assert!(it.next().is_none(), "{name}");
+        }
+    }
+
+    /// The old prepare parsed every atom. On a large frame that parse is most
+    /// of the insert, so the span index has to be cheaper than it.
+    #[test]
+    fn large_span_prepare_is_cheaper_than_parsing_every_atom() {
+        if cfg!(debug_assertions) {
+            return;
+        }
+        let n = 80_000u32;
+        let mut text = String::from(
+            "\n{\"con_spec_version\":3,\"con_spec_minor\":1,\"energy\":-42.5,\"frame_index\":0,\"pbc\":[true,true,false],\"sections\":[\"forces\"],\"units\":{\"length\":\"angstrom\",\"energy\":\"eV\"}}\n10.5 12.25 8.0\n90 90 90\n\n\n1\n80000\n63.546\nCu\nCoordinates of Component 1\n",
+        );
+        for i in 0..n {
+            use std::fmt::Write as _;
+            let _ = write!(text, "{i}.125 0.5 1.0 0 {i}\n");
+        }
+        text.push_str("\nCu\nForces of Component 1\n");
+        for i in 0..n {
+            use std::fmt::Write as _;
+            let _ = write!(text, "0.1 0.2 {i}.0 0 {i}\n");
+        }
+        let t_parse = std::time::Instant::now();
+        let parsed = ConFrameIterator::new(&text).count();
+        let parse = t_parse.elapsed();
+        assert_eq!(parsed, 1);
+        let t_prep = std::time::Instant::now();
+        let prepared = ConCorpus::prepare_trajectory_str(1, &text, true).unwrap();
+        let prep = t_prep.elapsed();
+        assert_eq!(prepared.len(), 1);
+        assert!(
+            prep < parse,
+            "span prepare {prep:?} is not cheaper than the atom parse {parse:?}"
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn profile_million_atom_insert() {
+        let path =
+            std::env::var("READCON_PROFILE_CON").unwrap_or_else(|_| "/tmp/million.con".into());
+        let text = std::fs::read_to_string(&path).unwrap();
+        eprintln!("text_bytes {}", text.len());
+        let t_iter = std::time::Instant::now();
+        let n = readcon_core::iterators::ConFrameIterator::new(&text).count();
+        eprintln!("iterator_frames {n} {:?}", t_iter.elapsed());
+        let t_z = std::time::Instant::now();
+        let compressed = zstd::stream::encode_all(text.as_bytes(), 1).unwrap();
+        eprintln!("zstd {:?} out {}", t_z.elapsed(), compressed.len());
+        let t_h = std::time::Instant::now();
+        let _h = crate::keys::hash_frame_bytes(text.as_bytes());
+        eprintln!("hash {:?}", t_h.elapsed());
+        let t_c = std::time::Instant::now();
+        let cols = crate::span_columns::scan_bytes(text.as_bytes()).unwrap();
+        eprintln!(
+            "columns {:?} atoms {} forces {}",
+            t_c.elapsed(),
+            cols.n_atoms.first().copied().unwrap_or(0),
+            cols.forces.len()
+        );
+        let t0 = std::time::Instant::now();
+        let mut prepared = ConCorpus::prepare_trajectory_str(1, &text, true).unwrap();
+        eprintln!(
+            "prepare {:?} stored {}",
+            t0.elapsed(),
+            prepared.iter().map(|p| p.stored.len()).sum::<usize>()
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let t1 = std::time::Instant::now();
+        db.commit_prepared(1, &mut prepared, "t".into(), false, false)
+            .unwrap();
+        eprintln!("commit {:?}", t1.elapsed());
     }
 
     #[test]

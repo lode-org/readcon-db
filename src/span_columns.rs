@@ -322,6 +322,379 @@ fn parse_section(
     Ok(())
 }
 
+/// Index fields of one frame, without a per-atom object or a coordinate array.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpanFacts {
+    /// Atoms in the frame.
+    pub n_atoms: u32,
+    /// Symbol counts, sorted by symbol.
+    pub species: Vec<(String, u32)>,
+    /// Finite frame energy.
+    pub energy: Option<f64>,
+    /// Max force magnitude.
+    pub fmax: Option<f64>,
+    /// Sum of per-type mass times count.
+    pub total_mass: Option<f64>,
+    /// Cell volume.
+    pub cell_volume: Option<f64>,
+    /// Metadata periodicity.
+    pub pbc: Option<[bool; 3]>,
+    /// Forces are declared or present.
+    pub has_forces: bool,
+    /// Velocities are declared or present.
+    pub has_velocities: bool,
+    /// An energies section or a finite frame energy is present.
+    pub has_energy: bool,
+    /// Metadata `time`.
+    pub time: Option<f64>,
+    /// Metadata `timestep`.
+    pub timestep: Option<f64>,
+    /// Metadata `frame_index`.
+    pub frame_index: Option<f64>,
+    /// Metadata `neb_bead`.
+    pub neb_bead: Option<f64>,
+    /// Metadata `neb_band`.
+    pub neb_band: Option<f64>,
+    /// Metadata `charge`.
+    pub charge: Option<f64>,
+    /// Metadata `magmom`.
+    pub magmom: Option<f64>,
+}
+
+/// Index one frame from its stored bytes.
+///
+/// Coordinate rows are skipped. Force rows are parsed only to obtain
+/// `fmax`. The numeric kernel is the same one the column reader uses.
+pub fn project_frame(bytes: &[u8]) -> Result<SpanFacts> {
+    let mut cur = Cur { bytes, i: 0 };
+    if cur.rest_blank() {
+        return Err(Error::Parse("empty frame".into()));
+    }
+    let _preamble = cur.take()?;
+    let meta = cur.take()?;
+    let (mut facts, gate) = facts_from_meta(meta)?;
+    let boxl = f64s(cur.take()?, 3)?;
+    let angles = f64s(cur.take()?, 3)?;
+    if facts.cell_volume.is_none() {
+        facts.cell_volume = volume_from_box(&boxl, &angles);
+    }
+    let _post_a = cur.take()?;
+    let _post_b = cur.take()?;
+    let n_types_line = uints(cur.take()?)?;
+    if n_types_line.len() != 1 {
+        return Err(Error::Parse("type-count line must be one integer".into()));
+    }
+    let n_types = n_types_line[0];
+    if n_types == 0 {
+        return Ok(facts);
+    }
+    let counts = uints(cur.take()?)?;
+    if counts.len() != n_types {
+        return Err(Error::Parse("per-type counts do not match".into()));
+    }
+    let masses = f64s(cur.take()?, n_types)?;
+    facts.total_mass = total_mass(&counts, &masses);
+    let mut species = std::collections::BTreeMap::<String, u32>::new();
+    let mut natoms = 0u32;
+    for count in &counts {
+        let symbol = as_str(cur.take()?)?.trim().to_string();
+        let label = as_str(cur.take()?)?;
+        if !label.contains("Coordinates") {
+            return Err(Error::Parse(format!("expected coordinates, got {label}")));
+        }
+        let n = u32::try_from(*count).map_err(|_| Error::Parse("count overflow".into()))?;
+        if !symbol.is_empty() {
+            *species.entry(symbol).or_insert(0) += n;
+        }
+        skip_lines(&mut cur, *count)?;
+        natoms += n;
+    }
+    facts.n_atoms = natoms;
+    facts.species = species.into_iter().collect();
+    let mut fmax = None;
+    loop {
+        if cur.i >= cur.bytes.len() || cur.rest_blank() {
+            break;
+        }
+        let Some(peek) = cur.peek() else { break };
+        if !is_blank(peek) {
+            break;
+        }
+        let after_blank = split_line(cur.bytes, cur.i)
+            .map(|(_, n)| n)
+            .unwrap_or(cur.i);
+        let Some(next) = line_at(cur.bytes, after_blank) else {
+            break;
+        };
+        if next.first() == Some(&b'{') || is_blank(next) {
+            break;
+        }
+        let _blank = cur.take()?;
+        note_section(&mut cur, &counts, &mut facts, &mut fmax)?;
+    }
+    facts.fmax = fmax;
+    if facts.has_velocities && gate.spec >= 3 && gate.minor >= 1 && !gate.units_time {
+        return Err(Error::Parse(
+            "minor >= 1 requires units.time when a velocities section is present".into(),
+        ));
+    }
+    Ok(facts)
+}
+
+fn skip_lines(cur: &mut Cur<'_>, n: usize) -> Result<()> {
+    for _ in 0..n {
+        cur.take()?;
+    }
+    Ok(())
+}
+
+fn note_section(
+    cur: &mut Cur<'_>,
+    counts: &[usize],
+    facts: &mut SpanFacts,
+    fmax: &mut Option<f64>,
+) -> Result<()> {
+    for count in counts {
+        let _symbol = cur.take()?;
+        let label = as_str(cur.take()?)?;
+        let kind = label.split_whitespace().next().unwrap_or("");
+        match kind {
+            "Forces" => {
+                facts.has_forces = true;
+                for _ in 0..*count {
+                    let row = xyz_prefix(cur.take()?)?;
+                    let mag = (row[0] * row[0] + row[1] * row[1] + row[2] * row[2]).sqrt();
+                    if mag.is_finite() {
+                        *fmax = Some(fmax.map_or(mag, |cur| cur.max(mag)));
+                    }
+                }
+            }
+            "Velocities" => {
+                facts.has_velocities = true;
+                skip_lines(cur, *count)?;
+            }
+            "Energies" => {
+                facts.has_energy = true;
+                skip_lines(cur, *count)?;
+            }
+            _ => skip_lines(cur, *count)?,
+        }
+    }
+    Ok(())
+}
+
+struct MetaGate {
+    spec: u64,
+    minor: u64,
+    units_time: bool,
+}
+
+fn facts_from_meta(line: &[u8]) -> Result<(SpanFacts, MetaGate)> {
+    let mut facts = SpanFacts {
+        n_atoms: 0,
+        species: Vec::new(),
+        energy: None,
+        fmax: None,
+        total_mass: None,
+        cell_volume: None,
+        pbc: None,
+        has_forces: false,
+        has_velocities: false,
+        has_energy: false,
+        time: None,
+        timestep: None,
+        frame_index: None,
+        neb_bead: None,
+        neb_band: None,
+        charge: None,
+        magmom: None,
+    };
+    let text = as_str(line)?.trim();
+    if !text.starts_with('{') {
+        return Ok((
+            facts,
+            MetaGate {
+                spec: 0,
+                minor: 0,
+                units_time: false,
+            },
+        ));
+    }
+    let v: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| Error::Parse(e.to_string()))?;
+    let gate = MetaGate {
+        spec: v.get("con_spec_version").and_then(json_u64).unwrap_or(0),
+        minor: v.get("con_spec_minor").and_then(json_u64).unwrap_or(0),
+        units_time: v
+            .get("units")
+            .and_then(|units| units.get("time"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|unit| !unit.trim().is_empty()),
+    };
+    facts.energy = v.get("energy").and_then(json_finite);
+    if facts.energy.is_some() {
+        facts.has_energy = true;
+    }
+    facts.frame_index = v.get("frame_index").and_then(|x| {
+        x.as_u64()
+            .map(|u| u as f64)
+            .filter(|f| f.is_finite())
+            .or_else(|| json_finite(x))
+    });
+    facts.time = v.get("time").and_then(json_finite);
+    facts.timestep = v.get("timestep").and_then(json_finite);
+    facts.neb_bead = v.get("neb_bead").and_then(json_finite);
+    facts.neb_band = v.get("neb_band").and_then(json_finite);
+    facts.charge = v.get("charge").and_then(json_finite);
+    facts.magmom = v.get("magmom").and_then(json_finite);
+    if let Some(arr) = v.get("pbc").and_then(serde_json::Value::as_array) {
+        if arr.len() == 3 {
+            if let (Some(x), Some(y), Some(z)) =
+                (arr[0].as_bool(), arr[1].as_bool(), arr[2].as_bool())
+            {
+                facts.pbc = Some([x, y, z]);
+            }
+        }
+    }
+    if let Some(lv) = v
+        .get("lattice_vectors")
+        .and_then(serde_json::Value::as_array)
+    {
+        if let Some(vol) = lattice_volume(lv) {
+            facts.cell_volume = Some(vol);
+        }
+    }
+    if let Some(sections) = v.get("sections").and_then(serde_json::Value::as_array) {
+        for section in sections {
+            let Some(name) = section.as_str() else {
+                continue;
+            };
+            if name.eq_ignore_ascii_case("forces") {
+                facts.has_forces = true;
+            } else if name.eq_ignore_ascii_case("velocities") {
+                facts.has_velocities = true;
+            } else if name.eq_ignore_ascii_case("energies") {
+                facts.has_energy = true;
+            }
+        }
+    }
+    Ok((facts, gate))
+}
+
+fn json_u64(v: &serde_json::Value) -> Option<u64> {
+    v.as_u64()
+        .or_else(|| v.as_i64().and_then(|i| u64::try_from(i).ok()))
+}
+
+fn json_finite(v: &serde_json::Value) -> Option<f64> {
+    let f = if let Some(x) = v.as_f64() {
+        x
+    } else if let Some(i) = v.as_i64() {
+        i as f64
+    } else if let Some(u) = v.as_u64() {
+        u as f64
+    } else {
+        return None;
+    };
+    f.is_finite().then_some(f)
+}
+
+fn total_mass(counts: &[usize], masses: &[f64]) -> Option<f64> {
+    let n = counts.len().min(masses.len());
+    if n == 0 {
+        return None;
+    }
+    let mut sum = 0.0f64;
+    for i in 0..n {
+        let mi = masses[i];
+        let ni = counts[i] as f64;
+        if !mi.is_finite() || !ni.is_finite() {
+            return None;
+        }
+        sum += mi * ni;
+    }
+    sum.is_finite().then_some(sum)
+}
+
+fn lattice_volume(rows: &[serde_json::Value]) -> Option<f64> {
+    if rows.len() != 3 {
+        return None;
+    }
+    let mut m = [[0.0f64; 3]; 3];
+    for (i, row) in rows.iter().enumerate() {
+        let arr = row.as_array()?;
+        if arr.len() != 3 {
+            return None;
+        }
+        for (j, v) in arr.iter().enumerate() {
+            m[i][j] = v.as_f64()?;
+        }
+    }
+    let det = scalar_triple(m[0], m[1], m[2]).abs();
+    det.is_finite().then_some(det)
+}
+
+fn volume_from_box(boxl: &[f64], angles: &[f64]) -> Option<f64> {
+    if boxl.len() < 3 || angles.len() < 3 {
+        return None;
+    }
+    let [a, b, c] = [boxl[0], boxl[1], boxl[2]];
+    let [alpha, beta, gamma] = [angles[0], angles[1], angles[2]];
+    if ![a, b, c, alpha, beta, gamma]
+        .iter()
+        .all(|x| x.is_finite() && *x > 0.0)
+    {
+        return None;
+    }
+    let ar = alpha.to_radians();
+    let br = beta.to_radians();
+    let gr = gamma.to_radians();
+    let ca = ar.cos();
+    let cb = br.cos();
+    let cg = gr.cos();
+    let sg = gr.sin();
+    if sg.abs() < 1e-15 {
+        return None;
+    }
+    let t = 1.0 - ca * ca - cb * cb - cg * cg + 2.0 * ca * cb * cg;
+    if t <= 0.0 {
+        return None;
+    }
+    let v = a * b * c * t.sqrt();
+    v.is_finite().then_some(v)
+}
+
+fn scalar_triple(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> f64 {
+    a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
+        + a[2] * (b[0] * c[1] - b[1] * c[0])
+}
+
+/// The same fields [`readcon_core::index_proj::FrameIndexProjection::from_frame`]
+/// stores, so a span index can be compared with a parsed frame.
+pub fn facts_from_frame(frame: &readcon_core::types::ConFrame) -> SpanFacts {
+    use readcon_core::index_proj::FrameIndexProjection;
+    let p = FrameIndexProjection::from_frame(frame);
+    SpanFacts {
+        n_atoms: p.n_atoms,
+        species: p.species_counts,
+        energy: p.energy,
+        fmax: p.fmax,
+        total_mass: p.total_mass,
+        cell_volume: p.cell_volume,
+        pbc: p.pbc,
+        has_forces: p.has_forces,
+        has_velocities: p.has_velocities,
+        has_energy: p.has_energy,
+        time: p.time,
+        timestep: p.timestep,
+        frame_index: p.frame_index,
+        neb_bead: p.neb_bead,
+        neb_band: p.neb_band,
+        charge: p.charge,
+        magmom: p.magmom,
+    }
+}
+
 /// Scan one CON buffer that may hold several frames.
 pub fn scan_bytes(bytes: &[u8]) -> Result<Columns> {
     let mut cols = Columns::new();
