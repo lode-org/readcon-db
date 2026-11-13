@@ -135,3 +135,40 @@ one-frame median, 0.400 ms, is about 0.05 ms past the previous median
 plus IQR; five of the six samples are 0.299–0.537 ms and one sample is
 1.02 ms.
 
+## Insert rerun after row validation
+
+`before` is the span-index insert column above, the numbers at
+`940d2b0`. `after` checks every coordinate, fixed-flag, and force row
+on that same path. One warmup, n = 6, type-7. Raw lines:
+`insert-validate.log`. Reads were not retimed. No readcon-db row is
+past the `940d2b0` median plus its IQR.
+
+| workload | tool | before s | before IQR s | after s | after IQR s |
+| --- | --- | --- | --- | --- | --- |
+| paper40x8 | readcon-db | 1.9719e-03 | 6.5999e-04 | 1.6986e-03 | 4.1734e-04 |
+| paper40x8 | ase.db | 6.5242e-03 | 1.2866e-03 | 5.1713e-03 | 4.8163e-04 |
+| atoms-1000 | readcon-db | 6.7260e-04 | 3.9172e-04 | 6.9283e-04 | 1.0843e-04 |
+| atoms-1000 | ase.db | 1.8801e-03 | 2.8034e-04 | 1.2871e-03 | 1.7332e-04 |
+| atoms-10000 | readcon-db | 3.1342e-03 | 7.3484e-05 | 2.8477e-03 | 4.3350e-04 |
+| atoms-10000 | ase.db | 3.8584e-03 | 1.7635e-04 | 3.7165e-03 | 4.9836e-04 |
+| atoms-100000 | readcon-db | 1.6272e-02 | 8.2277e-04 | 1.6556e-02 | 1.2990e-03 |
+| atoms-100000 | ase.db | 2.9640e-02 | 1.7345e-03 | 2.9034e-02 | 1.1825e-03 |
+| atoms-1000000 | readcon-db | 1.6484e-01 | 4.5250e-03 | 1.5184e-01 | 1.8440e-02 |
+| atoms-1000000 | ase.db | 2.3951e-01 | 1.4315e-02 | 2.4742e-01 | 8.6686e-03 |
+| frames-1 | readcon-db | 4.0001e-04 | 1.8750e-04 | 3.5263e-04 | 5.0860e-05 |
+| frames-1 | ase.db | 1.1397e-03 | 2.1766e-04 | 1.0986e-03 | 2.0727e-04 |
+| frames-100 | readcon-db | 4.6217e-03 | 9.0406e-04 | 4.5140e-03 | 9.2139e-04 |
+| frames-100 | ase.db | 3.4705e-02 | 7.7993e-04 | 3.8429e-02 | 3.4022e-03 |
+| frames-10000 | readcon-db | 3.0166e-01 | 9.0925e-03 | 2.9006e-01 | 1.5331e-02 |
+| frames-10000 | ase.db | 3.2814e+00 | 9.6273e-02 | 3.7586e+00 | 2.2481e-01 |
+
+The million-atom insert is 0.152 s against ASE at 0.247 s.
+
+The one-frame insert, still on the full parse, was measured again with
+one discarded warmup and n = 12. Type-7 median 3.6301e-04 s, IQR
+1.7203e-04 s. Samples, in seconds: 9.4731e-04, 9.1185e-04, 5.0267e-04,
+3.3190e-04, 3.0630e-04, 3.3521e-04, 3.1668e-04, 5.1356e-04, 3.5311e-04,
+3.7291e-04, 5.0141e-04, 3.3385e-04. Both 0.315 ms and 0.400 ms sit
+inside that IQR, so the earlier move is the fsync spread. Raw lines:
+`insert-frames1-n12.log`.
+

@@ -137,8 +137,8 @@ The single-frame query is `frame_index` of the middle frame.
 The published CPC log (`paper/cpc/logs/db.log`, 40 frames of 8 Cu, no
 warmup) is readcon-db 4.67 ms and ASE 72.3 ms (IQR 37.7 ms). ASE
 committed and fsynced once per frame. On the fair harness that same
-40×8 insert, one commit each, is readcon-db 1.97 ms (IQR 0.66 ms) and
-ASE 6.52 ms (IQR 1.29 ms).
+40×8 insert, one commit each, is readcon-db 1.70 ms (IQR 0.42 ms) and
+ASE 5.17 ms (IQR 0.48 ms).
 
 Type-7 medians from the fair ladder on that host, in seconds:
 
@@ -156,18 +156,18 @@ Type-7 medians from the fair ladder on that host, in seconds:
 | 8 atoms, 10⁴ frames | full read | warm | 1.12e-1 | 9.62e-1 |
 | 8 atoms, 10⁴ frames | full read | cold | 1.21e-1 | 9.77e-1 |
 | 8 atoms, 10⁴ frames | one frame | cold | 5.67e-4 | 3.56e-3 |
-| 10⁶ atoms, 1 frame | insert | cold-file | 1.65e-1 | 2.40e-1 |
-| 8 atoms, 10⁴ frames | insert | cold-file | 3.02e-1 | 3.28e0 |
+| 10⁶ atoms, 1 frame | insert | cold-file | 1.52e-1 | 2.47e-1 |
+| 8 atoms, 10⁴ frames | insert | cold-file | 2.90e-1 | 3.76e0 |
 
 readcon-db is ahead on every full read, every single-frame query, and
 every insert in that log, warm and cold. A text above 512 KiB is indexed
-from the stored span, without one object per atom; the 10⁶-atom insert
-was 0.349 s before that and is 0.165 s after, against ASE at 0.240 s.
-Texts at or below 512 KiB still take the full parse. The one-frame
-insert median moved from 0.315 ms to 0.400 ms, which is past the
-previous IQR by about 0.05 ms, from a single 1.0 ms fsync sample; the
-other five samples are 0.30–0.54 ms. The full ladder, including the
-before column, is
+from the stored span. Every coordinate, fixed-flag, and force row is
+checked, and no per-atom object is built. The 10⁶-atom insert was
+0.349 s on the per-atom path and is 0.152 s after, against ASE at
+0.247 s. Texts at or below 512 KiB still take the full parse. A
+one-frame insert with n = 12 has median 0.363 ms (IQR 0.172 ms); the
+earlier 0.315 ms and 0.400 ms medians both sit inside that IQR. The
+full ladder, including the before column, is
 [`examples/benchmarks/results/fair/RESULTS.md`](examples/benchmarks/results/fair/RESULTS.md).
 Select-count parity on a shared CON ladder remains
 `examples/benchmarks/fair_campaign.py`.
