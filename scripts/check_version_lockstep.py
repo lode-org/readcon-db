@@ -26,8 +26,8 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parent.parent
 # The published writer whose CON and JSON round trips the tests rely on.
-# 0.21.0 is the first release with atom-id correspondence.
-READCON_CORE_PIN = "=0.21.0"
+# 0.22.0 keeps atom-id correspondence and per-frame column identity.
+READCON_CORE_PIN = "=0.22.0"
 
 
 def read(root, rel):

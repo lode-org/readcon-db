@@ -30,7 +30,7 @@ use crate::keys::{hash_frame_bytes, ContentHash, FrameKey};
 /// Canonical identity version stored in `idx_canon` and `canon_by_frame`.
 ///
 /// Version 1 reorders atoms into increasing `atom_id` with
-/// [`reorder_like`](https://docs.rs/readcon-core/0.21.0/readcon_core/correspondence/fn.reorder_like.html)
+/// [`reorder_like`](https://docs.rs/readcon-core/0.22.0/readcon_core/correspondence/fn.reorder_like.html)
 /// under the strict symbol, mass, and fixed-mask check, then takes
 /// xxHash3-128 of the canonical CON writer bytes
 /// (`FloatFormat::RoundTrip`, metadata keys sorted).

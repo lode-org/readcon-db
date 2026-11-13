@@ -4,7 +4,7 @@
 #### Features
 - (**identity**) opt-in canonical hash for frames that differ by atom-id order
 #### Build system
-- (**reader**) require readcon-core 0.21.0 for atom-id correspondence
+- (**reader**) require readcon-core 0.22.0 for atom-id correspondence and per-frame column identity
 
 ## v0.2.1 - 2026-11-11
 #### Bug Fixes

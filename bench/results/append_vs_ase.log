@@ -1,0 +1,19 @@
+protocol=serial, one warmup, n=6, type-7 median and IQR
+fixture=resources/test/tiny_cuh2.con n_frames=100 cpu=Intel(R) Xeon(R) Processor
+readcon=0.22.0
+readcon-db warmup_s=4.333525000e-03
+readcon-db sample=0 seconds=3.040477000e-03
+readcon-db sample=1 seconds=3.333223000e-03
+readcon-db sample=2 seconds=3.804265000e-03
+readcon-db sample=3 seconds=2.733387000e-03
+readcon-db sample=4 seconds=3.891367000e-03
+readcon-db sample=5 seconds=2.860179000e-03
+readcon-db median_s=3.186850000e-03 iqr_s=7.812510000e-04
+ase.db warmup_s=1.856070300e-02
+ase.db sample=0 seconds=1.820484700e-02
+ase.db sample=1 seconds=1.851924300e-02
+ase.db sample=2 seconds=1.716311100e-02
+ase.db sample=3 seconds=1.746992100e-02
+ase.db sample=4 seconds=1.825952500e-02
+ase.db sample=5 seconds=1.829821700e-02
+ase.db median_s=1.823218600e-02 iqr_s=6.348915001e-04
