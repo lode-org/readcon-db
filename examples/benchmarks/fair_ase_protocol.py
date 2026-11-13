@@ -222,8 +222,13 @@ def assert_one_commit(db) -> None:
 
 
 def close_lmdb(db) -> None:
+    """Drop the corpus. A process-wide ``gc.collect()`` is not required.
+
+    CPython frees the extension object when this reference goes away, and
+    that releases the LMDB environment. Collecting the whole heap from
+    inside the timed close was an 8 ms floor on every cold read.
+    """
     del db
-    gc.collect()
 
 
 def build_records(n_frames: int, n_atoms: int) -> tuple[str, list[Atoms], list[dict]]:
@@ -398,7 +403,8 @@ def header_lines() -> list[str]:
         "quantile type-7 (numpy percentile method=linear)",
         "order serial, tools alternate each sample index, no parallel samples",
         "page_cache insert: unlink and create the database file each sample",
-        "page_cache read_cold: close, posix_fadvise DONTNEED, reopen, then time the read",
+        "page_cache read_cold: posix_fadvise DONTNEED on the closed files, then time readonly open plus the read",
+        "page_cache drop_caches: /proc/sys/vm/drop_caches is not writable here, so it is not used",
         "page_cache read_warm: one warmup read on the open store, then time the read",
         "lmdb MDB_NOSYNC unset, one write transaction, fsync on commit",
         "ase backend sqlite journal_mode=DELETE synchronous=FULL, one commit fsync",
@@ -547,7 +553,27 @@ def stamp_frame_index(atoms_list: list[Atoms]) -> None:
 
 
 def open_readcon(path: Path):
-    return ConCorpus(str(path))
+    """Read-only open. A writable open commits, and a read must not fsync."""
+    return ConCorpus(str(path), readonly=True)
+
+
+def measure_read(kind: str, dest: Path, op: str, n_frames: int, records: list[dict], mid: int):
+    """Open, read one full trajectory or one frame, close. No ``gc.collect``."""
+    if kind == "readcon-db":
+        db = open_readcon(dest / "corpus")
+    else:
+        db = open_ase_reader(dest / "atoms.db")
+    try:
+        if op == "full_read":
+            if kind == "readcon-db":
+                return full_read_readcon(db, n_frames, records)
+            return full_read_ase(db, n_frames, records)
+        rec = records[mid]
+        if kind == "readcon-db":
+            return selected_readcon(db, mid, rec)
+        return selected_ase(db, mid, rec)
+    finally:
+        close_reader(kind, db)
 
 
 def open_ase_reader(path: Path):
@@ -836,16 +862,16 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
                     for kind in order:
                         if cache == "cold":
                             prepare_cold(kind)
-
-                            def timed(kind=kind):
-                                db = open_kind(kind)
-                                try:
-                                    return run_op(kind, db)
-                                finally:
-                                    close_reader(kind, db)
-
-                            seconds, _ = time_call(timed)
-                            del timed
+                            seconds, _ = time_call(
+                                lambda kind=kind: measure_read(
+                                    kind,
+                                    stored[kind],
+                                    op,
+                                    spec["n_frames"],
+                                    payload["records"],
+                                    mid,
+                                )
+                            )
                         else:
                             db = holders[kind]
                             seconds, _ = time_call(lambda kind=kind, db=db: run_op(kind, db))

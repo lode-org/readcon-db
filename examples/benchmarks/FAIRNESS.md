@@ -48,11 +48,16 @@ changes the harness.
   sample's pages belong to an inode that is gone. Schema creation sits
   outside the timer on both sides, so the timed section is the data
   transaction.
-* A cold read closes the store, calls `posix_fadvise(DONTNEED)` on the
-  file, reopens, and times the read. A warm read is the next read on
-  the open store. One warmup is discarded for every series. Samples
-  are serial, the two tools alternate, n = 6. The summary is the
-  type-7 median and IQR (NumPy `percentile` method `linear`).
+* A cold read drops the page cache with `posix_fadvise(DONTNEED)` on
+  the closed database files, then times a readonly open plus the read.
+  `/proc/sys/vm/drop_caches` is not writable on this host, so it is not
+  used. A fresh file would still be in the page cache after the write,
+  and it would not be a colder read than the advice. A warm read is
+  the next read on the open store. One warmup is discarded for every
+  series. Samples are serial, the two tools alternate, n = 6. The
+  summary is the type-7 median and IQR (NumPy `percentile` method
+  `linear`). The timed close does not call `gc.collect()`: that walk
+  was an 8 ms floor on every cold readcon-db sample.
 * After every insert, and inside every read, each stored field is
   compared by its float64 bytes. A mismatch aborts the run. Raw lines
   are `results/fair/campaign.log`.
@@ -62,13 +67,13 @@ The size ladder is one frame of 10³, 10⁴, 10⁵, and 10⁶ atoms, and 1,
 and a selected-row query (`frame_index` of the middle frame), cold and
 warm for the reads.
 
-Cold readcon-db times include opening the environment. The default map
-is 8 MiB. A write grows it to fit, and reopening an existing corpus
-maps at least twice `data.mdb`, including a database created when the
-default was 2 GiB. A one-frame cold open is still about 8 ms of
-environment setup. On the million-atom frame the cold read (0.168 s)
-matches the warm read, because the map follows the file rather than a
-2 GiB reservation.
+Cold readcon-db times include a readonly open. The previous cold rows
+were slower than ASE on the small corpora because the timed close
+called `gc.collect()` and the open was writable, so it could commit.
+The read itself was not that slow: a one-frame open plus column read
+is a few hundred microseconds once the collection is outside the
+timer. The default map stays 8 MiB, and reopening an existing corpus
+still maps at least twice `data.mdb`.
 
 ## Warm full read
 
