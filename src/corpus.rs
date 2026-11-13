@@ -284,6 +284,44 @@ fn prepared_bytes(prepared: &[PreparedIndexPuts]) -> usize {
         .fold(0usize, |n, p| n.saturating_add(p.stored.len()))
 }
 
+/// Project many frames at once. One frame stays on the calling thread.
+fn project_spans(texts: &[&str]) -> Result<Vec<crate::span_columns::SpanFacts>> {
+    if texts.len() < 32 {
+        return texts
+            .iter()
+            .map(|text| crate::span_columns::project_frame(text.as_bytes()))
+            .collect();
+    }
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .clamp(1, 8);
+    let chunk = texts.len().div_ceil(threads).max(1);
+    let mut parts = Vec::new();
+    std::thread::scope(|scope| {
+        let mut joins = Vec::new();
+        for piece in texts.chunks(chunk) {
+            joins.push(
+                scope.spawn(move || -> Result<Vec<crate::span_columns::SpanFacts>> {
+                    let mut out = Vec::with_capacity(piece.len());
+                    for text in piece {
+                        out.push(crate::span_columns::project_frame(text.as_bytes())?);
+                    }
+                    Ok(out)
+                }),
+            );
+        }
+        for join in joins {
+            parts.push(join.join().expect("frame projection"));
+        }
+    });
+    let mut all = Vec::with_capacity(texts.len());
+    for part in parts {
+        all.extend(part?);
+    }
+    Ok(all)
+}
+
 impl ConCorpus {
     /// Create or open a corpus at `path` with the default map size.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -947,12 +985,16 @@ impl ConCorpus {
     ) -> Result<Vec<PreparedIndexPuts>> {
         let spans = readcon_core::index_proj::frame_byte_spans_skip(file_contents)
             .map_err(|e| Error::Parse(e.to_string()))?;
-        let mut out = Vec::with_capacity(spans.len());
-        for (i, span) in spans.into_iter().enumerate() {
-            let text = span
-                .slice(file_contents)
-                .ok_or_else(|| Error::Parse("frame span is not valid UTF-8".into()))?;
-            let facts = crate::span_columns::project_frame(text.as_bytes())?;
+        let mut texts = Vec::with_capacity(spans.len());
+        for span in &spans {
+            texts.push(
+                span.slice(file_contents)
+                    .ok_or_else(|| Error::Parse("frame span is not valid UTF-8".into()))?,
+            );
+        }
+        let facts = project_spans(&texts)?;
+        let mut out = Vec::with_capacity(texts.len());
+        for (i, (text, facts)) in texts.iter().zip(facts).enumerate() {
             let fk = FrameKey {
                 traj_id,
                 frame_idx: u32::try_from(i).map_err(|_| Error::Parse("too many frames".into()))?,
@@ -3302,6 +3344,71 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/test")
     }
 
+    /// One valid frame, with one planted defect. `n` is the declared atom count
+    /// except for the truncated and count-mismatch cases.
+    fn malformed_con(n: usize, kind: &str) -> String {
+        let declared = if kind == "truncated" { n + 5 } else { n };
+        let mut text = format!(
+            "\n{{\"con_spec_version\":3,\"con_spec_minor\":1,\"energy\":-1.5,\"frame_index\":0,\"pbc\":[true,true,false],\"sections\":[\"forces\"],\"units\":{{\"length\":\"angstrom\",\"energy\":\"eV\"}}}}\n10.5 12.25 8.0\n90 90 90\n\n\n1\n{declared}\n63.546\nCu\nCoordinates of Component 1\n"
+        );
+        let rows = if kind == "truncated" { n } else { declared };
+        if kind == "count" {
+            text = format!(
+                "\n{{\"con_spec_version\":3,\"con_spec_minor\":1,\"units\":{{\"length\":\"angstrom\",\"energy\":\"eV\"}}}}\n10.5 12.25 8.0\n90 90 90\n\n\n2\n{n}\n63.546 1.0\nCu\nCoordinates of Component 1\n"
+            );
+            for i in 0..n {
+                text.push_str(&format!("{i}.0 0.5 1.0 0 {i}\n"));
+            }
+            return text;
+        }
+        for i in 0..rows {
+            if i + 1 == rows {
+                match kind {
+                    "float" => text.push_str("1.0 2.0 zz 0 1\n"),
+                    "short" => text.push_str("1.0 2.0 3.0\n"),
+                    "extra" => text.push_str("1.0 2.0 3.0 0 1 9\n"),
+                    "flag" => text.push_str("1.0 2.0 3.0 9 1\n"),
+                    "force" => text.push_str(&format!("{i}.0 0.5 1.0 0 {i}\n")),
+                    _ => text.push_str(&format!("{i}.0 0.5 1.0 0 {i}\n")),
+                }
+            } else {
+                text.push_str(&format!("{i}.0 0.5 1.0 0 {i}\n"));
+            }
+        }
+        text.push_str("\nCu\nForces of Component 1\n");
+        for i in 0..rows {
+            if kind == "force" && i + 1 == rows {
+                text.push_str("0.1 bad 0.3 0 1\n");
+            } else {
+                text.push_str(&format!("0.1 0.2 0.3 0 {i}\n"));
+            }
+        }
+        text
+    }
+
+    fn malformed_pair() -> Vec<(&'static str, String, String)> {
+        [
+            "float",
+            "short",
+            "extra",
+            "flag",
+            "truncated",
+            "count",
+            "force",
+        ]
+        .into_iter()
+        .map(|kind| {
+            let mut large_n = 4_000usize;
+            let mut large = malformed_con(large_n, kind);
+            while large.len() <= 512 * 1024 {
+                large_n *= 2;
+                large = malformed_con(large_n, kind);
+            }
+            (kind, malformed_con(8, kind), large)
+        })
+        .collect()
+    }
+
     #[test]
     fn span_prepare_matches_parsed_index_keys() {
         for name in [
@@ -3335,6 +3442,52 @@ mod tests {
                 assert_eq!(puts.meta_keys, slow.meta_keys, "{name} meta");
             }
             assert!(it.next().is_none(), "{name}");
+        }
+    }
+
+    /// A malformed frame is rejected at both sizes. The span path must not
+    /// accept a file the full parser rejects.
+    #[test]
+    fn malformed_frame_rejection_does_not_depend_on_size() {
+        fn fault(err: &str) -> &'static str {
+            if err.contains("expected") && err.contains("values") {
+                "width"
+            } else if err.contains("invalid number") || err.contains("non-finite") {
+                "float"
+            } else if err.contains("invalid fixed flag") {
+                "flag"
+            } else if err.contains("ended unexpectedly") || err.contains("truncated") {
+                "truncated"
+            } else if err.contains("count") {
+                "count"
+            } else {
+                "other"
+            }
+        }
+        for (label, small, large) in malformed_pair() {
+            assert!(
+                small.len() <= 512 * 1024,
+                "{label} small is {} bytes",
+                small.len()
+            );
+            assert!(
+                large.len() > 512 * 1024,
+                "{label} large is {} bytes",
+                large.len()
+            );
+            let small_err = ConCorpus::prepare_trajectory_str(1, &small, false).err();
+            let large_err = ConCorpus::prepare_trajectory_str(1, &large, false).err();
+            match (small_err, large_err) {
+                (Some(a), Some(b)) => {
+                    let fa = fault(&a.to_string());
+                    let fb = fault(&b.to_string());
+                    assert_eq!(fa, fb, "{label}: small {a} vs large {b}");
+                    assert_ne!(fa, "other", "{label}: {a}");
+                }
+                (None, None) => panic!("{label} accepted at both sizes"),
+                (None, Some(b)) => panic!("{label} accepted below 512 KiB, rejected above: {b}"),
+                (Some(a), None) => panic!("{label} rejected below 512 KiB, accepted above: {a}"),
+            }
         }
     }
 

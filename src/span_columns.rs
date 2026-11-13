@@ -363,8 +363,10 @@ pub struct SpanFacts {
 
 /// Index one frame from its stored bytes.
 ///
-/// Coordinate rows are skipped. Force rows are parsed only to obtain
-/// `fmax`. The numeric kernel is the same one the column reader uses.
+/// Every coordinate, force, and velocity row is checked for field count,
+/// float syntax, and the fixed flag. No per-atom object is built. Force
+/// magnitudes are reduced to `fmax`. Rows of a large block are checked
+/// in parallel.
 pub fn project_frame(bytes: &[u8]) -> Result<SpanFacts> {
     let mut cur = Cur { bytes, i: 0 };
     if cur.rest_blank() {
@@ -390,7 +392,15 @@ pub fn project_frame(bytes: &[u8]) -> Result<SpanFacts> {
     }
     let counts = uints(cur.take()?)?;
     if counts.len() != n_types {
-        return Err(Error::Parse("per-type counts do not match".into()));
+        return Err(Error::Parse(format!(
+            "expected {n_types} values on line, found {}",
+            counts.len()
+        )));
+    }
+    if counts.contains(&0) {
+        return Err(Error::Parse(
+            "invalid count: each per-type count must be >= 1".into(),
+        ));
     }
     let masses = f64s(cur.take()?, n_types)?;
     facts.total_mass = total_mass(&counts, &masses);
@@ -406,7 +416,14 @@ pub fn project_frame(bytes: &[u8]) -> Result<SpanFacts> {
         if !symbol.is_empty() {
             *species.entry(symbol).or_insert(0) += n;
         }
-        skip_lines(&mut cur, *count)?;
+        check_vector_block(
+            &mut cur,
+            *count,
+            "atom data",
+            gate.spec as u32,
+            false,
+            false,
+        )?;
         natoms += n;
     }
     facts.n_atoms = natoms;
@@ -430,7 +447,7 @@ pub fn project_frame(bytes: &[u8]) -> Result<SpanFacts> {
             break;
         }
         let _blank = cur.take()?;
-        note_section(&mut cur, &counts, &mut facts, &mut fmax)?;
+        note_section(&mut cur, &counts, gate.spec as u32, &mut facts, &mut fmax)?;
     }
     facts.fmax = fmax;
     if facts.has_velocities && gate.spec >= 3 && gate.minor >= 1 && !gate.units_time {
@@ -441,44 +458,282 @@ pub fn project_frame(bytes: &[u8]) -> Result<SpanFacts> {
     Ok(facts)
 }
 
-fn skip_lines(cur: &mut Cur<'_>, n: usize) -> Result<()> {
-    for _ in 0..n {
-        cur.take()?;
-    }
-    Ok(())
-}
-
 fn note_section(
     cur: &mut Cur<'_>,
     counts: &[usize],
+    spec: u32,
     facts: &mut SpanFacts,
     fmax: &mut Option<f64>,
 ) -> Result<()> {
     for count in counts {
-        let _symbol = cur.take()?;
+        let _symbol = cur
+            .take()
+            .map_err(|_| Error::Parse("file ended unexpectedly while reading atom data".into()))?;
         let label = as_str(cur.take()?)?;
         let kind = label.split_whitespace().next().unwrap_or("");
+        let where_ = match kind {
+            "Forces" => "force section",
+            "Velocities" => "velocity section",
+            "Energies" => "energy section",
+            _ => "atom data",
+        };
         match kind {
             "Forces" => {
                 facts.has_forces = true;
-                for _ in 0..*count {
-                    let row = xyz_prefix(cur.take()?)?;
-                    let mag = (row[0] * row[0] + row[1] * row[1] + row[2] * row[2]).sqrt();
-                    if mag.is_finite() {
-                        *fmax = Some(fmax.map_or(mag, |cur| cur.max(mag)));
-                    }
+                let local = check_vector_block(cur, *count, where_, spec, true, true)?;
+                if let Some(mag) = local {
+                    *fmax = Some(fmax.map_or(mag, |cur| cur.max(mag)));
                 }
             }
             "Velocities" => {
                 facts.has_velocities = true;
-                skip_lines(cur, *count)?;
+                check_vector_block(cur, *count, where_, spec, true, false)?;
             }
             "Energies" => {
                 facts.has_energy = true;
-                skip_lines(cur, *count)?;
+                let ranges = take_row_ranges(cur, *count, where_)?;
+                check_scalar_rows(cur.bytes, &ranges, spec)?;
             }
-            _ => skip_lines(cur, *count)?,
+            _ => {
+                check_vector_block(cur, *count, where_, spec, true, false)?;
+            }
         }
+    }
+    Ok(())
+}
+
+/// Short blocks are checked in place. A long block records line ranges and
+/// checks them on several threads.
+fn check_vector_block(
+    cur: &mut Cur<'_>,
+    n: usize,
+    where_: &str,
+    spec: u32,
+    id_required: bool,
+    fmax: bool,
+) -> Result<Option<f64>> {
+    if n < 8_192 {
+        let mut max_mag = None;
+        for _ in 0..n {
+            let line = cur.take().map_err(|_| {
+                Error::Parse(format!("file ended unexpectedly while reading {where_}"))
+            })?;
+            let xyz = check_vector_line(line, spec, id_required)?;
+            if fmax {
+                let mag = (xyz[0] * xyz[0] + xyz[1] * xyz[1] + xyz[2] * xyz[2]).sqrt();
+                if mag.is_finite() {
+                    max_mag = Some(max_mag.map_or(mag, |cur: f64| cur.max(mag)));
+                }
+            }
+        }
+        return Ok(max_mag);
+    }
+    let ranges = take_row_ranges(cur, n, where_)?;
+    check_vector_rows(cur.bytes, &ranges, spec, id_required, fmax)
+}
+
+fn take_row_ranges(cur: &mut Cur<'_>, n: usize, where_: &str) -> Result<Vec<(usize, usize)>> {
+    let mut ranges = Vec::with_capacity(n);
+    let base = cur.bytes.as_ptr() as usize;
+    for _ in 0..n {
+        let line = cur
+            .take()
+            .map_err(|_| Error::Parse(format!("file ended unexpectedly while reading {where_}")))?;
+        let start = line.as_ptr() as usize - base;
+        ranges.push((start, start + line.len()));
+    }
+    Ok(ranges)
+}
+
+/// `id_required` is false for coordinate rows, where the id may be omitted.
+/// `fmax` reduces the Euclidean force magnitude when the row is a force.
+fn check_vector_rows(
+    bytes: &[u8],
+    ranges: &[(usize, usize)],
+    spec: u32,
+    id_required: bool,
+    fmax: bool,
+) -> Result<Option<f64>> {
+    if ranges.len() < 8_192 {
+        return check_vector_rows_seq(bytes, ranges, spec, id_required, fmax);
+    }
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .clamp(1, 8);
+    let chunk = ranges.len().div_ceil(threads).max(1);
+    let mut maxes = Vec::new();
+    let mut error = None;
+    std::thread::scope(|scope| {
+        let mut joins = Vec::new();
+        for piece in ranges.chunks(chunk) {
+            joins.push(
+                scope.spawn(move || check_vector_rows_seq(bytes, piece, spec, id_required, fmax)),
+            );
+        }
+        for join in joins {
+            match join.join().expect("row check") {
+                Ok(Some(mag)) => maxes.push(mag),
+                Ok(None) => {}
+                Err(err) => error = Some(err),
+            }
+        }
+    });
+    if let Some(err) = error {
+        return Err(err);
+    }
+    Ok(maxes.into_iter().reduce(f64::max))
+}
+
+fn check_vector_rows_seq(
+    bytes: &[u8],
+    ranges: &[(usize, usize)],
+    spec: u32,
+    id_required: bool,
+    fmax: bool,
+) -> Result<Option<f64>> {
+    let mut max_mag = None;
+    for &(start, end) in ranges {
+        let xyz = check_vector_line(&bytes[start..end], spec, id_required)?;
+        if fmax {
+            let mag = (xyz[0] * xyz[0] + xyz[1] * xyz[1] + xyz[2] * xyz[2]).sqrt();
+            if mag.is_finite() {
+                max_mag = Some(max_mag.map_or(mag, |cur: f64| cur.max(mag)));
+            }
+        }
+    }
+    Ok(max_mag)
+}
+
+fn check_scalar_rows(bytes: &[u8], ranges: &[(usize, usize)], spec: u32) -> Result<()> {
+    for &(start, end) in ranges {
+        check_scalar_line(&bytes[start..end], spec)?;
+    }
+    Ok(())
+}
+
+fn next_token(line: &[u8], mut i: usize) -> Option<(usize, usize)> {
+    while i < line.len() && line[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    if i >= line.len() {
+        return None;
+    }
+    let start = i;
+    while i < line.len() && !line[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    Some((start, i))
+}
+
+fn check_vector_line(line: &[u8], spec: u32, id_required: bool) -> Result<[f64; 3]> {
+    let mut i = 0usize;
+    let mut xyz = [0.0f64; 3];
+    for (slot, dest) in xyz.iter_mut().enumerate() {
+        let Some((start, end)) = next_token(line, i) else {
+            return Err(width_err(slot));
+        };
+        *dest = parse_f64_token(&line[start..end])?;
+        i = end;
+    }
+    let Some((start, end)) = next_token(line, i) else {
+        return Err(width_err(3));
+    };
+    parse_flag(&line[start..end], spec)?;
+    i = end;
+    match next_token(line, i) {
+        Some((start, end)) => {
+            parse_id(&line[start..end])?;
+            i = end;
+            if next_token(line, i).is_some() {
+                let mut found = 5usize;
+                let mut at = i;
+                while let Some((_, end)) = next_token(line, at) {
+                    found += 1;
+                    at = end;
+                }
+                return Err(width_err(found));
+            }
+        }
+        None if id_required => return Err(width_err(4)),
+        None => {}
+    }
+    Ok(xyz)
+}
+
+fn check_scalar_line(line: &[u8], spec: u32) -> Result<()> {
+    let mut i = 0usize;
+    let Some((start, end)) = next_token(line, i) else {
+        return Err(width_err(0));
+    };
+    parse_f64_token(&line[start..end])?;
+    i = end;
+    let Some((start, end)) = next_token(line, i) else {
+        return Err(Error::Parse("expected 3 values on line, found 1".into()));
+    };
+    parse_flag(&line[start..end], spec)?;
+    i = end;
+    let Some((start, end)) = next_token(line, i) else {
+        return Err(Error::Parse("expected 3 values on line, found 2".into()));
+    };
+    parse_id(&line[start..end])?;
+    if next_token(line, end).is_some() {
+        return Err(Error::Parse("expected 3 values on line, found more".into()));
+    }
+    Ok(())
+}
+
+fn width_err(found: usize) -> Error {
+    Error::Parse(format!("expected 5 values on line, found {found}"))
+}
+
+fn parse_f64_token(tok: &[u8]) -> Result<f64> {
+    let shown = String::from_utf8_lossy(tok);
+    let (val, consumed) = fast_float2::parse_partial::<f64, _>(tok)
+        .map_err(|_| Error::Parse(format!("invalid number format: invalid float: {shown}")))?;
+    if consumed != tok.len() {
+        return Err(Error::Parse(format!(
+            "invalid number format: invalid float: {shown}"
+        )));
+    }
+    if !val.is_finite() {
+        return Err(Error::Parse(format!("non-finite value: {shown}")));
+    }
+    Ok(val)
+}
+
+fn parse_flag(tok: &[u8], spec: u32) -> Result<()> {
+    if tok.is_empty() || !tok.iter().all(|b| b.is_ascii_digit()) {
+        return Err(Error::Parse(format!(
+            "invalid fixed flag: {}",
+            String::from_utf8_lossy(tok)
+        )));
+    }
+    let val: u64 = std::str::from_utf8(tok)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| {
+            Error::Parse(format!(
+                "invalid fixed flag: {}",
+                String::from_utf8_lossy(tok)
+            ))
+        })?;
+    let ok = if spec < 2 { val <= 1 } else { val <= 7 };
+    if !ok {
+        return Err(Error::Parse(format!(
+            "invalid fixed flag: {}",
+            String::from_utf8_lossy(tok)
+        )));
+    }
+    Ok(())
+}
+
+fn parse_id(tok: &[u8]) -> Result<()> {
+    if tok.is_empty() || !tok.iter().all(|b| b.is_ascii_digit()) {
+        return Err(Error::Parse(format!(
+            "invalid number format: invalid float: {}",
+            String::from_utf8_lossy(tok)
+        )));
     }
     Ok(())
 }
