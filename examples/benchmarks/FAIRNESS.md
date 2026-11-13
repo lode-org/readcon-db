@@ -102,6 +102,37 @@ type-7), tree `850c5618`:
 | 1e6 | 1 | 1.65e-1 (IQR 4.43e-2) | 2.49e-1 (IQR 4.87e-2) |
 | 8 | 1e4 | 9.56e-2 | 8.73e-1 |
 
+## Cold full read and one frame
+
+`/proc/sys/vm/drop_caches` is not writable here. Each cold sample calls
+`posix_fadvise(DONTNEED)` on the closed `data.mdb` and `lock.mdb` (and
+on the sqlite file), then times a readonly open plus the read. A probe
+of a 64 MiB file went from 0.036 s warm to 0.061 s after that advice.
+The single-frame query is `frame_index` of the middle frame.
+
+Cold rows on this host after removing the collection from the timer
+(one warmup, n = 6, type-7), tree `e3aae36b`:
+
+| workload | op | readcon-db s | ASE s |
+| --- | --- | --- | --- |
+| 1e3 atoms | full | 4.24e-4 | 9.96e-4 |
+| 1e3 atoms | one frame | 5.93e-4 | 1.46e-3 |
+| 1e4 atoms | full | 1.49e-3 | 3.16e-3 |
+| 1e4 atoms | one frame | 2.01e-3 | 4.60e-3 |
+| 1e5 atoms | full | 1.59e-2 | 2.84e-2 |
+| 1e5 atoms | one frame | 1.41e-2 | 2.46e-2 |
+| 1e6 atoms | full | 1.78e-1 | 2.82e-1 |
+| 1e6 atoms | one frame | 1.80e-1 | 2.83e-1 |
+| 1 frame | full | 2.87e-4 | 6.55e-4 |
+| 1 frame | one frame | 2.78e-4 | 7.32e-4 |
+| 100 frames | full | 1.53e-3 | 1.06e-2 |
+| 100 frames | one frame | 3.37e-4 | 7.85e-4 |
+| 1e4 frames | full | 1.21e-1 | 9.77e-1 |
+| 1e4 frames | one frame | 5.67e-4 | 3.56e-3 |
+
+readcon-db is ahead on every cold full read and every cold single-frame
+read. Warm rows in `results/fair/RESULTS.md` stay ahead as well.
+
 ## This machine
 
 Host `cursor`, 2026-11-13, tree `c738f8dd`. Raw lines are
