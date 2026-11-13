@@ -63,8 +63,39 @@ and a selected-row query (`frame_index` of the middle frame), cold and
 warm for the reads.
 
 Cold readcon-db times include opening the environment. The default map
-is 2 GiB of address space, so a one-frame cold read is mostly that
-open. The warm row is the read with the environment already mapped.
+is 8 MiB. A write grows it to fit, and reopening an existing corpus
+maps at least twice `data.mdb`, including a database created when the
+default was 2 GiB. A one-frame cold open is still about 8 ms of
+environment setup. On the million-atom frame the cold read (0.168 s)
+matches the warm read, because the map follows the file rather than a
+2 GiB reservation.
+
+## Warm full read
+
+The old full read copied the span out of LMDB, decompressed it into a
+Python `str`, then `readcon.read_con_string` built a frame object and
+the check walked one Python atom per site. On the 54,086,580-byte
+million-atom CON that split was about 0.055 s to materialise the text
+and 0.148 s to build the frame, and the atom walk took the measured
+warm read to 1.22 s. readcon-core's own serial parse of a CON this size
+is about 0.039 s, so the gap was the copy and the per-atom objects.
+
+`ConCorpus.read_columns` parses the stored bytes in place when they are
+uncompressed, decompresses a zstd group once, and fills column buffers
+with the same fast-float kernel as readcon-core. NumPy arrays view those
+buffers. The GIL is released for the scan. Field checks stay on the
+float64 bytes.
+
+Warm full read on this host after that change (one warmup, n = 6,
+type-7), tree `850c5618`:
+
+| atoms | frames | readcon-db s | ASE s |
+| --- | --- | --- | --- |
+| 1e3 | 1 | 2.19e-4 | 4.67e-4 |
+| 1e4 | 1 | 1.40e-3 | 2.72e-3 |
+| 1e5 | 1 | 1.44e-2 | 2.34e-2 |
+| 1e6 | 1 | 1.65e-1 (IQR 4.43e-2) | 2.49e-1 (IQR 4.87e-2) |
+| 8 | 1e4 | 9.56e-2 | 8.73e-1 |
 
 ## This machine
 
