@@ -1,6 +1,7 @@
 """A cold read must not collect the whole Python heap inside the timer."""
 
 import gc
+import os
 import sys
 from pathlib import Path
 
@@ -35,3 +36,19 @@ def test_cold_read_does_not_collect_inside_the_timer(tmp_path, monkeypatch):
     assert calls == []
     # The environment was released, so another readonly open works.
     fair.measure_read("readcon-db", dest, "selected", 1, records, 0)
+
+
+def test_mincore_sees_a_resident_file_and_labels_advice(tmp_path):
+    page = os.sysconf("SC_PAGE_SIZE")
+    path = tmp_path / "pages.bin"
+    path.write_bytes(b"x" * (page * 4))
+    assert path.read_bytes()[0] == ord("x")
+    held = fair.resident_fraction(path)
+    assert held > 0.0
+    fraction, label = fair.advise_cold(path)
+    assert label in ("verified", "resident")
+    if label == "verified":
+        assert fraction == 0.0
+        assert fair.resident_fraction(path) == 0.0
+    else:
+        assert fraction > 0.0

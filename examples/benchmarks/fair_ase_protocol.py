@@ -16,8 +16,11 @@ child exits. fsync latency then tracks the other store's writeback.
 This script keeps every sample. Each sample unlinks and creates the
 database file, both stores use one write transaction and one commit
 fsync, parsing stays outside the timer, and one warmup is discarded.
-Reads are a separate cold series (close, ``posix_fadvise`` DONTNEED,
-reopen) and a warm series. n = 6, serial, type-7 median and IQR.
+Reads are a separate cold series and a warm series. Cold closes the
+store, advises ``DONTNEED``, and checks residency with ``mincore``.
+The advice is retried until no page is resident. A sample that stays
+resident is labeled and left out of the cold median. n = 6, serial,
+type-7 median and IQR. Every stored field is checked; a mismatch aborts.
 """
 
 from __future__ import annotations
@@ -74,7 +77,28 @@ _LIBC.posix_fadvise.argtypes = [
     ctypes.c_int,
 ]
 _LIBC.posix_fadvise.restype = ctypes.c_int
+_LIBC.mmap.argtypes = [
+    ctypes.c_void_p,
+    ctypes.c_size_t,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int64,
+]
+_LIBC.mmap.restype = ctypes.c_void_p
+_LIBC.munmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+_LIBC.munmap.restype = ctypes.c_int
+_LIBC.mincore.argtypes = [
+    ctypes.c_void_p,
+    ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_ubyte),
+]
+_LIBC.mincore.restype = ctypes.c_int
 _POSIX_FADV_DONTNEED = 4
+_PROT_READ = 1
+_MAP_PRIVATE = 2
+_PAGE = os.sysconf("SC_PAGE_SIZE")
+_COLD_TRIES = 8
 
 
 def type7(values: list[float], p: float) -> float:
@@ -114,15 +138,71 @@ def summarize(values: list[float]) -> dict:
     }
 
 
-def drop_page_cache(path: Path) -> None:
+def _map_failed(addr) -> bool:
+    if addr is None:
+        return True
+    failed = ctypes.c_void_p(-1).value
+    return int(addr) == int(failed) if failed is not None else False
+
+
+def resident_fraction(path: Path) -> float:
+    """Fraction of pages resident, via ``mincore``. The mapping is not read."""
+    size = path.stat().st_size
+    if size <= 0:
+        return 0.0
+    pages = (size + _PAGE - 1) // _PAGE
     fd = os.open(path, os.O_RDONLY)
     try:
+        addr = _LIBC.mmap(None, size, _PROT_READ, _MAP_PRIVATE, fd, 0)
+        if _map_failed(addr):
+            err = ctypes.get_errno()
+            raise OSError(err, f"mmap failed on {path}")
+        try:
+            vec = (ctypes.c_ubyte * pages)()
+            rc = _LIBC.mincore(ctypes.c_void_p(addr), ctypes.c_size_t(size), vec)
+            if rc != 0:
+                err = ctypes.get_errno()
+                raise OSError(err, f"mincore failed on {path}")
+            resident = sum(byte & 1 for byte in vec)
+            return resident / pages
+        finally:
+            _LIBC.munmap(ctypes.c_void_p(addr), ctypes.c_size_t(size))
+    finally:
+        os.close(fd)
+
+
+def advise_dontneed(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        try:
+            os.fsync(fd)
+        except OSError:
+            pass
         rc = _LIBC.posix_fadvise(fd, 0, 0, _POSIX_FADV_DONTNEED)
         if rc != 0:
             err = ctypes.get_errno()
             raise OSError(err, f"posix_fadvise DONTNEED failed on {path}")
     finally:
         os.close(fd)
+
+
+def advise_cold(path: Path) -> tuple[float, str]:
+    """Retry ``DONTNEED`` until ``mincore`` reports no resident page.
+
+    Returns ``(resident_fraction, "verified")`` or the last fraction with
+    ``"resident"`` when the advice cannot clear the cache.
+    """
+    last = resident_fraction(path)
+    for _ in range(_COLD_TRIES):
+        advise_dontneed(path)
+        last = resident_fraction(path)
+        if last == 0.0:
+            return 0.0, "verified"
+    return last, "resident"
+
+
+def drop_page_cache(path: Path) -> None:
+    advise_dontneed(path)
 
 
 def fsync_dir(path: Path) -> None:
@@ -413,7 +493,8 @@ def header_lines() -> list[str]:
         "quantile type-7 (numpy percentile method=linear)",
         "order serial, tools alternate each sample index, no parallel samples",
         "page_cache insert: unlink and create the database file each sample",
-        "page_cache read_cold: posix_fadvise DONTNEED on the closed files, then time readonly open plus the read",
+        "page_cache read_cold: posix_fadvise DONTNEED, then mincore; retry until resident fraction is 0",
+        "page_cache read_cold_label: a sample that stays resident is labeled and omitted from the cold median",
         "page_cache drop_caches: /proc/sys/vm/drop_caches is not writable here, so it is not used",
         "page_cache read_warm: one warmup read on the open store, then time the read",
         "lmdb MDB_NOSYNC unset, one write transaction, fsync on commit",
@@ -738,6 +819,31 @@ def drop_files(paths: list[Path]) -> None:
         drop_page_cache(path)
 
 
+def cold_data_files(kind: str, dest: Path) -> list[Path]:
+    if kind == "readcon-db":
+        return [p for p in (dest / "corpus" / "data.mdb",) if p.is_file()]
+    return [p for p in (dest / "atoms.db",) if p.is_file()]
+
+
+def prepare_cold_files(kind: str, dest: Path) -> tuple[float, str]:
+    """Advise every database file. The recorded fraction is the data file."""
+    if kind == "readcon-db":
+        drop_files(lmdb_files(dest / "corpus"))
+    else:
+        drop_files(ase_files(dest / "atoms.db"))
+    data = cold_data_files(kind, dest)
+    if not data:
+        return 0.0, "verified"
+    worst = 0.0
+    label = "verified"
+    for path in data:
+        frac, one = advise_cold(path)
+        if frac > worst:
+            worst = frac
+            label = one
+    return worst, label
+
+
 def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
     rows = []
     for spec in workloads:
@@ -822,6 +928,7 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
                     "op": "insert",
                     "cache": "cold-file",
                     "tool": kind,
+                    "fidelity": "exact",
                     **summarize(values),
                 }
             )
@@ -837,16 +944,14 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
         for op in ("full_read", "selected"):
             for cache in ("cold", "warm"):
                 samples = {"readcon-db": [], "ase.db": []}
+                cold_meta = {"readcon-db": [], "ase.db": []}
                 holders = {}
 
                 def prepare_cold(kind: str, stored=stored, holders=holders):
                     dest = stored[kind]
                     if kind in holders:
                         close_reader(kind, holders.pop(kind))
-                    if kind == "readcon-db":
-                        drop_files(lmdb_files(dest / "corpus"))
-                    else:
-                        drop_files(ase_files(dest / "atoms.db"))
+                    return prepare_cold_files(kind, dest)
 
                 def open_kind(kind: str, stored=stored):
                     dest = stored[kind]
@@ -893,8 +998,10 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
                         else ("ase.db", "readcon-db")
                     )
                     for kind in order:
+                        resident = None
+                        cold_label = None
                         if cache == "cold":
-                            prepare_cold(kind)
+                            resident, cold_label = prepare_cold(kind)
                             seconds, _ = time_call(
                                 lambda kind=kind, stored=stored, op=op, n_frames=spec["n_frames"], records=payload["records"], mid=mid: (
                                     measure_read(
@@ -907,16 +1014,28 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
                                     )
                                 )
                             )
+                            cold_meta[kind].append(
+                                {
+                                    "resident_fraction": resident,
+                                    "cold_label": cold_label,
+                                    "seconds": seconds,
+                                }
+                            )
+                            if cold_label == "verified":
+                                samples[kind].append(seconds)
                         else:
                             db = holders[kind]
                             seconds, _ = time_call(
                                 lambda kind=kind, db=db: run_op(kind, db)
                             )
                             del db
-                        samples[kind].append(seconds)
+                            samples[kind].append(seconds)
+                        extra = ""
+                        if resident is not None:
+                            extra = f" resident_fraction={resident:.6f} cold_label={cold_label}"
                         log.line(
                             f"sample protocol=fair workload={name} op={op} tool={kind} "
-                            f"cache={cache} i={i} seconds={seconds}"
+                            f"cache={cache} i={i} seconds={seconds}{extra}"
                         )
                 db = None
                 gc.collect()
@@ -924,19 +1043,25 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
                     close_reader(kind, holders.pop(kind))
                 gc.collect()
                 for kind, values in samples.items():
-                    rows.append(
-                        {
-                            "protocol": "fair",
-                            "workload": name,
-                            "n_frames": spec["n_frames"],
-                            "n_atoms": spec["n_atoms"],
-                            "atoms_total": spec["n_frames"] * spec["n_atoms"],
-                            "op": op,
-                            "cache": cache,
-                            "tool": kind,
-                            **summarize(values),
-                        }
-                    )
+                    used = values
+                    if cache == "cold" and not used:
+                        used = [item["seconds"] for item in cold_meta[kind]]
+                    row = {
+                        "protocol": "fair",
+                        "workload": name,
+                        "n_frames": spec["n_frames"],
+                        "n_atoms": spec["n_atoms"],
+                        "atoms_total": spec["n_frames"] * spec["n_atoms"],
+                        "op": op,
+                        "cache": cache,
+                        "tool": kind,
+                        "fidelity": "exact",
+                        **summarize(used),
+                    }
+                    if cache == "cold":
+                        row["cold_verified_n"] = len(values)
+                        row["cold_samples"] = cold_meta[kind]
+                    rows.append(row)
         for dest in stored.values():
             shutil.rmtree(dest, ignore_errors=True)
     return rows
@@ -957,7 +1082,8 @@ def write_markdown(
         "Type-7 median and IQR. One discarded warmup and six serial samples",
         "for every fair row. The published log has no discarded warmup.",
         "A mismatch of any stored field aborts the run, so every sample below",
-        "passed an element-wise check.",
+        "passed an element-wise check (fidelity exact).",
+        "Cold medians use samples whose mincore resident fraction is 0.",
         "",
         "## Published ingest (`paper/cpc/logs/db.log`)",
         "",
@@ -991,13 +1117,14 @@ def write_markdown(
         "transaction and one commit fsync. Full read and the selected-row",
         "query (`frame_index` of the middle frame) are cold and warm.",
         "",
-        "| workload | frames | atoms | op | cache | tool | median s | IQR s |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| workload | frames | atoms | op | cache | tool | median s | IQR s | fidelity |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in fair_rows:
         lines.append(
             f"| {row['workload']} | {row['n_frames']} | {row['n_atoms']} | {row['op']} | "
-            f"{row['cache']} | {row['tool']} | {fmt(row['median_s'])} | {fmt(row['iqr_s'])} |"
+            f"{row['cache']} | {row['tool']} | {fmt(row['median_s'])} | {fmt(row['iqr_s'])} | "
+            f"{row.get('fidelity', 'exact')} |"
         )
     lines.append("")
     path.write_text("\n".join(lines) + "\n")

@@ -7,6 +7,6 @@
 #   bench/with-readcon-core-0.23.sh cargo test --lib
 #   bench/with-readcon-core-0.23.sh maturin build --release --features python
 #
-# The git revision is the one recorded in bench/db2/hardware.json.
+# The git revision is the one recorded in bench/db3/hardware.json.
 [patch.crates-io]
-readcon-core = { git = "https://github.com/lode-org/readcon-core", rev = "5627c12c984a768a40d8f5b7f47379a7efd57721" }
+readcon-core = { git = "https://github.com/lode-org/readcon-core", rev = "f3ee0f471234e112209e6ad7623b2b6e5ce8a673" }
