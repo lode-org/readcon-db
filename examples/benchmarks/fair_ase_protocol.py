@@ -941,69 +941,77 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
             insert_fair(kind, payload, dest)
             stored[kind] = dest
         mid = spec["n_frames"] // 2
-        for op in ("full_read", "selected"):
-            for cache in ("cold", "warm"):
-                samples = {"readcon-db": [], "ase.db": []}
-                cold_meta = {"readcon-db": [], "ase.db": []}
-                holders = {}
+        # Full read and the selected frame share one sample index. A separate
+        # series made the one-frame selected median look slower: the column
+        # scan is the same, and the cold timer is the readonly open.
+        ops = ("full_read", "selected")
+        for cache in ("cold", "warm"):
+            samples = {op: {"readcon-db": [], "ase.db": []} for op in ops}
+            cold_meta = {op: {"readcon-db": [], "ase.db": []} for op in ops}
+            holders = {}
 
-                def prepare_cold(kind: str, stored=stored, holders=holders):
-                    dest = stored[kind]
-                    if kind in holders:
-                        close_reader(kind, holders.pop(kind))
-                    return prepare_cold_files(kind, dest)
+            def prepare_cold(kind: str, stored=stored, holders=holders):
+                dest = stored[kind]
+                if kind in holders:
+                    close_reader(kind, holders.pop(kind))
+                return prepare_cold_files(kind, dest)
 
-                def open_kind(kind: str, stored=stored):
-                    dest = stored[kind]
+            def open_kind(kind: str, stored=stored):
+                dest = stored[kind]
+                if kind == "readcon-db":
+                    return open_readcon(dest / "corpus")
+                return open_ase_reader(dest / "atoms.db")
+
+            def run_op(
+                kind: str,
+                db,
+                op: str,
+                n_frames=spec["n_frames"],
+                records=payload["records"],
+                mid=mid,
+            ):
+                if op == "full_read":
                     if kind == "readcon-db":
-                        return open_readcon(dest / "corpus")
-                    return open_ase_reader(dest / "atoms.db")
+                        return full_read_readcon(db, n_frames, records)
+                    return full_read_ase(db, n_frames, records)
+                rec = records[mid]
+                if kind == "readcon-db":
+                    return selected_readcon(db, mid, rec)
+                return selected_ase(db, mid, rec)
 
-                def run_op(
-                    kind: str,
-                    db,
-                    op=op,
-                    n_frames=spec["n_frames"],
-                    records=payload["records"],
-                    mid=mid,
-                ):
-                    if op == "full_read":
-                        if kind == "readcon-db":
-                            return full_read_readcon(db, n_frames, records)
-                        return full_read_ase(db, n_frames, records)
-                    rec = records[mid]
-                    if kind == "readcon-db":
-                        return selected_readcon(db, mid, rec)
-                    return selected_ase(db, mid, rec)
-
+            if cache == "warm":
                 for kind in ("readcon-db", "ase.db"):
-                    if cache == "cold":
+                    holders[kind] = open_kind(kind)
+                    for op in ops:
+                        run_op(kind, holders[kind], op)
+                        log.line(
+                            f"warmup protocol=fair workload={name} op={op} tool={kind} cache={cache}"
+                        )
+            else:
+                for op in ops:
+                    for kind in ("readcon-db", "ase.db"):
                         prepare_cold(kind)
                         db = open_kind(kind)
                         try:
-                            run_op(kind, db)
+                            run_op(kind, db, op)
                         finally:
                             close_reader(kind, db)
-                    else:
-                        db = open_kind(kind)
-                        run_op(kind, db)
-                        holders[kind] = db
-                    log.line(
-                        f"warmup protocol=fair workload={name} op={op} tool={kind} cache={cache}"
-                    )
-                for i in range(N_SAMPLES):
-                    order = (
-                        ("readcon-db", "ase.db")
-                        if i % 2 == 0
-                        else ("ase.db", "readcon-db")
-                    )
-                    for kind in order:
+                        log.line(
+                            f"warmup protocol=fair workload={name} op={op} tool={kind} cache={cache}"
+                        )
+            for i in range(N_SAMPLES):
+                tools = (
+                    ("readcon-db", "ase.db") if i % 2 == 0 else ("ase.db", "readcon-db")
+                )
+                op_order = ops if i % 2 == 0 else ("selected", "full_read")
+                for kind in tools:
+                    for op in op_order:
                         resident = None
                         cold_label = None
                         if cache == "cold":
                             resident, cold_label = prepare_cold(kind)
                             seconds, _ = time_call(
-                                lambda kind=kind, stored=stored, op=op, n_frames=spec["n_frames"], records=payload["records"], mid=mid: (
+                                lambda kind=kind, op=op, stored=stored, n_frames=spec["n_frames"], records=payload["records"], mid=mid: (
                                     measure_read(
                                         kind,
                                         stored[kind],
@@ -1014,7 +1022,7 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
                                     )
                                 )
                             )
-                            cold_meta[kind].append(
+                            cold_meta[op][kind].append(
                                 {
                                     "resident_fraction": resident,
                                     "cold_label": cold_label,
@@ -1022,14 +1030,13 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
                                 }
                             )
                             if cold_label == "verified":
-                                samples[kind].append(seconds)
+                                samples[op][kind].append(seconds)
                         else:
                             db = holders[kind]
                             seconds, _ = time_call(
-                                lambda kind=kind, db=db: run_op(kind, db)
+                                lambda kind=kind, db=db, op=op: run_op(kind, db, op)
                             )
-                            del db
-                            samples[kind].append(seconds)
+                            samples[op][kind].append(seconds)
                         extra = ""
                         if resident is not None:
                             extra = f" resident_fraction={resident:.6f} cold_label={cold_label}"
@@ -1037,15 +1044,14 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
                             f"sample protocol=fair workload={name} op={op} tool={kind} "
                             f"cache={cache} i={i} seconds={seconds}{extra}"
                         )
-                db = None
-                gc.collect()
-                for kind in list(holders):
-                    close_reader(kind, holders.pop(kind))
-                gc.collect()
-                for kind, values in samples.items():
-                    used = values
+            for kind in list(holders):
+                close_reader(kind, holders.pop(kind))
+            gc.collect()
+            for op in ops:
+                for kind in ("readcon-db", "ase.db"):
+                    used = samples[op][kind]
                     if cache == "cold" and not used:
-                        used = [item["seconds"] for item in cold_meta[kind]]
+                        used = [item["seconds"] for item in cold_meta[op][kind]]
                     row = {
                         "protocol": "fair",
                         "workload": name,
@@ -1059,8 +1065,8 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
                         **summarize(used),
                     }
                     if cache == "cold":
-                        row["cold_verified_n"] = len(values)
-                        row["cold_samples"] = cold_meta[kind]
+                        row["cold_verified_n"] = len(samples[op][kind])
+                        row["cold_samples"] = cold_meta[op][kind]
                     rows.append(row)
         for dest in stored.values():
             shutil.rmtree(dest, ignore_errors=True)
@@ -1084,6 +1090,7 @@ def write_markdown(
         "A mismatch of any stored field aborts the run, so every sample below",
         "passed an element-wise check (fidelity exact).",
         "Cold medians use samples whose mincore resident fraction is 0.",
+        "Full read and the selected frame share each sample index.",
         "",
         "## Published ingest (`paper/cpc/logs/db.log`)",
         "",
@@ -1117,14 +1124,14 @@ def write_markdown(
         "transaction and one commit fsync. Full read and the selected-row",
         "query (`frame_index` of the middle frame) are cold and warm.",
         "",
-        "| workload | frames | atoms | op | cache | tool | median s | IQR s | fidelity |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| workload | frames | atoms | op | cache | tool | n | median s | IQR s | fidelity |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in fair_rows:
         lines.append(
             f"| {row['workload']} | {row['n_frames']} | {row['n_atoms']} | {row['op']} | "
-            f"{row['cache']} | {row['tool']} | {fmt(row['median_s'])} | {fmt(row['iqr_s'])} | "
-            f"{row.get('fidelity', 'exact')} |"
+            f"{row['cache']} | {row['tool']} | {row['n']} | {fmt(row['median_s'])} | "
+            f"{fmt(row['iqr_s'])} | {row.get('fidelity', 'exact')} |"
         )
     lines.append("")
     path.write_text("\n".join(lines) + "\n")
