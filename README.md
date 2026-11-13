@@ -137,8 +137,8 @@ The single-frame query is `frame_index` of the middle frame.
 The published CPC log (`paper/cpc/logs/db.log`, 40 frames of 8 Cu, no
 warmup) is readcon-db 4.67 ms and ASE 72.3 ms (IQR 37.7 ms). ASE
 committed and fsynced once per frame. On the fair harness that same
-40×8 insert, one commit each, is readcon-db 1.97 ms (IQR 0.70 ms) and
-ASE 6.52 ms (IQR 1.15 ms).
+40×8 insert, one commit each, is readcon-db 1.97 ms (IQR 0.66 ms) and
+ASE 6.52 ms (IQR 1.29 ms).
 
 Type-7 medians from the fair ladder on that host, in seconds:
 
