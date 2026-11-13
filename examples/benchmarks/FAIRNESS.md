@@ -67,6 +67,16 @@ The size ladder is one frame of 10³, 10⁴, 10⁵, and 10⁶ atoms, and 1,
 and a selected-row query (`frame_index` of the middle frame), cold and
 warm for the reads.
 
+A CON text above 512 KiB is indexed from the stored span. Coordinate
+rows are not turned into atom objects. Force rows are parsed only to
+obtain `fmax`, with the same fast-float kernel as a frame parse, and
+the bytes stored are still that span (zstd when it shrinks). On this
+host the million-atom prepare was about 0.41 s when it built one atom
+per site and about 0.16 s from the span, of which zstd was about 0.08 s
+and the commit about 0.01 s. The fair insert of that frame is then
+0.165 s against ASE at 0.240 s. Texts at or below 512 KiB keep the full
+parse.
+
 Cold readcon-db times include a readonly open. The previous cold rows
 were slower than ASE on the small corpora because the timed close
 called `gc.collect()` and the open was writable, so it could commit.

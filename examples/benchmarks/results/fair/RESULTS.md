@@ -102,3 +102,36 @@ query (`frame_index` of the middle frame) are cold and warm.
 | frames-10000 | 10000 | 8 | selected | warm | readcon-db | 9.3291e-05 | 2.9083e-05 |
 | frames-10000 | 10000 | 8 | selected | warm | ase.db | 8.5196e-04 | 4.1678e-05 |
 
+## Insert rerun after the span index
+
+Same host as the table above (`42bd893`). `before` is that table's
+insert median. `after` is a later insert-only run (one warmup, n = 6,
+type-7) with texts above 512 KiB indexed from the stored span. Raw
+lines: `insert-span.log`. Reads were not retimed.
+
+| workload | tool | before s | before IQR s | after s | after IQR s |
+| --- | --- | --- | --- | --- | --- |
+| paper40x8 | readcon-db | 2.3848e-03 | 1.0760e-03 | 1.9719e-03 | 6.5999e-04 |
+| paper40x8 | ase.db | 5.9432e-03 | 1.2624e-03 | 6.5242e-03 | 1.2866e-03 |
+| atoms-1000 | readcon-db | 7.6093e-04 | 3.6910e-04 | 6.7260e-04 | 3.9172e-04 |
+| atoms-1000 | ase.db | 1.3459e-03 | 3.2727e-05 | 1.8801e-03 | 2.8034e-04 |
+| atoms-10000 | readcon-db | 2.9770e-03 | 3.2712e-04 | 3.1342e-03 | 7.3484e-05 |
+| atoms-10000 | ase.db | 3.5304e-03 | 3.0187e-04 | 3.8584e-03 | 1.7635e-04 |
+| atoms-100000 | readcon-db | 2.8036e-02 | 5.5468e-04 | 1.6272e-02 | 8.2277e-04 |
+| atoms-100000 | ase.db | 2.8140e-02 | 3.3208e-03 | 2.9640e-02 | 1.7345e-03 |
+| atoms-1000000 | readcon-db | 3.4903e-01 | 4.7691e-02 | 1.6484e-01 | 4.5250e-03 |
+| atoms-1000000 | ase.db | 2.3947e-01 | 2.0073e-02 | 2.3951e-01 | 1.4315e-02 |
+| frames-1 | readcon-db | 3.1470e-04 | 3.0663e-05 | 4.0001e-04 | 1.8750e-04 |
+| frames-1 | ase.db | 1.0633e-03 | 4.4492e-05 | 1.1397e-03 | 2.1766e-04 |
+| frames-100 | readcon-db | 4.8247e-03 | 7.2606e-04 | 4.6217e-03 | 9.0406e-04 |
+| frames-100 | ase.db | 3.9384e-02 | 4.1867e-03 | 3.4705e-02 | 7.7993e-04 |
+| frames-10000 | readcon-db | 3.7281e-01 | 1.3681e-02 | 3.0166e-01 | 9.0925e-03 |
+| frames-10000 | ase.db | 3.4295e+00 | 1.1939e-01 | 3.2814e+00 | 9.6273e-02 |
+
+readcon-db is ahead of ASE on every insert row. The million-atom row
+was the one ASE won before (0.349 s vs 0.239 s) and is now 0.165 s vs
+0.240 s. Texts at or below 512 KiB still use the previous parser. The
+one-frame median, 0.400 ms, is about 0.05 ms past the previous median
+plus IQR; five of the six samples are 0.299–0.537 ms and one sample is
+1.02 ms.
+

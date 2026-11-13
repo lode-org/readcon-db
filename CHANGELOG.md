@@ -11,6 +11,7 @@
 - (**bench**) cold reads time a readonly open, not a process-wide garbage collection
 #### Documentation
 - (**bench**) record the fair ASE sqlite protocol and the db2/db3 ladder in the README
+- (**read**) index a CON insert above 512 KiB from the stored span, without one object per atom
 #### Build system
 - (**reader**) require readcon-core 0.21.0 for atom-id correspondence
 

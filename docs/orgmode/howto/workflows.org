@@ -100,7 +100,7 @@ Both stores receive the same records: symbols, positions, cell, periodicity, mas
 
 A cold read calls =posix_fadvise(DONTNEED)= on the closed database files, then times a readonly open plus the read. =/proc/sys/vm/drop_caches= was not writable on the measurement host, so it was not used. A warm read is the next read on the already open store. The timed close does not call =gc.collect()=. Full reads use =read_columns=. The single-frame query is =frame_index= of the middle frame.
 
-The published CPC ingest (=paper/cpc/logs/db.log=, 40 frames of 8 Cu, no warmup) is readcon-db 4.67 ms and ASE 72.3 ms. ASE committed once per frame. The fair rerun of that insert, one commit each, is readcon-db 2.38 ms and ASE 5.94 ms.
+The published CPC ingest (=paper/cpc/logs/db.log=, 40 frames of 8 Cu, no warmup) is readcon-db 4.67 ms and ASE 72.3 ms. ASE committed once per frame. The fair rerun of that insert, one commit each, is readcon-db 1.97 ms and ASE 6.52 ms.
 
 Type-7 medians on that host, seconds:
 
@@ -118,10 +118,10 @@ Type-7 medians on that host, seconds:
 | 8 atoms, 10^4 frames | full read | warm | 1.12e-1 | 9.62e-1 |
 | 8 atoms, 10^4 frames | full read | cold | 1.21e-1 | 9.77e-1 |
 | 8 atoms, 10^4 frames | one frame | cold | 5.67e-4 | 3.56e-3 |
-| 10^6 atoms, 1 frame | insert | cold-file | 3.49e-1 | 2.39e-1 |
-| 8 atoms, 10^4 frames | insert | cold-file | 3.73e-1 | 3.43e0 |
+| 10^6 atoms, 1 frame | insert | cold-file | 1.65e-1 | 2.40e-1 |
+| 8 atoms, 10^4 frames | insert | cold-file | 3.02e-1 | 3.28e0 |
 
-readcon-db is ahead on every full read and every single-frame query in that log. The 10^6-atom insert is the row ASE wins. IQR and the rest of the ladder are in =RESULTS.md=.
+readcon-db is ahead on every full read, every single-frame query, and every insert in the latest fair log. A text above 512 KiB is indexed from the stored span. The 10^6-atom insert was 0.349 s on the previous tree and is 0.165 s after, against ASE at 0.240 s. The one-frame insert median moved from 0.315 ms to 0.400 ms; that text still uses the full parse, and one sample in the six was a 1.0 ms fsync. IQR and the before column are in =RESULTS.md=.
 
 #+begin_src sh
 python examples/benchmarks/fair_ase_protocol.py --mode all --out examples/benchmarks/results/fair
