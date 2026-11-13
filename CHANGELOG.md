@@ -9,6 +9,8 @@
 - (**lmdb**) default map is 8 MiB; existing corpora still map twice `data.mdb`
 - (**read**) full read scans the stored span into bulk columns, not per-atom objects
 - (**bench**) cold reads time a readonly open, not a process-wide garbage collection
+#### Documentation
+- (**bench**) record the fair ASE sqlite protocol and the db2/db3 ladder in the README
 #### Build system
 - (**reader**) require readcon-core 0.21.0 for atom-id correspondence
 
