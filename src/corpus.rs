@@ -931,9 +931,9 @@ impl ConCorpus {
         file_contents: &str,
         compress: bool,
     ) -> Result<Vec<PreparedIndexPuts>> {
-        // A tiny frame is cheaper to parse outright. The span walk pays off
-        // once the coordinate block is large enough that per-atom objects dominate.
-        if file_contents.len() <= 65_536 {
+        // A 10^4-atom frame is still cheaper to parse outright. Per-atom
+        // objects dominate by 10^5 atoms (about 5 MiB of CON text).
+        if file_contents.len() <= 512 * 1024 {
             return Self::prepare_trajectory_str_parsed(traj_id, file_contents, compress);
         }
         Self::prepare_trajectory_str_span(traj_id, file_contents, compress)
