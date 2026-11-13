@@ -3,6 +3,9 @@
 ## Unreleased
 #### Features
 - (**identity**) opt-in canonical hash for frames that differ by atom-id order
+#### Bug Fixes
+- (**hash**) `hash_con_text` uses the stored CON span, so `hash-file` finds an ingested frame
+- (**select**) the full atom-count domain is not an `idx_natoms` scan
 #### Build system
 - (**reader**) require readcon-core 0.21.0 for atom-id correspondence
 

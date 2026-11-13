@@ -2107,20 +2107,18 @@ impl ConCorpus {
         }
     }
 
-    /// xxHash3-128 of CON text, using the same bytes the corpus stores.
+    /// xxHash3-128 of the first frame span, using the bytes the corpus stores.
+    ///
+    /// `append_trajectory_str` keeps that span. A rewrite of the frame is a
+    /// different key, so `hash-file` looks up the stored span and not a
+    /// second serialization.
     pub fn hash_con_text(text: &str) -> Result<ContentHash> {
         let mut it = ConFrameIterator::new(text);
-        let frame = it
-            .next()
+        let (_frame, blob) = it
+            .next_with_raw_span(text)
             .ok_or_else(|| Error::Parse("no frame".into()))?
             .map_err(|e| Error::Parse(e.to_string()))?;
-        let mut buf = Cursor::new(Vec::new());
-        {
-            let mut w = ConFrameWriter::new(&mut buf);
-            w.write_frame(&frame)
-                .map_err(|e| Error::Parse(format!("re-serialize: {e}")))?;
-        }
-        Ok(hash_frame_bytes(&buf.into_inner()))
+        Ok(hash_frame_bytes(blob.as_bytes()))
     }
 
     /// Canonical formula for a stored frame (decode once).

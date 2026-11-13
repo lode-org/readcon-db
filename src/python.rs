@@ -417,6 +417,10 @@ impl PyConCorpus {
         limit=None
     ))]
     /// Return `(traj_id, frame_idx)` pairs that match every predicate.
+    ///
+    /// The default atom-count window is the full `u32` domain. That window
+    /// is not a predicate and does not walk `idx_natoms`. A narrower
+    /// `natoms_min` or `natoms_max` does.
     fn select(
         &self,
         traj_id: Option<u64>,
