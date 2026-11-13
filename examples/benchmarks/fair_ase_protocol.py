@@ -39,12 +39,11 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
+import readcon
 from ase import Atoms
 from ase.calculators.singlepoint import SinglePointCalculator
 from ase.db import connect
 from ase.db.sqlite import SQLite3Database
-
-import readcon
 from readcon_db import ConCorpus
 
 REPO = Path(__file__).resolve().parents[2]
@@ -771,7 +770,7 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
         # Insert: unlink+create each sample, one warmup, six serial samples.
         insert_samples = {"readcon-db": [], "ase.db": []}
 
-        def do_insert(kind: str, keep: bool):
+        def do_insert(kind: str, keep: bool, name=name, payload=payload):
             dest = fresh_dir(work, f"{name}-{kind}")
             seconds = insert_fair(kind, payload, dest)
             if not keep:
@@ -819,7 +818,7 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
                 samples = {"readcon-db": [], "ase.db": []}
                 holders = {}
 
-                def prepare_cold(kind: str):
+                def prepare_cold(kind: str, stored=stored, holders=holders):
                     dest = stored[kind]
                     if kind in holders:
                         close_reader(kind, holders.pop(kind))
@@ -828,18 +827,18 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
                     else:
                         drop_files(ase_files(dest / "atoms.db"))
 
-                def open_kind(kind: str):
+                def open_kind(kind: str, stored=stored):
                     dest = stored[kind]
                     if kind == "readcon-db":
                         return open_readcon(dest / "corpus")
                     return open_ase_reader(dest / "atoms.db")
 
-                def run_op(kind: str, db):
+                def run_op(kind: str, db, op=op, n_frames=spec["n_frames"], records=payload["records"], mid=mid):
                     if op == "full_read":
                         if kind == "readcon-db":
-                            return full_read_readcon(db, spec["n_frames"], payload["records"])
-                        return full_read_ase(db, spec["n_frames"], payload["records"])
-                    rec = payload["records"][mid]
+                            return full_read_readcon(db, n_frames, records)
+                        return full_read_ase(db, n_frames, records)
+                    rec = records[mid]
                     if kind == "readcon-db":
                         return selected_readcon(db, mid, rec)
                     return selected_ase(db, mid, rec)
@@ -863,12 +862,12 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
                         if cache == "cold":
                             prepare_cold(kind)
                             seconds, _ = time_call(
-                                lambda kind=kind: measure_read(
+                                lambda kind=kind, stored=stored, op=op, n_frames=spec["n_frames"], records=payload["records"], mid=mid: measure_read(
                                     kind,
                                     stored[kind],
                                     op,
-                                    spec["n_frames"],
-                                    payload["records"],
+                                    n_frames,
+                                    records,
                                     mid,
                                 )
                             )

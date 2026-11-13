@@ -4,7 +4,6 @@ from pathlib import Path
 
 import numpy as np
 import readcon
-
 from readcon_db import ConCorpus
 
 FIXTURE = Path(__file__).resolve().parents[2] / "resources" / "test"

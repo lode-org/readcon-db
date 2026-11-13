@@ -34,7 +34,7 @@ def _load(path: Path) -> dict:
 def _sci_tex(value: float) -> str:
     if value == 0 or not math.isfinite(value):
         return "$0$"
-    exp = int(math.floor(math.log10(abs(value))))
+    exp = math.floor(math.log10(abs(value)))
     mant = value / (10**exp)
     return f"${mant:.2f}\\times 10^{{{exp}}}$"
 

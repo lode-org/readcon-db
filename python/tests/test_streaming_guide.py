@@ -34,4 +34,4 @@ def test_streaming_guide_example(tmp_path, monkeypatch):
     assert blocks, "the streaming guide has no runnable example"
     monkeypatch.chdir(tmp_path)
     for block in blocks:
-        exec(compile(block, "docs/orgmode/howto/streaming.org", "exec"), {})
+        exec(compile(block, "docs/orgmode/howto/streaming.org", "exec"), {})  # noqa: S102

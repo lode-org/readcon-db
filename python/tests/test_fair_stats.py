@@ -11,7 +11,9 @@ import fair_ase_protocol as fair
 
 def test_type7_matches_numpy_linear_on_the_published_ase_log():
     stats = fair.summarize(fair.PUBLISHED_ASE)
-    expect = np.percentile(np.asarray(fair.PUBLISHED_ASE), [25, 50, 75], method="linear")
+    expect = np.percentile(
+        np.asarray(fair.PUBLISHED_ASE), [25, 50, 75], method="linear"
+    )
     assert stats["q1_s"] == float(expect[0])
     assert stats["median_s"] == float(expect[1])
     assert stats["q3_s"] == float(expect[2])

@@ -429,14 +429,16 @@ mod tests {
         let plain = zstd::stream::decode_all(&compressed[..]).unwrap();
         let dec = t3.elapsed();
         eprintln!(
-            "atoms {} bytes {} scan {:?} copy {:?} zstd_enc {:?} zstd_dec {:?} compressed {} positions {}",
+            "atoms {} bytes {} scan {:?} copy {:?} copied {} zstd_enc {:?} zstd_dec {:?} compressed {} plain {} positions {}",
             cols.n_atoms[0],
             bytes.len(),
             scan,
             copy,
+            copied.len(),
             enc,
             dec,
             compressed.len(),
+            plain.len(),
             cols.positions.len()
         );
     }

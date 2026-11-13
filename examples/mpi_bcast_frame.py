@@ -13,7 +13,6 @@ from __future__ import annotations
 import sys
 
 from mpi4py import MPI
-
 from readcon_db import ConCorpus, bcast_packed_frame, bcast_packed_frames
 
 

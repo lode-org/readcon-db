@@ -9,13 +9,14 @@ import sys
 
 COORD = re.compile(
     r"^(\s*)(-?\d+\.\d+)(\s+-?\d+\.\d+\s+-?\d+\.\d+\s+\d+\s+\d+\s*)$",
-    re.M,
+    re.MULTILINE,
 )
 
 
 def main() -> None:
     src, out, frames = sys.argv[1], sys.argv[2], int(sys.argv[3])
-    text = open(src, encoding="utf-8").read()
+    with open(src, encoding="utf-8") as src_fh:
+        text = src_fh.read()
     if not text.endswith("\n"):
         text += "\n"
     with open(out, "w", encoding="utf-8") as fh:
