@@ -54,7 +54,10 @@ pub fn write_frame_extxyz<W: Write>(
         write!(
             w,
             "{:<2} {:16.10} {:16.10} {:16.10}",
-            a.symbol, a.x, a.y, a.z
+            a.symbol,
+            crate::atom_coord::atom_x(a),
+            crate::atom_coord::atom_y(a),
+            crate::atom_coord::atom_z(a)
         )?;
         if has_forces {
             let f = a.force().unwrap_or([0.0; 3]);

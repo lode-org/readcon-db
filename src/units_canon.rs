@@ -233,7 +233,7 @@ pub fn rescale_frame_units(
         fr.header.boxl[0] *= lf;
         fr.header.boxl[1] *= lf;
         fr.header.boxl[2] *= lf;
-        if let Some(arr) = fr.header.metadata.get_mut("lattice_vectors") {
+        if let Some(mut arr) = fr.header.metadata.get("lattice_vectors").cloned() {
             if let Some(rows) = arr.as_array_mut() {
                 for row in rows {
                     if let Some(cs) = row.as_array_mut() {
@@ -245,6 +245,9 @@ pub fn rescale_frame_units(
                     }
                 }
             }
+            fr.header
+                .metadata
+                .insert("lattice_vectors".to_string(), arr);
         }
     }
     if tf != 1.0 {
@@ -293,9 +296,8 @@ pub fn rescale_frame_units(
         }
         if let Some(a) = fr.atom_data.get_mut(i) {
             if lf != 1.0 {
-                a.x *= lf;
-                a.y *= lf;
-                a.z *= lf;
+                let p = crate::atom_coord::atom_xyz(a);
+                crate::atom_coord::set_atom_xyz(a, [p[0] * lf, p[1] * lf, p[2] * lf]);
             }
             if let Some(mut v) = a.velocity() {
                 if vf != 1.0 {

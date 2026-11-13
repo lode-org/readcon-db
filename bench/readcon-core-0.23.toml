@@ -1,0 +1,12 @@
+# Campaign-only Cargo config. Do not copy this into the published manifest.
+#
+# Cargo.toml keeps `readcon-core = "=0.21.0"`. That exact requirement cannot
+# select 0.23.0, so Cargo ignores this patch until the campaign build
+# temporarily requires `=0.23.0`, updates the lock, and restores both files.
+#
+#   bench/with-readcon-core-0.23.sh cargo test --lib
+#   bench/with-readcon-core-0.23.sh maturin build --release --features python
+#
+# The git revision is the one recorded in bench/db2/hardware.json.
+[patch.crates-io]
+readcon-core = { git = "https://github.com/lode-org/readcon-core", rev = "5627c12c984a768a40d8f5b7f47379a7efd57721" }

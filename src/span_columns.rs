@@ -994,7 +994,7 @@ mod tests {
                 let masses = fr.masses.f64_slice().expect("f64 masses");
                 for (a, atom) in fr.atom_data.iter().enumerate() {
                     let row = &got.positions[p + a * 3..p + a * 3 + 3];
-                    assert_eq!(row, &[atom.x, atom.y, atom.z], "{name} pos {a}");
+                    assert_eq!(row, &crate::atom_coord::atom_xyz(atom), "{name} pos {a}");
                     assert_eq!(got.masses[p / 3 + a], masses[a], "{name} mass");
                 }
                 if fr.atom_data.iter().any(|a| a.force().is_some()) {
@@ -1018,7 +1018,10 @@ mod tests {
         assert_eq!(got.positions[0].to_bits(), (-0.0f64).to_bits());
         assert_eq!(got.positions[1].to_bits(), std::f64::consts::PI.to_bits());
         assert_eq!(got.forces[0].to_bits(), (-0.0f64).to_bits());
-        assert_eq!(got.positions[0].to_bits(), src[0].atom_data[0].x.to_bits());
+        assert_eq!(
+            got.positions[0].to_bits(),
+            crate::atom_coord::atom_x(&src[0].atom_data[0]).to_bits()
+        );
         assert_eq!(
             got.forces[0].to_bits(),
             src[0].atom_data[0].force().unwrap()[0].to_bits()

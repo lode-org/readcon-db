@@ -8,6 +8,7 @@
 #![deny(missing_docs)]
 
 pub mod archive;
+mod atom_coord;
 mod canonical;
 mod cooked_soa;
 mod corpus;

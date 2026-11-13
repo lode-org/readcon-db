@@ -96,7 +96,9 @@ def summarize(values: list[float]) -> dict:
     q1 = type7(values, 0.25)
     mid = type7(values, 0.50)
     q3 = type7(values, 0.75)
-    np_q = np.percentile(np.asarray(values, dtype=np.float64), [25, 50, 75], method="linear")
+    np_q = np.percentile(
+        np.asarray(values, dtype=np.float64), [25, 50, 75], method="linear"
+    )
     if not np.allclose([q1, mid, q3], np_q, rtol=0, atol=0):
         raise AssertionError(([q1, mid, q3], np_q.tolist()))
     return {
@@ -197,7 +199,9 @@ def connect_fair(path: Path) -> tuple[SQLite3Database, dict]:
         probe.close()
     sync_name = {0: "OFF", 1: "NORMAL", 2: "FULL", 3: "EXTRA"}.get(sync, str(sync))
     if journal != "delete" or sync != 2:
-        raise RuntimeError(f"unexpected sqlite settings journal={journal} synchronous={sync}")
+        raise RuntimeError(
+            f"unexpected sqlite settings journal={journal} synchronous={sync}"
+        )
     db._fair_commits = commits  # type: ignore[attr-defined]
     return db, {
         "backend": "sqlite",
@@ -259,7 +263,9 @@ def build_records(n_frames: int, n_atoms: int) -> tuple[str, list[Atoms], list[d
             pbc=pbc,
             masses=masses.copy(),
         )
-        atoms.calc = SinglePointCalculator(atoms, energy=float(energy), forces=forces.copy())
+        atoms.calc = SinglePointCalculator(
+            atoms, energy=float(energy), forces=forces.copy()
+        )
         fr = readcon.ConFrame.from_ase(atoms)
         fr.set_energy(float(energy))
         fr.set_frame_index(i)
@@ -283,7 +289,10 @@ def build_records(n_frames: int, n_atoms: int) -> tuple[str, list[Atoms], list[d
 
 
 def _bits(a, b) -> bool:
-    return np.asarray(a, dtype=np.float64).tobytes() == np.asarray(b, dtype=np.float64).tobytes()
+    return (
+        np.asarray(a, dtype=np.float64).tobytes()
+        == np.asarray(b, dtype=np.float64).tobytes()
+    )
 
 
 def assert_con_matches(frame, rec: dict) -> None:
@@ -300,7 +309,9 @@ def assert_con_matches(frame, rec: dict) -> None:
         raise AssertionError(("energy", frame.energy, rec["energy"]))
     if int(frame.frame_index) != rec["frame_index"]:
         raise AssertionError("frame_index")
-    if tuple(bool(x) for x in frame.metadata["pbc"]) != tuple(bool(x) for x in rec["pbc"]):
+    if tuple(bool(x) for x in frame.metadata["pbc"]) != tuple(
+        bool(x) for x in rec["pbc"]
+    ):
         raise AssertionError("pbc")
     if not _bits(frame.cell, np.diag(rec["cell"])):
         raise AssertionError(("cell", frame.cell, np.diag(rec["cell"])))
@@ -467,7 +478,9 @@ def paper_protocol(log: Log, work: Path) -> dict:
             dest = work / f"paper-{kind}-{repeat}"
             seconds = one(kind, dest)
             samples[kind].append(seconds)
-            log.line(f"sample protocol=paper workload=paper40x8 op=insert tool={kind} i={repeat} seconds={seconds}")
+            log.line(
+                f"sample protocol=paper workload=paper40x8 op=insert tool={kind} i={repeat} seconds={seconds}"
+            )
             shutil.rmtree(dest, ignore_errors=True)
     return {kind: summarize(values) for kind, values in samples.items()}
 
@@ -556,7 +569,9 @@ def open_readcon(path: Path):
     return ConCorpus(str(path), readonly=True)
 
 
-def measure_read(kind: str, dest: Path, op: str, n_frames: int, records: list[dict], mid: int):
+def measure_read(
+    kind: str, dest: Path, op: str, n_frames: int, records: list[dict], mid: int
+):
     """Open, read one full trajectory or one frame, close. No ``gc.collect``."""
     if kind == "readcon-db":
         db = open_readcon(dest / "corpus")
@@ -647,7 +662,9 @@ def _check_columns(cols: dict, records: list[dict], geometry_only: bool) -> None
                 raise AssertionError(("energy", float(energy[i]), rec["energy"]))
             if int(cols["frame_index"][i]) != rec["frame_index"]:
                 raise AssertionError("frame_index")
-            if tuple(bool(x) for x in cols["pbc"][i]) != tuple(bool(x) for x in rec["pbc"]):
+            if tuple(bool(x) for x in cols["pbc"][i]) != tuple(
+                bool(x) for x in rec["pbc"]
+            ):
                 raise AssertionError("pbc")
             expect_runs = rec.get("symbol_runs")
             if expect_runs is None:
@@ -665,7 +682,9 @@ def full_read_readcon(db, n_frames: int, records: list[dict]):
     cols = db.read_columns(1)
     if int(cols["n_frames"]) != n_frames:
         raise AssertionError(cols["n_frames"])
-    geometry_only = records[0].get("geometry_only", False) or records[0].get("forces") is None
+    geometry_only = (
+        records[0].get("geometry_only", False) or records[0].get("forces") is None
+    )
     _check_columns(cols, records, geometry_only)
     return cols
 
@@ -723,7 +742,9 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
     rows = []
     for spec in workloads:
         name = spec["name"]
-        log.line(f"workload {name} frames={spec['n_frames']} atoms={spec['n_atoms']} build_start")
+        log.line(
+            f"workload {name} frames={spec['n_frames']} atoms={spec['n_atoms']} build_start"
+        )
         if spec.get("paper_text"):
             text = paper_con_text(spec["n_frames"], spec["n_atoms"])
             frames = readcon.read_con_string(text)
@@ -833,7 +854,14 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
                         return open_readcon(dest / "corpus")
                     return open_ase_reader(dest / "atoms.db")
 
-                def run_op(kind: str, db, op=op, n_frames=spec["n_frames"], records=payload["records"], mid=mid):
+                def run_op(
+                    kind: str,
+                    db,
+                    op=op,
+                    n_frames=spec["n_frames"],
+                    records=payload["records"],
+                    mid=mid,
+                ):
                     if op == "full_read":
                         if kind == "readcon-db":
                             return full_read_readcon(db, n_frames, records)
@@ -855,25 +883,35 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
                         db = open_kind(kind)
                         run_op(kind, db)
                         holders[kind] = db
-                    log.line(f"warmup protocol=fair workload={name} op={op} tool={kind} cache={cache}")
+                    log.line(
+                        f"warmup protocol=fair workload={name} op={op} tool={kind} cache={cache}"
+                    )
                 for i in range(N_SAMPLES):
-                    order = ("readcon-db", "ase.db") if i % 2 == 0 else ("ase.db", "readcon-db")
+                    order = (
+                        ("readcon-db", "ase.db")
+                        if i % 2 == 0
+                        else ("ase.db", "readcon-db")
+                    )
                     for kind in order:
                         if cache == "cold":
                             prepare_cold(kind)
                             seconds, _ = time_call(
-                                lambda kind=kind, stored=stored, op=op, n_frames=spec["n_frames"], records=payload["records"], mid=mid: measure_read(
-                                    kind,
-                                    stored[kind],
-                                    op,
-                                    n_frames,
-                                    records,
-                                    mid,
+                                lambda kind=kind, stored=stored, op=op, n_frames=spec["n_frames"], records=payload["records"], mid=mid: (
+                                    measure_read(
+                                        kind,
+                                        stored[kind],
+                                        op,
+                                        n_frames,
+                                        records,
+                                        mid,
+                                    )
                                 )
                             )
                         else:
                             db = holders[kind]
-                            seconds, _ = time_call(lambda kind=kind, db=db: run_op(kind, db))
+                            seconds, _ = time_call(
+                                lambda kind=kind, db=db: run_op(kind, db)
+                            )
                             del db
                         samples[kind].append(seconds)
                         log.line(
@@ -910,7 +948,9 @@ def fmt(x: float) -> str:
     return f"{x:.4e}"
 
 
-def write_markdown(path: Path, published: dict, paper_local: dict, fair_rows: list[dict]) -> None:
+def write_markdown(
+    path: Path, published: dict, paper_local: dict, fair_rows: list[dict]
+) -> None:
     lines = [
         "# readcon-db vs ASE sqlite",
         "",
@@ -998,7 +1038,9 @@ def workloads_for(mode: str) -> list[dict]:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", type=Path, default=Path(__file__).resolve().parent / "results" / "fair")
+    ap.add_argument(
+        "--out", type=Path, default=Path(__file__).resolve().parent / "results" / "fair"
+    )
     ap.add_argument(
         "--mode",
         choices=("all", "paper", "ladder", "smoke", "inserts"),

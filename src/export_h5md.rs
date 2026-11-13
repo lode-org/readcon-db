@@ -295,7 +295,11 @@ impl ConCorpus {
             let (pos_src, vel_src, frc_src) = if let Some(c) = self.get_cooked_soa(*k)? {
                 (c.positions, c.velocities, c.forces)
             } else {
-                let pos: Vec<[f64; 3]> = fr.atom_data.iter().map(|a| [a.x, a.y, a.z]).collect();
+                let pos: Vec<[f64; 3]> = fr
+                    .atom_data
+                    .iter()
+                    .map(crate::atom_coord::atom_xyz)
+                    .collect();
                 let vel = if fr.atom_data.iter().any(|a| a.velocity().is_some()) {
                     Some(
                         fr.atom_data

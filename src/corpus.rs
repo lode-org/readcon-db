@@ -2293,7 +2293,11 @@ impl ConCorpus {
         }
         // Fallback: authoritative CON text → parse (never invent from indexes alone).
         let fr = self.get_frame(key)?;
-        Ok(fr.atom_data.iter().map(|a| [a.x, a.y, a.z]).collect())
+        Ok(fr
+            .atom_data
+            .iter()
+            .map(crate::atom_coord::atom_xyz)
+            .collect())
     }
 
     /// Prefer cooked forces when the RCSO flag block is present (**no CON parse** on hit);
@@ -4639,7 +4643,7 @@ x
         let fr = db.get_frame(key).unwrap();
         assert_eq!(pos_via_parse.len(), fr.atom_data.len());
         for (i, a) in fr.atom_data.iter().enumerate() {
-            assert_eq!(pos_via_parse[i], [a.x, a.y, a.z]);
+            assert_eq!(pos_via_parse[i], crate::atom_coord::atom_xyz(a));
         }
 
         let text_before = db.get_frame_text(key).unwrap();
@@ -4649,7 +4653,7 @@ x
         let cooked = db.get_cooked_soa(key).unwrap().expect("cooked present");
         assert_eq!(cooked.natoms as usize, fr.atom_data.len());
         for (i, a) in fr.atom_data.iter().enumerate() {
-            assert_eq!(cooked.positions[i], [a.x, a.y, a.z]);
+            assert_eq!(cooked.positions[i], crate::atom_coord::atom_xyz(a));
         }
         // CON authority unchanged
         assert_eq!(db.get_frame_text(key).unwrap(), text_before);
@@ -4709,10 +4713,7 @@ x
         assert!(db.get_cooked_soa(key).unwrap().is_none());
         let pos = db.get_positions(key).unwrap();
         assert_eq!(pos.len(), fr.atom_data.len());
-        assert_eq!(
-            pos[0],
-            [fr.atom_data[0].x, fr.atom_data[0].y, fr.atom_data[0].z]
-        );
+        assert_eq!(pos[0], crate::atom_coord::atom_xyz(&fr.atom_data[0]));
     }
 
     #[test]
@@ -4786,7 +4787,11 @@ x
         db.append_trajectory_path(1, fixture("tiny_cuh2_forces.con"))
             .unwrap();
         let fr = db.get_frame(key).unwrap();
-        let expect_pos: Vec<_> = fr.atom_data.iter().map(|a| [a.x, a.y, a.z]).collect();
+        let expect_pos: Vec<_> = fr
+            .atom_data
+            .iter()
+            .map(crate::atom_coord::atom_xyz)
+            .collect();
         let expect_f: Vec<_> = fr
             .atom_data
             .iter()
@@ -4821,7 +4826,11 @@ x
             .unwrap();
         assert!(!db.has_valid_cooked_soa(key).unwrap());
         let fr = db.get_frame(key).unwrap();
-        let expect_pos: Vec<_> = fr.atom_data.iter().map(|a| [a.x, a.y, a.z]).collect();
+        let expect_pos: Vec<_> = fr
+            .atom_data
+            .iter()
+            .map(crate::atom_coord::atom_xyz)
+            .collect();
         let expect_f: Vec<_> = fr
             .atom_data
             .iter()
@@ -4868,8 +4877,8 @@ x
         let text = db.get_frame_text(key).unwrap();
         let h = db.frame_hash(key).unwrap();
         let mut fr = db.get_frame(key).unwrap();
-        let con_x = fr.atom_data[0].x;
-        fr.atom_data[0].x = 99.0;
+        let con_x = crate::atom_coord::atom_x(&fr.atom_data[0]);
+        crate::atom_coord::set_atom_x(&mut fr.atom_data[0], 99.0);
         let poison = crate::cooked_soa::CookedSoa::encode_frame(&fr).unwrap();
         {
             let _gate = db.write_guard();
@@ -5121,7 +5130,7 @@ x
             .iter_mut()
             .find(|a| a.symbol.as_ref() == "Cu")
             .expect("Cu");
-        cu.z += 10.0;
+        crate::atom_coord::set_atom_z(cu, crate::atom_coord::atom_z(cu) + 10.0);
         let mut buf = Cursor::new(Vec::new());
         {
             let mut w = ConFrameWriter::new(&mut buf);

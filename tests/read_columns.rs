@@ -21,12 +21,13 @@ fn grouped_columns_match_get_frame() {
             frame_idx: idx,
         };
         let frame = db.get_frame(key).unwrap();
+        let expect = db.get_positions(key).unwrap();
         let one = db.read_frame_columns(key).unwrap();
         assert_eq!(one.n_atoms, vec![frame.atom_data.len() as u32]);
         for (atom_i, atom) in frame.atom_data.iter().enumerate() {
             assert_eq!(
                 &one.positions[atom_i * 3..atom_i * 3 + 3],
-                &[atom.x, atom.y, atom.z]
+                expect[atom_i].as_slice()
             );
             assert_eq!(
                 &one.forces[atom_i * 3..atom_i * 3 + 3],
