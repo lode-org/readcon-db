@@ -1,0 +1,31 @@
+{
+  "fixture": "resources/test/tiny_cuh2_vel_forces.con",
+  "readcon_core_rev": "f3ee0f471234e112209e6ad7623b2b6e5ce8a673",
+  "protocol": {
+    "serial": true,
+    "warmup": 1,
+    "samples": 6
+  },
+  "fields": [
+    {
+      "field": "positions",
+      "result": "exact"
+    },
+    {
+      "field": "masses",
+      "result": "exact"
+    },
+    {
+      "field": "velocities",
+      "result": "exact"
+    },
+    {
+      "field": "constraints",
+      "result": "exact"
+    },
+    {
+      "field": "cell",
+      "result": "exact"
+    }
+  ]
+}
