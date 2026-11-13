@@ -32,10 +32,12 @@ use crate::topology::{
     run_seams_fingerprint, AnnotateTopologyOpts, TopologyParams,
 };
 
-/// Default LMDB map size (2 GiB) when neither the caller nor
-/// [`MAP_SIZE_ENV`] asks for more. The map is address space, not disk:
-/// `data.mdb` only grows as pages are written.
-pub const DEFAULT_MAP_SIZE: usize = 2 * 1024 * 1024 * 1024;
+/// Default LMDB map size when neither the caller nor [`MAP_SIZE_ENV`]
+/// asks for more. Eight mebibytes is enough for a small corpus. A larger
+/// write grows the map before the transaction, and reopening an existing
+/// corpus maps at least twice `data.mdb`, so a database created under the
+/// old 2 GiB default still opens. The map is address space, not disk.
+pub const DEFAULT_MAP_SIZE: usize = 8 * 1024 * 1024;
 /// Environment variable that overrides [`DEFAULT_MAP_SIZE`]. Accepts a byte
 /// count with an optional `K`, `M`, `G` or `T` suffix (powers of 1024).
 pub const MAP_SIZE_ENV: &str = "READCON_DB_MAP_SIZE";
@@ -276,15 +278,23 @@ fn count_entries(db: Database<Bytes, Bytes>, txn: &heed::RoTxn<'_>) -> Result<us
     Ok(n)
 }
 
+/// `Vec::<usize>::with_capacity` of this many entries is multiple
+/// gigabytes. `readcon-core` 0.21 does that reservation from the species
+/// count before it looks at the next line, and the process aborts.
+fn usize_reserve_aborts(count: usize) -> bool {
+    count.saturating_mul(std::mem::size_of::<usize>()) >= (1usize << 32)
+}
+
 fn prepared_bytes(prepared: &[PreparedIndexPuts]) -> usize {
     prepared
         .iter()
         .fold(0usize, |n, p| n.saturating_add(p.stored.len()))
 }
 
-/// True when every species count fits on the following line and every atom
-/// count fits in the unread text. `readcon-core` 0.21 allocates the species
-/// count before it looks at that line.
+/// False only when a species or atom count would make `Vec::with_capacity`
+/// abort. A short counts line stays `true` so the parser can report
+/// `expected N values`. `readcon-core` 0.21 reserves the species count
+/// before it counts tokens on the next line.
 fn species_counts_within_text(text: &str) -> bool {
     let bytes = text.as_bytes();
     let len = bytes.len();
@@ -327,6 +337,12 @@ fn species_counts_within_text(text: &str) -> bool {
             let _ = skip_lines(bytes, &mut i, 2);
             continue;
         }
+        // `parse_count_line` reserves `ntypes` usizes before it counts
+        // tokens. A modest short line is `expected N values`. Only a
+        // reservation of gigabytes aborts the process.
+        if usize_reserve_aborts(ntypes) {
+            return false;
+        }
         if i >= len {
             return true;
         }
@@ -340,8 +356,11 @@ fn species_counts_within_text(text: &str) -> bool {
         if i < len {
             i += 1;
         }
-        if ntypes > counts_line.len() || ntypes > len {
-            return false;
+        // Not enough characters for `ntypes` tokens. The parser reports
+        // that. Rejecting it here makes a small file and a large file
+        // disagree.
+        if ntypes > counts_line.len() {
+            return true;
         }
         let mut sum = 0usize;
         let mut seen = 0usize;
@@ -356,6 +375,9 @@ fn species_counts_within_text(text: &str) -> bool {
             let Ok(count) = token.parse::<usize>() else {
                 return true;
             };
+            if usize_reserve_aborts(count) {
+                return false;
+            }
             sum = match sum.checked_add(count) {
                 Some(total) => total,
                 None => return false,
@@ -364,7 +386,10 @@ fn species_counts_within_text(text: &str) -> bool {
         if seen != ntypes {
             return true;
         }
-        if sum > len {
+        // A declared atom count past the file becomes `Vec::with_capacity`
+        // on the full parse. A count that still fits in the file is the
+        // parser's truncated-frame error.
+        if sum > len && usize_reserve_aborts(sum) {
             return false;
         }
         let skip = ntypes
@@ -402,6 +427,44 @@ fn skip_lines(bytes: &[u8], i: &mut usize, n: usize) -> usize {
         skipped += 1;
     }
     skipped
+}
+
+/// Project many frames at once. One frame stays on the calling thread.
+fn project_spans(texts: &[&str]) -> Result<Vec<crate::span_columns::SpanFacts>> {
+    if texts.len() < 32 {
+        return texts
+            .iter()
+            .map(|text| crate::span_columns::project_frame(text.as_bytes()))
+            .collect();
+    }
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .clamp(1, 8);
+    let chunk = texts.len().div_ceil(threads).max(1);
+    let mut parts = Vec::new();
+    std::thread::scope(|scope| {
+        let mut joins = Vec::new();
+        for piece in texts.chunks(chunk) {
+            joins.push(
+                scope.spawn(move || -> Result<Vec<crate::span_columns::SpanFacts>> {
+                    let mut out = Vec::with_capacity(piece.len());
+                    for text in piece {
+                        out.push(crate::span_columns::project_frame(text.as_bytes())?);
+                    }
+                    Ok(out)
+                }),
+            );
+        }
+        for join in joins {
+            parts.push(join.join().expect("frame projection"));
+        }
+    });
+    let mut all = Vec::with_capacity(texts.len());
+    for part in parts {
+        all.extend(part?);
+    }
+    Ok(all)
 }
 
 impl ConCorpus {
@@ -807,52 +870,62 @@ impl ConCorpus {
         text: String,
         compress: bool,
     ) -> Result<PreparedIndexPuts> {
-        use readcon_core::index_proj::FrameIndexProjection;
+        let facts = crate::span_columns::facts_from_frame(frame);
+        Self::build_index_from_facts(fk, &facts, &text, compress)
+    }
+
+    /// Index keys for one stored span. `text` is the exact CON substring.
+    fn build_index_from_facts(
+        fk: FrameKey,
+        facts: &crate::span_columns::SpanFacts,
+        text: &str,
+        compress: bool,
+    ) -> Result<PreparedIndexPuts> {
         let hash = hash_frame_bytes(text.as_bytes()).to_bytes();
-        let stored = crate::frame_codec::store_frame(&text, compress)?;
-        let proj = FrameIndexProjection::from_frame(frame);
+        let stored = crate::frame_codec::store_frame(text, compress)?;
         let mut symbol_keys = Vec::new();
         let mut elem_count_keys = Vec::new();
         let mut seen = BTreeSet::new();
-        for (sym, cnt) in &proj.species_counts {
+        for (sym, cnt) in &facts.species {
             elem_count_keys.push(elem_count_key(sym, *cnt, fk));
             if seen.insert(sym.clone()) {
                 symbol_keys.push(symbol_key(sym, fk));
             }
         }
-        let formula_k = if proj.formula.is_empty() {
+        let formula = readcon_core::index_proj::composition_formula(&facts.species);
+        let formula_k = if formula.is_empty() {
             None
         } else {
-            Some(formula_key(&proj.formula, fk))
+            Some(formula_key(&formula, fk))
         };
         let mut flag_keys = Vec::new();
-        let energy_k = proj.energy.and_then(|e| {
+        let energy_k = facts.energy.and_then(|e| {
             flag_keys.push(flag_key(FLAG_HAS_ENERGY, fk));
             energy_bin_key(e, fk)
         });
-        let fmax_k = if proj.has_forces {
+        let fmax_k = if facts.has_forces {
             flag_keys.push(flag_key(FLAG_HAS_FORCES, fk));
-            proj.fmax.and_then(|fm| fmax_bin_key(fm, fk))
+            facts.fmax.and_then(|fm| fmax_bin_key(fm, fk))
         } else {
             None
         };
-        if proj.has_velocities {
+        if facts.has_velocities {
             flag_keys.push(flag_key(FLAG_HAS_VELOCITIES, fk));
         }
-        let mass_k = proj.total_mass.and_then(|m| mass_bin_key(m, fk));
-        let volume_k = proj.cell_volume.and_then(|v| volume_bin_key(v, fk));
-        let pbc_k = proj
+        let mass_k = facts.total_mass.and_then(|m| mass_bin_key(m, fk));
+        let volume_k = facts.cell_volume.and_then(|v| volume_bin_key(v, fk));
+        let pbc_k = facts
             .pbc
             .map(|p| pbc_key(crate::keys::pbc_mask_from_bools(p), fk));
         let mut meta_keys = Vec::new();
         for (ch, val) in [
-            (META_TIME, proj.time),
-            (META_TIMESTEP, proj.timestep),
-            (META_FRAME_INDEX, proj.frame_index),
-            (META_NEB_BEAD, proj.neb_bead),
-            (META_NEB_BAND, proj.neb_band),
-            (META_CHARGE, proj.charge),
-            (META_MAGMOM, proj.magmom),
+            (META_TIME, facts.time),
+            (META_TIMESTEP, facts.timestep),
+            (META_FRAME_INDEX, facts.frame_index),
+            (META_NEB_BEAD, facts.neb_bead),
+            (META_NEB_BAND, facts.neb_band),
+            (META_CHARGE, facts.charge),
+            (META_MAGMOM, facts.magmom),
         ] {
             if let Some(x) = val {
                 if let Some(k) = meta_scalar_key(ch, x, fk) {
@@ -864,7 +937,7 @@ impl ConCorpus {
             fk,
             stored,
             hash,
-            natoms_k: natoms_key(proj.n_atoms, fk),
+            natoms_k: natoms_key(facts.n_atoms, fk),
             symbol_keys,
             elem_count_keys,
             formula_k,
@@ -1054,9 +1127,53 @@ impl ConCorpus {
         file_contents: &str,
         compress: bool,
     ) -> Result<Vec<PreparedIndexPuts>> {
+        // A 10^4-atom frame is still cheaper to parse outright. Per-atom
+        // objects dominate by 10^5 atoms (about 5 MiB of CON text).
+        // The species-count guard runs before either walk: the span walk
+        // calls the same `with_capacity` on line 7.
+        Self::species_counts_fit(file_contents)?;
+        if file_contents.len() <= 512 * 1024 {
+            return Self::prepare_trajectory_str_parsed(traj_id, file_contents, compress);
+        }
+        Self::prepare_trajectory_str_span(traj_id, file_contents, compress)
+    }
+
+    /// Index each stored span without building a per-atom frame.
+    fn prepare_trajectory_str_span(
+        traj_id: TrajId,
+        file_contents: &str,
+        compress: bool,
+    ) -> Result<Vec<PreparedIndexPuts>> {
+        let spans = readcon_core::index_proj::frame_byte_spans_skip(file_contents)
+            .map_err(|e| Error::Parse(e.to_string()))?;
+        let mut texts = Vec::with_capacity(spans.len());
+        for span in &spans {
+            texts.push(
+                span.slice(file_contents)
+                    .ok_or_else(|| Error::Parse("frame span is not valid UTF-8".into()))?,
+            );
+        }
+        let facts = project_spans(&texts)?;
+        let mut out = Vec::with_capacity(texts.len());
+        for (i, (text, facts)) in texts.iter().zip(facts).enumerate() {
+            let fk = FrameKey {
+                traj_id,
+                frame_idx: u32::try_from(i).map_err(|_| Error::Parse("too many frames".into()))?,
+            };
+            out.push(Self::build_index_from_facts(fk, &facts, text, compress)?);
+        }
+        Ok(out)
+    }
+
+    /// Full parse. Used for small texts, where building the frame is cheaper
+    /// than a separate span walk, and it applies every parser rejection.
+    fn prepare_trajectory_str_parsed(
+        traj_id: TrajId,
+        file_contents: &str,
+        compress: bool,
+    ) -> Result<Vec<PreparedIndexPuts>> {
         let mut out = Vec::new();
         let mut frame_idx: u32 = 0;
-        Self::species_counts_fit(file_contents)?;
         let mut iter = ConFrameIterator::new(file_contents);
         loop {
             let (frame, blob) = match iter.next_with_raw_span(file_contents) {
@@ -2021,6 +2138,118 @@ impl ConCorpus {
         Ok((total, checksum))
     }
 
+    /// Bulk columns for every frame of `traj_id`.
+    ///
+    /// An uncompressed span is parsed from the LMDB mapping. A zstd value
+    /// is decompressed once. A 64-frame group is decompressed once and each
+    /// member is parsed from that buffer. The numeric tokens use
+    /// readcon-core's fast-float kernel. No per-atom object is built.
+    pub fn read_columns(&self, traj_id: TrajId) -> Result<crate::span_columns::Columns> {
+        let n = self
+            .traj_meta(traj_id)?
+            .ok_or_else(|| Error::Message(format!("no trajectory {traj_id}")))?
+            .n_frames;
+        let rtxn = self.read_txn()?;
+        let mut cols = crate::span_columns::Columns::new();
+        let mut idx = 0u32;
+        while idx < n {
+            let fk_b = FrameKey {
+                traj_id,
+                frame_idx: idx,
+            }
+            .to_bytes();
+            let stored = self
+                .frames
+                .get(&rtxn, &fk_b[..])?
+                .ok_or(Error::MissingFrame(FrameKey {
+                    traj_id,
+                    frame_idx: idx,
+                }))?;
+            if crate::frame_codec::is_redirect(stored) {
+                return Err(Error::Message(
+                    "grouped frame was not consumed with its head".into(),
+                ));
+            }
+            if crate::frame_codec::is_group(stored) {
+                let plain = crate::frame_codec::group_plain(stored)?;
+                let nspan = plain.ranges.len() as u32;
+                for range in plain.ranges {
+                    crate::span_columns::append_span(&mut cols, &plain.buf[range])?;
+                }
+                idx += nspan;
+            } else if crate::frame_codec::is_tagged(stored) {
+                let plain =
+                    zstd::stream::decode_all(&stored[crate::frame_codec::FRAME_TAG.len()..])
+                        .map_err(|e| Error::Message(format!("zstd decode: {e}")))?;
+                crate::span_columns::append_span(&mut cols, &plain)?;
+                idx += 1;
+            } else {
+                // Uncompressed UTF-8 stays in the LMDB mapping for the scan.
+                crate::span_columns::append_span(&mut cols, stored)?;
+                idx += 1;
+            }
+        }
+        if cols.n_atoms.len() != n as usize {
+            return Err(Error::Message(format!(
+                "column scan saw {} frames, trajectory has {n}",
+                cols.n_atoms.len()
+            )));
+        }
+        Ok(cols)
+    }
+
+    /// Bulk columns for one stored frame. A group is decompressed once and
+    /// only that member is parsed.
+    pub fn read_frame_columns(&self, key: FrameKey) -> Result<crate::span_columns::Columns> {
+        let rtxn = self.read_txn()?;
+        let fk_b = key.to_bytes();
+        let stored = self
+            .frames
+            .get(&rtxn, &fk_b[..])?
+            .ok_or(Error::MissingFrame(key))?;
+        if crate::frame_codec::is_redirect(stored) {
+            let (head, slot) = crate::frame_codec::redirect_slot(stored)?;
+            let head_b = FrameKey {
+                traj_id: key.traj_id,
+                frame_idx: head,
+            }
+            .to_bytes();
+            let head_bytes = self
+                .frames
+                .get(&rtxn, &head_b[..])?
+                .ok_or(Error::MissingFrame(FrameKey {
+                    traj_id: key.traj_id,
+                    frame_idx: head,
+                }))?;
+            let plain = crate::frame_codec::group_plain(head_bytes)?;
+            let range = plain
+                .ranges
+                .get(slot as usize)
+                .ok_or_else(|| Error::Message("corrupt frame value".into()))?
+                .clone();
+            let mut cols = crate::span_columns::Columns::new();
+            crate::span_columns::append_span(&mut cols, &plain.buf[range])?;
+            return Ok(cols);
+        }
+        if crate::frame_codec::is_group(stored) {
+            let plain = crate::frame_codec::group_plain(stored)?;
+            let range = plain
+                .ranges
+                .first()
+                .ok_or_else(|| Error::Message("corrupt frame value".into()))?
+                .clone();
+            let mut cols = crate::span_columns::Columns::new();
+            crate::span_columns::append_span(&mut cols, &plain.buf[range])?;
+            return Ok(cols);
+        }
+        if crate::frame_codec::is_tagged(stored) {
+            let plain = zstd::stream::decode_all(&stored[crate::frame_codec::FRAME_TAG.len()..])
+                .map_err(|e| Error::Message(format!("zstd decode: {e}")))?;
+            return crate::span_columns::scan_bytes(&plain);
+        }
+        crate::span_columns::scan_bytes(stored)
+    }
+
     /// Parse one stored frame into a `readcon_core` `ConFrame`.
     pub fn get_frame(&self, key: FrameKey) -> Result<ConFrame> {
         let text = self.get_frame_text(key)?;
@@ -2248,21 +2477,19 @@ impl ConCorpus {
         }
     }
 
-    /// xxHash3-128 of CON text, using the same bytes the corpus stores.
+    /// xxHash3-128 of the first frame span, using the bytes the corpus stores.
+    ///
+    /// `append_trajectory_str` keeps that span. A rewrite of the frame is a
+    /// different key, so `hash-file` looks up the stored span and not a
+    /// second serialization.
     pub fn hash_con_text(text: &str) -> Result<ContentHash> {
         Self::species_counts_fit(text)?;
         let mut it = ConFrameIterator::new(text);
-        let frame = it
-            .next()
+        let (_frame, blob) = it
+            .next_with_raw_span(text)
             .ok_or_else(|| Error::Parse("no frame".into()))?
             .map_err(|e| Error::Parse(e.to_string()))?;
-        let mut buf = Cursor::new(Vec::new());
-        {
-            let mut w = ConFrameWriter::new(&mut buf);
-            w.write_frame(&frame)
-                .map_err(|e| Error::Parse(format!("re-serialize: {e}")))?;
-        }
-        Ok(hash_frame_bytes(&buf.into_inner()))
+        Ok(hash_frame_bytes(blob.as_bytes()))
     }
 
     /// Canonical formula for a stored frame (decode once).
@@ -3285,6 +3512,71 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/test")
     }
 
+    /// One valid frame, with one planted defect. `n` is the declared atom count
+    /// except for the truncated and count-mismatch cases.
+    fn malformed_con(n: usize, kind: &str) -> String {
+        let declared = if kind == "truncated" { n + 5 } else { n };
+        let mut text = format!(
+            "\n{{\"con_spec_version\":3,\"con_spec_minor\":1,\"energy\":-1.5,\"frame_index\":0,\"pbc\":[true,true,false],\"sections\":[\"forces\"],\"units\":{{\"length\":\"angstrom\",\"energy\":\"eV\"}}}}\n10.5 12.25 8.0\n90 90 90\n\n\n1\n{declared}\n63.546\nCu\nCoordinates of Component 1\n"
+        );
+        let rows = if kind == "truncated" { n } else { declared };
+        if kind == "count" {
+            text = format!(
+                "\n{{\"con_spec_version\":3,\"con_spec_minor\":1,\"units\":{{\"length\":\"angstrom\",\"energy\":\"eV\"}}}}\n10.5 12.25 8.0\n90 90 90\n\n\n2\n{n}\n63.546 1.0\nCu\nCoordinates of Component 1\n"
+            );
+            for i in 0..n {
+                text.push_str(&format!("{i}.0 0.5 1.0 0 {i}\n"));
+            }
+            return text;
+        }
+        for i in 0..rows {
+            if i + 1 == rows {
+                match kind {
+                    "float" => text.push_str("1.0 2.0 zz 0 1\n"),
+                    "short" => text.push_str("1.0 2.0 3.0\n"),
+                    "extra" => text.push_str("1.0 2.0 3.0 0 1 9\n"),
+                    "flag" => text.push_str("1.0 2.0 3.0 9 1\n"),
+                    "force" => text.push_str(&format!("{i}.0 0.5 1.0 0 {i}\n")),
+                    _ => text.push_str(&format!("{i}.0 0.5 1.0 0 {i}\n")),
+                }
+            } else {
+                text.push_str(&format!("{i}.0 0.5 1.0 0 {i}\n"));
+            }
+        }
+        text.push_str("\nCu\nForces of Component 1\n");
+        for i in 0..rows {
+            if kind == "force" && i + 1 == rows {
+                text.push_str("0.1 bad 0.3 0 1\n");
+            } else {
+                text.push_str(&format!("0.1 0.2 0.3 0 {i}\n"));
+            }
+        }
+        text
+    }
+
+    fn malformed_pair() -> Vec<(&'static str, String, String)> {
+        [
+            "float",
+            "short",
+            "extra",
+            "flag",
+            "truncated",
+            "count",
+            "force",
+        ]
+        .into_iter()
+        .map(|kind| {
+            let mut large_n = 4_000usize;
+            let mut large = malformed_con(large_n, kind);
+            while large.len() <= 512 * 1024 {
+                large_n *= 2;
+                large = malformed_con(large_n, kind);
+            }
+            (kind, malformed_con(8, kind), large)
+        })
+        .collect()
+    }
+
     #[test]
     fn huge_species_count_is_an_error_without_allocating() {
         let text = "\
@@ -3308,6 +3600,166 @@ x
         assert!(species_counts_within_text(
             &std::fs::read_to_string(fixture("tiny_multi_cuh2.con")).unwrap()
         ));
+        // Two species and one count token. The parser says
+        // "expected 2 values"; this guard must not hide that.
+        assert!(species_counts_within_text(
+            "\n{}\n1 1 1\n90 90 90\n\n\n2\n8\n63.5 1.0\n"
+        ));
+    }
+
+    #[test]
+    fn span_prepare_matches_parsed_index_keys() {
+        for name in [
+            "tiny_cuh2.con",
+            "tiny_cuh2_forces.con",
+            "tiny_cuh2_vel_forces.con",
+            "tiny_multi_cuh2.con",
+        ] {
+            let text = std::fs::read_to_string(fixture(name)).unwrap();
+            let prepared = ConCorpus::prepare_trajectory_str_span(3, &text, false).unwrap();
+            let mut it = ConFrameIterator::new(&text);
+            for puts in &prepared {
+                let (frame, span) = it
+                    .next_with_raw_span(&text)
+                    .unwrap()
+                    .expect("fixture frame");
+                assert_eq!(puts.stored, span.as_bytes(), "{name} span");
+                let slow =
+                    ConCorpus::build_index_puts(puts.fk, &frame, span.to_owned(), false).unwrap();
+                assert_eq!(puts.hash, slow.hash, "{name} hash");
+                assert_eq!(puts.natoms_k, slow.natoms_k, "{name} natoms");
+                assert_eq!(puts.symbol_keys, slow.symbol_keys, "{name} symbols");
+                assert_eq!(puts.elem_count_keys, slow.elem_count_keys, "{name} counts");
+                assert_eq!(puts.formula_k, slow.formula_k, "{name} formula");
+                assert_eq!(puts.energy_k, slow.energy_k, "{name} energy");
+                assert_eq!(puts.fmax_k, slow.fmax_k, "{name} fmax");
+                assert_eq!(puts.mass_k, slow.mass_k, "{name} mass");
+                assert_eq!(puts.volume_k, slow.volume_k, "{name} volume");
+                assert_eq!(puts.pbc_k, slow.pbc_k, "{name} pbc");
+                assert_eq!(puts.flag_keys, slow.flag_keys, "{name} flags");
+                assert_eq!(puts.meta_keys, slow.meta_keys, "{name} meta");
+            }
+            assert!(it.next().is_none(), "{name}");
+        }
+    }
+
+    /// A malformed frame is rejected at both sizes. The span path must not
+    /// accept a file the full parser rejects.
+    #[test]
+    fn malformed_frame_rejection_does_not_depend_on_size() {
+        fn fault(err: &str) -> &'static str {
+            if err.contains("expected") && err.contains("values") {
+                "width"
+            } else if err.contains("invalid number") || err.contains("non-finite") {
+                "float"
+            } else if err.contains("invalid fixed flag") {
+                "flag"
+            } else if err.contains("ended unexpectedly") || err.contains("truncated") {
+                "truncated"
+            } else if err.contains("count") {
+                "count"
+            } else {
+                "other"
+            }
+        }
+        for (label, small, large) in malformed_pair() {
+            assert!(
+                small.len() <= 512 * 1024,
+                "{label} small is {} bytes",
+                small.len()
+            );
+            assert!(
+                large.len() > 512 * 1024,
+                "{label} large is {} bytes",
+                large.len()
+            );
+            let small_err = ConCorpus::prepare_trajectory_str(1, &small, false).err();
+            let large_err = ConCorpus::prepare_trajectory_str(1, &large, false).err();
+            match (small_err, large_err) {
+                (Some(a), Some(b)) => {
+                    let fa = fault(&a.to_string());
+                    let fb = fault(&b.to_string());
+                    assert_eq!(fa, fb, "{label}: small {a} vs large {b}");
+                    assert_ne!(fa, "other", "{label}: {a}");
+                }
+                (None, None) => panic!("{label} accepted at both sizes"),
+                (None, Some(b)) => panic!("{label} accepted below 512 KiB, rejected above: {b}"),
+                (Some(a), None) => panic!("{label} rejected below 512 KiB, accepted above: {a}"),
+            }
+        }
+    }
+
+    /// The old prepare parsed every atom. On a large frame that parse is most
+    /// of the insert, so the span index has to be cheaper than it.
+    #[test]
+    fn large_span_prepare_is_cheaper_than_parsing_every_atom() {
+        if cfg!(debug_assertions) {
+            return;
+        }
+        let n = 80_000u32;
+        let mut text = String::from(
+            "\n{\"con_spec_version\":3,\"con_spec_minor\":1,\"energy\":-42.5,\"frame_index\":0,\"pbc\":[true,true,false],\"sections\":[\"forces\"],\"units\":{\"length\":\"angstrom\",\"energy\":\"eV\"}}\n10.5 12.25 8.0\n90 90 90\n\n\n1\n80000\n63.546\nCu\nCoordinates of Component 1\n",
+        );
+        for i in 0..n {
+            use std::fmt::Write as _;
+            let _ = write!(text, "{i}.125 0.5 1.0 0 {i}\n");
+        }
+        text.push_str("\nCu\nForces of Component 1\n");
+        for i in 0..n {
+            use std::fmt::Write as _;
+            let _ = write!(text, "0.1 0.2 {i}.0 0 {i}\n");
+        }
+        let t_parse = std::time::Instant::now();
+        let parsed = ConFrameIterator::new(&text).count();
+        let parse = t_parse.elapsed();
+        assert_eq!(parsed, 1);
+        let t_prep = std::time::Instant::now();
+        let prepared = ConCorpus::prepare_trajectory_str(1, &text, true).unwrap();
+        let prep = t_prep.elapsed();
+        assert_eq!(prepared.len(), 1);
+        assert!(
+            prep < parse,
+            "span prepare {prep:?} is not cheaper than the atom parse {parse:?}"
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn profile_million_atom_insert() {
+        let path =
+            std::env::var("READCON_PROFILE_CON").unwrap_or_else(|_| "/tmp/million.con".into());
+        let text = std::fs::read_to_string(&path).unwrap();
+        eprintln!("text_bytes {}", text.len());
+        let t_iter = std::time::Instant::now();
+        let n = readcon_core::iterators::ConFrameIterator::new(&text).count();
+        eprintln!("iterator_frames {n} {:?}", t_iter.elapsed());
+        let t_z = std::time::Instant::now();
+        let compressed = zstd::stream::encode_all(text.as_bytes(), 1).unwrap();
+        eprintln!("zstd {:?} out {}", t_z.elapsed(), compressed.len());
+        let t_h = std::time::Instant::now();
+        let _h = crate::keys::hash_frame_bytes(text.as_bytes());
+        eprintln!("hash {:?}", t_h.elapsed());
+        let t_c = std::time::Instant::now();
+        let cols = crate::span_columns::scan_bytes(text.as_bytes()).unwrap();
+        eprintln!(
+            "columns {:?} atoms {} forces {}",
+            t_c.elapsed(),
+            cols.n_atoms.first().copied().unwrap_or(0),
+            cols.forces.len()
+        );
+        let t0 = std::time::Instant::now();
+        let mut prepared = ConCorpus::prepare_trajectory_str(1, &text, true).unwrap();
+        eprintln!(
+            "prepare {:?} stored {}",
+            t0.elapsed(),
+            prepared.iter().map(|p| p.stored.len()).sum::<usize>()
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let t1 = std::time::Instant::now();
+        db.commit_prepared(1, &mut prepared, "t".into(), false, false)
+            .unwrap();
+        eprintln!("commit {:?}", t1.elapsed());
     }
 
     #[test]
@@ -3319,6 +3771,23 @@ x
         assert_eq!(parse_map_size("0"), None);
         assert_eq!(parse_map_size("big"), None);
         assert_eq!(parse_map_size(""), None);
+    }
+
+    #[test]
+    fn new_corpus_map_is_at_most_eight_mebibytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let previous = std::env::var(MAP_SIZE_ENV).ok();
+        std::env::remove_var(MAP_SIZE_ENV);
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let size = db.map_size();
+        if let Some(value) = previous {
+            std::env::set_var(MAP_SIZE_ENV, value);
+        }
+        assert!(
+            size <= 8 << 20,
+            "default map is {size} bytes; a cold open should not reserve 2 GiB"
+        );
+        assert_eq!(size, DEFAULT_MAP_SIZE);
     }
 
     #[test]

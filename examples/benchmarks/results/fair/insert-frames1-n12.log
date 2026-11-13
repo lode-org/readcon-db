@@ -1,0 +1,20 @@
+protocol=fair workload=frames-1 op=insert tool=readcon-db n=12 warmup=1 quantile=type7
+warmup discarded
+sample i=0 seconds=9.473079999e-04
+sample i=1 seconds=9.118489997e-04
+sample i=2 seconds=5.026739991e-04
+sample i=3 seconds=3.319000007e-04
+sample i=4 seconds=3.063020004e-04
+sample i=5 seconds=3.352140002e-04
+sample i=6 seconds=3.166799997e-04
+sample i=7 seconds=5.135619995e-04
+sample i=8 seconds=3.531059992e-04
+sample i=9 seconds=3.729119999e-04
+sample i=10 seconds=5.014139997e-04
+sample i=11 seconds=3.338500001e-04
+median_s=3.630090e-04
+iqr_s=1.720335e-04
+q1_s=3.333625e-04
+q3_s=5.053960e-04
+min_s=3.063020e-04
+max_s=9.473080e-04

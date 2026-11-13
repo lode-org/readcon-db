@@ -88,7 +88,16 @@ impl Select {
         self
     }
     /// Keep frames whose atom count is inside `min..=max`.
+    ///
+    /// `0..=u32::MAX` matches every frame. It is not stored. Scanning
+    /// `idx_natoms` for that window visits every key and drops none, and
+    /// Python `select` passes that pair when the caller sets no bound.
     pub fn natoms_range(mut self, min: u32, max: u32) -> Self {
+        if min == 0 && max == u32::MAX {
+            self.natoms_min = None;
+            self.natoms_max = None;
+            return self;
+        }
         self.natoms_min = Some(min);
         self.natoms_max = Some(max);
         self

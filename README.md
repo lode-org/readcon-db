@@ -108,6 +108,70 @@ Python `append_trajectory_frames` commits 64 frames at a time. `get_frame` retur
 
 Full ABI table, logo, Sphinx docs, and site: see `docs/`, `website/`, `assets/logo/`, `CHANGELOG.md`. Fortran module notes: `fortran/README.md`, `fortran/ReadConDb/`.
 
+## Benchmarks
+
+ASE sqlite is a measurement target, not a storage path. The fair
+comparison is
+[`examples/benchmarks/fair_ase_protocol.py`](examples/benchmarks/fair_ase_protocol.py).
+Why the published CPC ingest is not a like-for-like timing, and the
+rules this tree uses instead, are in
+[`examples/benchmarks/FAIRNESS.md`](examples/benchmarks/FAIRNESS.md).
+Raw samples are
+[`examples/benchmarks/results/fair/campaign.log`](examples/benchmarks/results/fair/campaign.log).
+
+Both stores get the same records: symbols, positions, cell,
+periodicity, masses, forces, energy, and `frame_index`. ASE is SQLite
+with `journal_mode=DELETE` and `synchronous=FULL`. Each insert is one
+transaction and one commit fsync, on a database file created for that
+sample. One warmup is discarded. Six serial samples alternate the two
+tools. The summary is the Hyndman–Fan type-7 median and IQR. Every
+stored field is checked by its float64 bytes; a mismatch aborts the run.
+
+A cold read calls `posix_fadvise(DONTNEED)` on the closed database
+files, then times a readonly open plus the read.
+`/proc/sys/vm/drop_caches` was not writable on the measurement host.
+A warm read is the next read on the already open store. The timed
+close does not call `gc.collect()`. Full reads use `read_columns`.
+The single-frame query is `frame_index` of the middle frame.
+
+The published CPC log (`paper/cpc/logs/db.log`, 40 frames of 8 Cu, no
+warmup) is readcon-db 4.67 ms and ASE 72.3 ms (IQR 37.7 ms). ASE
+committed and fsynced once per frame. On the fair harness that same
+40×8 insert, one commit each, is readcon-db 1.70 ms (IQR 0.42 ms) and
+ASE 5.17 ms (IQR 0.48 ms).
+
+Type-7 medians from the fair ladder on that host, in seconds:
+
+| workload | op | cache | readcon-db | ASE sqlite |
+| --- | --- | --- | --- | --- |
+| 10³ atoms, 1 frame | full read | warm | 2.17e-4 | 4.81e-4 |
+| 10³ atoms, 1 frame | full read | cold | 4.24e-4 | 9.96e-4 |
+| 10⁴ atoms, 1 frame | full read | warm | 1.22e-3 | 2.33e-3 |
+| 10⁴ atoms, 1 frame | full read | cold | 1.49e-3 | 3.16e-3 |
+| 10⁵ atoms, 1 frame | full read | warm | 1.60e-2 | 3.53e-2 |
+| 10⁵ atoms, 1 frame | full read | cold | 1.59e-2 | 2.84e-2 |
+| 10⁶ atoms, 1 frame | full read | warm | 1.77e-1 | 2.40e-1 |
+| 10⁶ atoms, 1 frame | full read | cold | 1.78e-1 | 2.82e-1 |
+| 10⁶ atoms, 1 frame | one frame | cold | 1.80e-1 | 2.83e-1 |
+| 8 atoms, 10⁴ frames | full read | warm | 1.12e-1 | 9.62e-1 |
+| 8 atoms, 10⁴ frames | full read | cold | 1.21e-1 | 9.77e-1 |
+| 8 atoms, 10⁴ frames | one frame | cold | 5.67e-4 | 3.56e-3 |
+| 10⁶ atoms, 1 frame | insert | cold-file | 1.52e-1 | 2.47e-1 |
+| 8 atoms, 10⁴ frames | insert | cold-file | 2.90e-1 | 3.76e0 |
+
+readcon-db is ahead on every full read, every single-frame query, and
+every insert in that log, warm and cold. A text above 512 KiB is indexed
+from the stored span. Every coordinate, fixed-flag, and force row is
+checked, and no per-atom object is built. The 10⁶-atom insert was
+0.349 s on the per-atom path and is 0.152 s after, against ASE at
+0.247 s. Texts at or below 512 KiB still take the full parse. A
+one-frame insert with n = 12 has median 0.363 ms (IQR 0.172 ms); the
+earlier 0.315 ms and 0.400 ms medians both sit inside that IQR. The
+full ladder, including the before column, is
+[`examples/benchmarks/results/fair/RESULTS.md`](examples/benchmarks/results/fair/RESULTS.md).
+Select-count parity on a shared CON ladder remains
+`examples/benchmarks/fair_campaign.py`.
+
 ## Questions and bug reports
 
 Ask questions and report bugs on the [GitHub issue tracker](https://github.com/lode-org/readcon-db/issues).

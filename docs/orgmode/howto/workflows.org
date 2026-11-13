@@ -90,17 +90,53 @@ This is a measurement recipe, not a product path. Do not store =Atoms= in ASE =.
 
 Legacy =examples/benchmarks/bench_ase_db.py= Cu2 stand-ins are unequal workloads (lightweight ASE rows vs full CON parse+index). Do not use those numbers.
 
-** Fair ASE.db vs readcon-db campaign
+** Fair ASE sqlite comparison
+:PROPERTIES:
+:CUSTOM_ID: fair-ase-sqlite-comparison
+:END:
+Use *=examples/benchmarks/fair_ase_protocol.py=*. The protocol write-up is =examples/benchmarks/FAIRNESS.md=. Raw lines and the type-7 table are =examples/benchmarks/results/fair/=.
+
+Both stores receive the same records: symbols, positions, cell, periodicity, masses, forces, energy, and =frame_index=. ASE is SQLite, =journal_mode=DELETE=, =synchronous=FULL=. Each insert is one transaction and one commit fsync, on a database file created for that sample. One warmup is discarded. Six serial samples alternate the two tools. The summary is the Hyndman–Fan type-7 median and IQR. A field mismatch aborts the run.
+
+A cold read calls =posix_fadvise(DONTNEED)= on the closed database files, then times a readonly open plus the read. =/proc/sys/vm/drop_caches= was not writable on the measurement host, so it was not used. A warm read is the next read on the already open store. The timed close does not call =gc.collect()=. Full reads use =read_columns=. The single-frame query is =frame_index= of the middle frame.
+
+The published CPC ingest (=paper/cpc/logs/db.log=, 40 frames of 8 Cu, no warmup) is readcon-db 4.67 ms and ASE 72.3 ms. ASE committed once per frame. The fair rerun of that insert, one commit each, is readcon-db 1.70 ms and ASE 5.17 ms.
+
+Type-7 medians on that host, seconds:
+
+| workload | op | cache | readcon-db | ASE sqlite |
+|----------|----+-------+------------+------------|
+| 10^3 atoms, 1 frame | full read | warm | 2.17e-4 | 4.81e-4 |
+| 10^3 atoms, 1 frame | full read | cold | 4.24e-4 | 9.96e-4 |
+| 10^4 atoms, 1 frame | full read | warm | 1.22e-3 | 2.33e-3 |
+| 10^4 atoms, 1 frame | full read | cold | 1.49e-3 | 3.16e-3 |
+| 10^5 atoms, 1 frame | full read | warm | 1.60e-2 | 3.53e-2 |
+| 10^5 atoms, 1 frame | full read | cold | 1.59e-2 | 2.84e-2 |
+| 10^6 atoms, 1 frame | full read | warm | 1.77e-1 | 2.40e-1 |
+| 10^6 atoms, 1 frame | full read | cold | 1.78e-1 | 2.82e-1 |
+| 10^6 atoms, 1 frame | one frame | cold | 1.80e-1 | 2.83e-1 |
+| 8 atoms, 10^4 frames | full read | warm | 1.12e-1 | 9.62e-1 |
+| 8 atoms, 10^4 frames | full read | cold | 1.21e-1 | 9.77e-1 |
+| 8 atoms, 10^4 frames | one frame | cold | 5.67e-4 | 3.56e-3 |
+| 10^6 atoms, 1 frame | insert | cold-file | 1.52e-1 | 2.47e-1 |
+| 8 atoms, 10^4 frames | insert | cold-file | 2.90e-1 | 3.76e0 |
+
+readcon-db is ahead on every full read, every single-frame query, and every insert in the latest fair log. A text above 512 KiB is indexed from the stored span, and every coordinate, fixed-flag, and force row is checked. The 10^6-atom insert was 0.349 s on the per-atom path and is 0.152 s after, against ASE at 0.247 s. A one-frame insert with n = 12 has median 0.363 ms (IQR 0.172 ms); 0.315 ms and 0.400 ms both sit inside that IQR. The before column is in =RESULTS.md=.
+
+#+begin_src sh
+python examples/benchmarks/fair_ase_protocol.py --mode all --out examples/benchmarks/results/fair
+#+end_src
+
+** Select-count campaign
 :PROPERTIES:
 :CUSTOM_ID: fair-ase.db-vs-readcon-db-campaign
 :END:
-Use *=examples/benchmarks/fair_campaign.py=*: builds a multi-frame CON ladder from a real fixture, loads *the same frames* into ASE =.db= (via readcon geometry → =Atoms=) and *readcon-db*, records insert/extract/competitive select/8-reader timings, and checks *hit-count agreement* for symbol =Cu= and =natoms= range. Live results: JSON =ase_fair_campaign_{run}.json= and markdown table.
+=examples/benchmarks/fair_campaign.py= is a different measurement. It builds a multi-frame CON ladder from a real fixture, loads the same frames into ASE =.db= and readcon-db, and checks hit-count agreement for symbol =Cu= and an =natoms= range. It is not the head-to-head timing above.
 
 #+begin_src sh
-# venv with ase + maturin-developed readcon / readcon_db
 python examples/benchmarks/fair_campaign.py --out /tmp/fair_out --run-id 1
 python examples/benchmarks/test_fair_select_parity.py
 python paper/cpc/scripts/gen_fair_table.py --check
 #+end_src
 
-Legacy =bench_ase_db.py= Cu2 timings are *unequal-workload* artifacts only. Interchange axis (parse CON): campaign JSON field =interchange= (readcon vs =ase.io.read=).
+Legacy =bench_ase_db.py= Cu2 timings are unequal-workload artifacts only.

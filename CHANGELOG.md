@@ -3,6 +3,16 @@
 ## Unreleased
 #### Features
 - (**identity**) opt-in canonical hash for frames that differ by atom-id order
+#### Bug Fixes
+- (**hash**) `hash_con_text` uses the stored CON span, so `hash-file` finds an ingested frame
+- (**select**) the full atom-count domain is not an `idx_natoms` scan
+- (**lmdb**) default map is 8 MiB; existing corpora still map twice `data.mdb`
+- (**read**) full read scans the stored span into bulk columns, not per-atom objects
+- (**bench**) cold reads time a readonly open, not a process-wide garbage collection
+#### Documentation
+- (**bench**) record the fair ASE sqlite protocol and the db2/db3 ladder in the README
+- (**read**) index a CON insert above 512 KiB from the stored span, without one object per atom
+- (**read**) a span insert checks every coordinate, fixed-flag, and force row, so a malformed frame is rejected at every size
 #### Build system
 - (**reader**) require readcon-core 0.21.0 for atom-id correspondence
 

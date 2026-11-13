@@ -19,4 +19,4 @@ Selection is an explicit Rust/=Select= builder (or =rkrdb_select_*= / =rkrdb_sel
 
 *H5MD interchange:* =export_h5md= / =collect_h5md= write one =[T][N][3]= trajectory (CON stays authority). *Drain/join:* node-local =shard-ingest=, =drain= compact-snapshots =data.mdb=, then =join-drained=. =compact-join= is the single-root join. Ops: @@rst::doc:`/howto/campaign`@@.
 
-*Benchmarks:* same-frame ASE comparison is =examples/benchmarks/fair_campaign.py=. See @@rst::doc:`/howto/workflows`@@.
+*Benchmarks:* the fair ASE sqlite comparison is =examples/benchmarks/fair_ase_protocol.py= (protocol in =examples/benchmarks/FAIRNESS.md=, numbers in =examples/benchmarks/results/fair/=). Select-count parity remains =examples/benchmarks/fair_campaign.py=. See @@rst::doc:`/howto/workflows`@@.

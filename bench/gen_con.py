@@ -28,8 +28,9 @@ def main():
                 f"{box:.6f} {box:.6f} {box:.6f}\n90.000000 90.000000 90.000000\n\n\n"
             )
             f.write(f"1\n{atoms}\n63.546000\nCu\nCoordinates of Component 1\n")
-            for i, p in enumerate(r):
-                f.write(f"{p[0]:.6f} {p[1]:.6f} {p[2]:.6f} 0 {i}\n")
+            f.writelines(
+                f"{p[0]:.6f} {p[1]:.6f} {p[2]:.6f} 0 {i}\n" for i, p in enumerate(r)
+            )
 
 
 if __name__ == "__main__":
