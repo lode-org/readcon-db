@@ -719,6 +719,91 @@ impl PyConCorpus {
         Ok(columns_to_py(py, &cols)?.unbind())
     }
 
+    /// One trajectory, or one frame, as NumPy arrays copied from RCSO.
+    ///
+    /// `positions`, `velocities`, `masses`, `numbers`, `constraints`, and
+    /// `cell` are always materialized. The CON text is not parsed when the
+    /// cooked blob carries those blocks.
+    #[pyo3(signature = (traj_id, frame_idx=None))]
+    fn read_arrays(
+        &self,
+        py: Python<'_>,
+        traj_id: u64,
+        frame_idx: Option<u32>,
+    ) -> PyResult<Py<PyDict>> {
+        let block = py
+            .detach(|| {
+                self.inner
+                    .read_materialized(traj_id, frame_idx)
+                    .map_err(|e| e.to_string())
+            })
+            .map_err(PyRuntimeError::new_err)?;
+        let n_frames = block.n_frames as usize;
+        let n_atoms = block.n_atoms as usize;
+        let out = PyDict::new(py);
+        out.set_item("n_frames", block.n_frames)?;
+        out.set_item("n_atoms", n_atoms)?;
+        out.set_item(
+            "positions",
+            f64_array(py, &block.positions, &[n_frames, n_atoms, 3])?,
+        )?;
+        if block.forces_set {
+            out.set_item(
+                "forces",
+                f64_array(py, &block.forces, &[n_frames, n_atoms, 3])?,
+            )?;
+        } else {
+            out.set_item("forces", py.None())?;
+        }
+        out.set_item(
+            "velocities",
+            f64_array(py, &block.velocities, &[n_frames, n_atoms, 3])?,
+        )?;
+        out.set_item("velocities_set", block.velocities_set)?;
+        out.set_item(
+            "masses",
+            f64_array(py, &block.masses, &[n_frames, n_atoms])?,
+        )?;
+        out.set_item(
+            "numbers",
+            u32_array(py, &block.numbers, &[n_frames, n_atoms])?,
+        )?;
+        out.set_item(
+            "constraints",
+            u8_array(py, &block.constraints, &[n_frames, n_atoms, 3])?,
+        )?;
+        out.set_item("cell", f64_array(py, &block.cells, &[n_frames, 3, 3])?)?;
+        out.set_item("energy", f64_array(py, &block.energy, &[n_frames])?)?;
+        out.set_item(
+            "energy_set",
+            PyList::new(py, block.energy_set.iter().copied())?,
+        )?;
+        out.set_item(
+            "frame_index",
+            f64_array(py, &block.frame_index, &[n_frames])?,
+        )?;
+        out.set_item(
+            "frame_index_set",
+            PyList::new(py, block.frame_index_set.iter().copied())?,
+        )?;
+        let pbc = PyList::empty(py);
+        for flag in block.pbc.chunks(3) {
+            pbc.append(PyTuple::new(py, flag.iter().copied())?)?;
+        }
+        out.set_item("pbc", pbc)?;
+        out.set_item("pbc_set", PyList::new(py, block.pbc_set.iter().copied())?)?;
+        let runs = PyList::empty(py);
+        for frame in &block.symbol_runs {
+            let one = PyList::empty(py);
+            for (sym, n) in frame {
+                one.append((sym.as_str(), *n))?;
+            }
+            runs.append(one)?;
+        }
+        out.set_item("symbol_runs", runs)?;
+        Ok(out.unbind())
+    }
+
     /// CON text of one stored frame.
     fn get_frame_text(&self, traj_id: u64, frame_idx: u32) -> PyResult<String> {
         self.inner
@@ -907,19 +992,39 @@ fn bcast_packed_frames(
     blob.ok_or_else(|| PyRuntimeError::new_err("empty pack on root"))
 }
 
-fn f64_array<'py>(py: Python<'py>, data: &[f64], shape: &[usize]) -> PyResult<Bound<'py, PyAny>> {
-    let np = py
-        .import("numpy")
-        .map_err(|_| PyRuntimeError::new_err("read_columns requires numpy"))?;
+fn u32_array<'py>(py: Python<'py>, data: &[u32], shape: &[usize]) -> PyResult<Bound<'py, PyAny>> {
     let raw = unsafe {
         std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), std::mem::size_of_val(data))
     };
+    buffer_array(py, raw, "uint32", shape)
+}
+
+fn u8_array<'py>(py: Python<'py>, data: &[u8], shape: &[usize]) -> PyResult<Bound<'py, PyAny>> {
+    buffer_array(py, data, "uint8", shape)
+}
+
+fn buffer_array<'py>(
+    py: Python<'py>,
+    raw: &[u8],
+    dtype: &str,
+    shape: &[usize],
+) -> PyResult<Bound<'py, PyAny>> {
+    let np = py
+        .import("numpy")
+        .map_err(|_| PyRuntimeError::new_err("read_columns requires numpy"))?;
     let buf = PyBytes::new(py, raw);
     let kwargs = PyDict::new(py);
-    kwargs.set_item("dtype", "float64")?;
+    kwargs.set_item("dtype", dtype)?;
     let flat = np.call_method("frombuffer", (buf,), Some(&kwargs))?;
     let shape_t = PyTuple::new(py, shape.iter().copied())?;
     flat.call_method1("reshape", (shape_t,))
+}
+
+fn f64_array<'py>(py: Python<'py>, data: &[f64], shape: &[usize]) -> PyResult<Bound<'py, PyAny>> {
+    let raw = unsafe {
+        std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), std::mem::size_of_val(data))
+    };
+    buffer_array(py, raw, "float64", shape)
 }
 
 fn columns_to_py<'py>(

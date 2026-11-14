@@ -158,6 +158,57 @@ struct PreparedIndexPuts {
     cooked: Vec<u8>,
 }
 
+/// Arrays for one trajectory, each frame concatenated in index order.
+#[derive(Clone, Debug, Default)]
+pub struct MaterializedRead {
+    /// Frame count.
+    pub n_frames: u32,
+    /// Atoms in every frame.
+    pub n_atoms: u32,
+    /// Row-major coordinates, `n_frames * n_atoms * 3`.
+    pub positions: Vec<f64>,
+    /// Row-major forces. Empty when `forces_set` is false.
+    pub forces: Vec<f64>,
+    /// True when every frame stored forces.
+    pub forces_set: bool,
+    /// Row-major velocities, zeros where a frame had none.
+    pub velocities: Vec<f64>,
+    /// True when every frame stored velocities.
+    pub velocities_set: bool,
+    /// Per-atom masses.
+    pub masses: Vec<f64>,
+    /// Atomic numbers.
+    pub numbers: Vec<u32>,
+    /// Fixed mask, `n_frames * n_atoms * 3` bytes.
+    pub constraints: Vec<u8>,
+    /// Row-major 3×3 cells, `n_frames * 9`.
+    pub cells: Vec<f64>,
+    /// One energy per frame.
+    pub energy: Vec<f64>,
+    /// Whether that frame stored an energy.
+    pub energy_set: Vec<bool>,
+    /// One frame index per frame.
+    pub frame_index: Vec<f64>,
+    /// Whether that frame stored an index.
+    pub frame_index_set: Vec<bool>,
+    /// Periodic flags, three per frame.
+    pub pbc: Vec<bool>,
+    /// Whether that frame stored pbc.
+    pub pbc_set: Vec<bool>,
+    /// Symbol runs, one list per frame.
+    pub symbol_runs: Vec<Vec<(String, u32)>>,
+}
+
+fn materialized_from_text(text: &str) -> Result<crate::cooked_soa::MaterializedFrame> {
+    let frame = ConFrameIterator::new(text)
+        .next()
+        .ok_or_else(|| Error::Parse("stored frame is empty".into()))?
+        .map_err(|e| Error::Parse(e.to_string()))?;
+    let blob = crate::cooked_soa::CookedSoa::encode_frame(&frame)?;
+    crate::cooked_soa::MaterializedFrame::from_blob(&blob)
+        .ok_or_else(|| Error::Message("cooked frame is missing its arrays".into()))
+}
+
 /// One trajectory of coordinates, row-major `n_frames * n_atoms * 3` f64.
 pub struct TrajectoryPositions {
     /// Frames in index order.
@@ -295,18 +346,6 @@ fn count_entries(db: Database<Bytes, Bytes>, txn: &heed::RoTxn<'_>) -> Result<us
 /// count before it looks at the next line, and the process aborts.
 fn usize_reserve_aborts(count: usize) -> bool {
     count.saturating_mul(std::mem::size_of::<usize>()) >= (1usize << 32)
-}
-
-/// One frame of a stored span, encoded as RCSO. The span walk does not
-/// build a `ConFrame` for the indexes; cooking parses that one frame.
-fn cook_span(text: &str) -> Result<Vec<u8>> {
-    let mut iter = ConFrameIterator::new(text);
-    let frame = match iter.next() {
-        Some(Ok(frame)) => frame,
-        Some(Err(e)) => return Err(Error::Parse(e.to_string())),
-        None => return Err(Error::Parse("span has no frame to cook".into())),
-    };
-    crate::cooked_soa::CookedSoa::encode_frame(&frame)
 }
 
 fn prepared_bytes(prepared: &[PreparedIndexPuts]) -> usize {
@@ -455,11 +494,11 @@ fn skip_lines(bytes: &[u8], i: &mut usize, n: usize) -> usize {
 }
 
 /// Project many frames at once. One frame stays on the calling thread.
-fn project_spans(texts: &[&str]) -> Result<Vec<crate::span_columns::SpanFacts>> {
+fn project_spans(texts: &[&str]) -> Result<Vec<(crate::span_columns::SpanFacts, Vec<u8>)>> {
     if texts.len() < 32 {
         return texts
             .iter()
-            .map(|text| crate::span_columns::project_frame(text.as_bytes()))
+            .map(|text| crate::span_columns::project_frame_cooked(text.as_bytes()))
             .collect();
     }
     let threads = std::thread::available_parallelism()
@@ -471,15 +510,15 @@ fn project_spans(texts: &[&str]) -> Result<Vec<crate::span_columns::SpanFacts>> 
     std::thread::scope(|scope| {
         let mut joins = Vec::new();
         for piece in texts.chunks(chunk) {
-            joins.push(
-                scope.spawn(move || -> Result<Vec<crate::span_columns::SpanFacts>> {
+            joins.push(scope.spawn(
+                move || -> Result<Vec<(crate::span_columns::SpanFacts, Vec<u8>)>> {
                     let mut out = Vec::with_capacity(piece.len());
                     for text in piece {
-                        out.push(crate::span_columns::project_frame(text.as_bytes())?);
+                        out.push(crate::span_columns::project_frame_cooked(text.as_bytes())?);
                     }
                     Ok(out)
-                }),
-            );
+                },
+            ));
         }
         for join in joins {
             parts.push(join.join().expect("frame projection"));
@@ -897,19 +936,25 @@ impl ConCorpus {
     ) -> Result<PreparedIndexPuts> {
         let facts = crate::span_columns::facts_from_frame(frame);
         let cooked = crate::cooked_soa::CookedSoa::encode_frame(frame)?;
-        Self::build_index_from_facts(fk, &facts, &text, compress, cooked)
+        Self::build_index_from_facts(fk, &facts, &text, compress, cooked, None)
     }
 
     /// Index keys for one stored span. `text` is the exact CON substring.
+    /// `stored` is the already compressed frame value when compression ran
+    /// beside the coordinate walk.
     fn build_index_from_facts(
         fk: FrameKey,
         facts: &crate::span_columns::SpanFacts,
         text: &str,
         compress: bool,
         cooked: Vec<u8>,
+        stored: Option<Vec<u8>>,
     ) -> Result<PreparedIndexPuts> {
         let hash = hash_frame_bytes(text.as_bytes()).to_bytes();
-        let stored = crate::frame_codec::store_frame(text, compress)?;
+        let stored = match stored {
+            Some(bytes) => bytes,
+            None => crate::frame_codec::store_frame(text, compress)?,
+        };
         let mut symbol_keys = Vec::new();
         let mut elem_count_keys = Vec::new();
         let mut seen = BTreeSet::new();
@@ -1184,16 +1229,44 @@ impl ConCorpus {
                     .ok_or_else(|| Error::Parse("frame span is not valid UTF-8".into()))?,
             );
         }
-        let facts = project_spans(&texts)?;
         let mut out = Vec::with_capacity(texts.len());
-        for (i, (text, facts)) in texts.iter().zip(facts).enumerate() {
+        // One large frame: compress the CON text while the coordinate walk
+        // fills the RCSO blob. Both only read the span.
+        if texts.len() < 32 {
+            for (i, text) in texts.iter().enumerate() {
+                let fk = FrameKey {
+                    traj_id,
+                    frame_idx: u32::try_from(i)
+                        .map_err(|_| Error::Parse("too many frames".into()))?,
+                };
+                let (facts, cooked, stored) = if compress && text.len() >= 256 * 1024 {
+                    std::thread::scope(|scope| {
+                        let job = scope.spawn(|| crate::frame_codec::store_frame(text, true));
+                        let projected = crate::span_columns::project_frame_cooked(text.as_bytes());
+                        let stored = job.join().expect("frame compression");
+                        projected.and_then(|(facts, cooked)| {
+                            stored.map(|bytes| (facts, cooked, Some(bytes)))
+                        })
+                    })?
+                } else {
+                    let (facts, cooked) =
+                        crate::span_columns::project_frame_cooked(text.as_bytes())?;
+                    (facts, cooked, None)
+                };
+                out.push(Self::build_index_from_facts(
+                    fk, &facts, text, compress, cooked, stored,
+                )?);
+            }
+            return Ok(out);
+        }
+        let projected = project_spans(&texts)?;
+        for (i, (text, (facts, cooked))) in texts.iter().zip(projected).enumerate() {
             let fk = FrameKey {
                 traj_id,
                 frame_idx: u32::try_from(i).map_err(|_| Error::Parse("too many frames".into()))?,
             };
-            let cooked = cook_span(text)?;
             out.push(Self::build_index_from_facts(
-                fk, &facts, text, compress, cooked,
+                fk, &facts, text, compress, cooked, None,
             )?);
         }
         Ok(out)
@@ -1503,6 +1576,11 @@ impl ConCorpus {
         )?;
         if self.compress_on() {
             Self::group_prepared(&mut prepared)?;
+        }
+        // The cooked numbers were encoded in the previous units. Drop them
+        // so a later read parses the rewritten CON text.
+        for row in &mut prepared {
+            row.cooked.clear();
         }
         let input_bytes = prepared_bytes(&prepared);
         self.with_write(input_bytes, |wtxn| {
@@ -2383,6 +2461,94 @@ impl ConCorpus {
             n_atoms: n_atoms.unwrap_or(0),
             values,
         })
+    }
+
+    /// Positions, velocities, masses, atomic numbers, constraints, and the cell.
+    ///
+    /// A current RCSO blob is copied out of the LMDB value. The CON text is
+    /// parsed only when that blob is missing or does not carry the extended
+    /// blocks. `frame` selects one frame; `None` reads the trajectory in order.
+    pub fn read_materialized(
+        &self,
+        traj_id: TrajId,
+        frame: Option<u32>,
+    ) -> Result<MaterializedRead> {
+        let rtxn = self.read_txn()?;
+        let keys = if let Some(frame_idx) = frame {
+            vec![FrameKey { traj_id, frame_idx }]
+        } else {
+            let prefix = traj_id.to_be_bytes();
+            let mut keys = Vec::new();
+            let mut iter = self.frames.prefix_iter(&rtxn, &prefix[..])?;
+            while let Some(item) = iter.next() {
+                let (k, _) = item?;
+                if let Some(fk) = FrameKey::from_bytes(k) {
+                    if fk.traj_id == traj_id {
+                        keys.push(fk);
+                    }
+                }
+            }
+            drop(iter);
+            keys.sort_unstable();
+            keys
+        };
+        let mut out = MaterializedRead::default();
+        let mut n_atoms: Option<u32> = None;
+        let mut forces_set = true;
+        let mut velocities_set = true;
+        for key in &keys {
+            let fk_b = key.to_bytes();
+            let cooked = if let Some(blob) = self.frames_soa.get(&rtxn, &fk_b[..])? {
+                crate::cooked_soa::MaterializedFrame::from_blob(blob)
+            } else {
+                None
+            };
+            let cooked = match cooked {
+                Some(frame) => frame,
+                None => {
+                    let text = self.get_frame_text_txn(&rtxn, *key)?;
+                    materialized_from_text(&text)?
+                }
+            };
+            match n_atoms {
+                None => n_atoms = Some(cooked.n_atoms),
+                Some(prev) if prev == cooked.n_atoms => {}
+                Some(prev) => {
+                    return Err(Error::Message(format!(
+                        "trajectory {traj_id} mixes {prev} and {} atoms",
+                        cooked.n_atoms
+                    )));
+                }
+            }
+            if cooked.forces.is_empty() {
+                forces_set = false;
+            }
+            if !cooked.velocities_set {
+                velocities_set = false;
+            }
+            out.positions.extend_from_slice(&cooked.positions);
+            out.forces.extend_from_slice(&cooked.forces);
+            out.velocities.extend_from_slice(&cooked.velocities);
+            out.masses.extend_from_slice(&cooked.masses);
+            out.numbers.extend_from_slice(&cooked.numbers);
+            out.constraints.extend_from_slice(&cooked.constraints);
+            out.cells.extend_from_slice(&cooked.cell);
+            out.energy.push(cooked.energy);
+            out.energy_set.push(cooked.energy_set);
+            out.frame_index.push(cooked.frame_index);
+            out.frame_index_set.push(cooked.frame_index_set);
+            out.pbc.extend_from_slice(&cooked.pbc);
+            out.pbc_set.push(cooked.pbc_set);
+            out.symbol_runs.push(cooked.symbol_runs);
+        }
+        if !forces_set {
+            out.forces.clear();
+        }
+        out.n_frames = keys.len() as u32;
+        out.n_atoms = n_atoms.unwrap_or(0);
+        out.forces_set = forces_set && out.n_frames > 0;
+        out.velocities_set = velocities_set && out.n_frames > 0;
+        Ok(out)
     }
 
     /// Prefer valid cooked SoA (**no CON parse** on hit); otherwise parse CON text in `frames`.
@@ -4726,6 +4892,43 @@ x
             .select(&Select::new().exact_composition("Cu:2|H:2"))
             .unwrap();
         assert!(form.len() >= 2);
+    }
+
+    #[test]
+    fn materialized_read_copies_the_blob_after_the_text_is_garbage() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2_vel_forces.con"))
+            .unwrap();
+        let key = FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        let fr = db.get_frame(key).unwrap();
+        let before = db.read_materialized(1, Some(0)).unwrap();
+        assert_eq!(before.n_frames, 1);
+        assert_eq!(before.n_atoms as usize, fr.atom_data.len());
+        let z = readcon_core::helpers::symbol_to_atomic_number(fr.atom_data[0].symbol.as_ref());
+        assert_eq!(before.numbers[0], z as u32);
+        assert!(before.velocities_set);
+        assert_eq!(before.cells.len(), 9);
+        {
+            let _gate = db.write_guard();
+            let mut wtxn = db.env.write_txn().unwrap();
+            let fk_b = key.to_bytes();
+            db.frames
+                .put(&mut wtxn, &fk_b[..], b"this is not a CON frame")
+                .unwrap();
+            wtxn.commit().unwrap();
+        }
+        assert!(db.read_frame_columns(key).is_err());
+        let after = db.read_materialized(1, Some(0)).unwrap();
+        assert_eq!(after.positions, before.positions);
+        assert_eq!(after.velocities, before.velocities);
+        assert_eq!(after.masses, before.masses);
+        assert_eq!(after.numbers, before.numbers);
+        assert_eq!(after.constraints, before.constraints);
+        assert_eq!(after.cells, before.cells);
     }
 
     #[test]

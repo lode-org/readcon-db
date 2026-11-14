@@ -29,6 +29,7 @@ import argparse
 import ctypes
 import ctypes.util
 import gc
+import hashlib
 import json
 import os
 import platform
@@ -57,11 +58,11 @@ N_SAMPLES = 6
 # until the timed spans cover this long, and publish the mean as one sample.
 # Reads repeat until the timed spans cover this. A 50 ms mean is enough
 # once open, advice, and the field check are outside the clock.
-SAMPLE_S = 0.050
+SAMPLE_S = float(os.environ.get("READCON_DB_READ_SPAN_S", "0.050"))
 # Commit fsyncs are correlated (lag-1 about 0.37 on a one-frame insert).
 # A 50 ms or 250 ms mean of those commits still has IQR/median above 0.15.
 # Means of about 2000 commits, roughly two seconds, fall under that line.
-INSERT_SPAN_S = 2.0
+INSERT_SPAN_S = float(os.environ.get("READCON_DB_INSERT_SPAN_S", "2.0"))
 PUBLISHED_READCON = [
     0.006240564998734044,
     0.005746310998802073,
@@ -533,6 +534,17 @@ def time_call(fn):
     return time.perf_counter() - t0, out
 
 
+def vm_hwm() -> int:
+    """Peak resident set since this process started, in bytes."""
+    try:
+        for line in Path("/proc/self/status").read_text().splitlines():
+            if line.startswith("VmHWM:"):
+                return int(line.split()[1]) * 1024
+    except OSError:
+        return 0
+    return 0
+
+
 def vm_rss() -> int:
     """Current resident set, in bytes."""
     try:
@@ -866,6 +878,145 @@ def _symbol_runs(symbols: list[str]) -> list[tuple[str, int]]:
     return runs
 
 
+def materialize_ase(rows) -> dict:
+    """Same arrays `read_arrays` returns. Built inside the timed read."""
+    positions = []
+    velocities = []
+    masses = []
+    numbers = []
+    constraints = []
+    cells = []
+    forces = []
+    energy = []
+    energy_set = []
+    frame_index = []
+    frame_index_set = []
+    pbc = []
+    runs = []
+    for row in rows:
+        atoms = row.toatoms()
+        n = len(atoms)
+        positions.append(np.array(atoms.positions, dtype=np.float64, copy=True))
+        masses.append(np.array(atoms.get_masses(), dtype=np.float64, copy=True))
+        numbers.append(np.array(atoms.get_atomic_numbers(), dtype=np.uint32, copy=True))
+        constraints.append(np.zeros((n, 3), dtype=np.uint8))
+        vel = atoms.get_velocities()
+        if vel is None:
+            velocities.append(np.zeros((n, 3), dtype=np.float64))
+        else:
+            velocities.append(np.array(vel, dtype=np.float64, copy=True))
+        cells.append(np.array(atoms.cell.array, dtype=np.float64, copy=True))
+        if getattr(row, "forces", None) is None:
+            forces.append(None)
+        else:
+            forces.append(np.array(row.forces, dtype=np.float64, copy=True))
+        has_energy = row.energy is not None
+        energy.append(np.float64(row.energy if has_energy else 0.0))
+        energy_set.append(has_energy)
+        if "frame_index" in row.key_value_pairs:
+            frame_index.append(np.float64(int(row.key_value_pairs["frame_index"])))
+            frame_index_set.append(True)
+        else:
+            frame_index.append(np.float64(0.0))
+            frame_index_set.append(False)
+        pbc.append(tuple(bool(x) for x in atoms.pbc))
+        runs.append(_symbol_runs(atoms.get_chemical_symbols()))
+    force_arr = None
+    if forces and all(item is not None for item in forces):
+        force_arr = np.stack(forces, axis=0)
+    return {
+        "n_frames": len(rows),
+        "positions": np.stack(positions, axis=0) if positions else np.zeros((0, 0, 3)),
+        "velocities": np.stack(velocities, axis=0)
+        if velocities
+        else np.zeros((0, 0, 3)),
+        "masses": np.stack(masses, axis=0) if masses else np.zeros((0, 0)),
+        "numbers": np.stack(numbers, axis=0)
+        if numbers
+        else np.zeros((0, 0), dtype=np.uint32),
+        "constraints": np.stack(constraints, axis=0)
+        if constraints
+        else np.zeros((0, 0, 3), dtype=np.uint8),
+        "cell": np.stack(cells, axis=0) if cells else np.zeros((0, 3, 3)),
+        "forces": force_arr,
+        "energy": np.asarray(energy, dtype=np.float64),
+        "energy_set": energy_set,
+        "frame_index": np.asarray(frame_index, dtype=np.float64),
+        "frame_index_set": frame_index_set,
+        "pbc": pbc,
+        "symbol_runs": runs,
+    }
+
+
+def _as_u32(values) -> np.ndarray:
+    return np.asarray(values, dtype=np.uint32)
+
+
+def check_materialized(got: dict, records: list[dict]) -> None:
+    """Both tools return this shape. A mismatch aborts the campaign."""
+    from ase.data import atomic_numbers
+
+    pos = np.asarray(got["positions"], dtype=np.float64)
+    exp = np.stack([rec["positions"] for rec in records], axis=0)
+    if pos.shape != exp.shape or pos.tobytes() != exp.tobytes():
+        raise AssertionError(("positions", pos.shape, exp.shape))
+    masses = np.asarray(got["masses"], dtype=np.float64)
+    exp_m = np.stack([rec["masses"] for rec in records], axis=0)
+    if masses.shape != exp_m.shape or masses.tobytes() != exp_m.tobytes():
+        raise AssertionError("masses")
+    numbers = _as_u32(got["numbers"])
+    exp_z = np.stack(
+        [
+            np.array([atomic_numbers[sym] for sym in rec["symbols"]], dtype=np.uint32)
+            for rec in records
+        ],
+        axis=0,
+    )
+    if numbers.shape != exp_z.shape or numbers.tobytes() != exp_z.tobytes():
+        raise AssertionError(("numbers", numbers.shape, exp_z.shape))
+    constraints = np.asarray(got["constraints"], dtype=np.uint8)
+    exp_c = np.zeros(constraints.shape, dtype=np.uint8)
+    for i, rec in enumerate(records):
+        if rec.get("constraints") is not None:
+            exp_c[i] = np.asarray(rec["constraints"], dtype=np.uint8)
+    if constraints.shape != exp_c.shape or constraints.tobytes() != exp_c.tobytes():
+        raise AssertionError("constraints")
+    velocities = np.asarray(got["velocities"], dtype=np.float64)
+    exp_v = np.zeros(velocities.shape, dtype=np.float64)
+    for i, rec in enumerate(records):
+        if rec.get("velocities") is not None:
+            exp_v[i] = np.asarray(rec["velocities"], dtype=np.float64)
+    if velocities.shape != exp_v.shape or velocities.tobytes() != exp_v.tobytes():
+        raise AssertionError("velocities")
+    cell = np.asarray(got["cell"], dtype=np.float64)
+    exp_cell = np.stack([rec["cell"] for rec in records], axis=0)
+    if cell.shape != exp_cell.shape or cell.tobytes() != exp_cell.tobytes():
+        raise AssertionError(("cell", cell.shape, exp_cell.shape))
+    forces = got.get("forces")
+    if records[0].get("forces") is not None:
+        if forces is None:
+            raise AssertionError("forces missing")
+        got_f = np.asarray(forces, dtype=np.float64)
+        exp_f = np.stack([rec["forces"] for rec in records], axis=0)
+        if got_f.shape != exp_f.shape or got_f.tobytes() != exp_f.tobytes():
+            raise AssertionError("forces")
+    energy = np.asarray(got["energy"], dtype=np.float64)
+    for i, rec in enumerate(records):
+        if rec.get("energy") is None:
+            continue
+        if not got["energy_set"][i]:
+            raise AssertionError("energy missing")
+        if np.float64(energy[i]).tobytes() != np.float64(rec["energy"]).tobytes():
+            raise AssertionError(("energy", float(energy[i]), rec["energy"]))
+        if int(got["frame_index"][i]) != rec["frame_index"]:
+            raise AssertionError("frame_index")
+        if tuple(bool(x) for x in got["pbc"][i]) != tuple(bool(x) for x in rec["pbc"]):
+            raise AssertionError("pbc")
+        expect_runs = rec.get("symbol_runs") or _symbol_runs(rec["symbols"])
+        if [tuple(run) for run in got["symbol_runs"][i]] != list(expect_runs):
+            raise AssertionError("symbols")
+
+
 def _check_columns(cols: dict, records: list[dict], geometry_only: bool) -> None:
     pos = np.asarray(cols["positions"], dtype=np.float64)
     exp = np.stack([rec["positions"] for rec in records], axis=0)
@@ -1000,6 +1151,340 @@ def prepare_cold_files(kind: str, dest: Path) -> tuple[float, str]:
     return worst, label
 
 
+def fetch_materialized(kind: str, db, op: str, mid: int):
+    """Arrays for one read. Both tools build them inside the clock."""
+    if kind == "readcon-db":
+        if op == "full_read":
+            return db.read_arrays(1)
+        return db.read_arrays(1, int(mid))
+    if op == "full_read":
+        rows = list(db.select())
+        rows.sort(key=lambda row: int(row.key_value_pairs["frame_index"]))
+    else:
+        rows = list(db.select(f"frame_index={int(mid)}"))
+    return materialize_ase(rows)
+
+
+def _array_digest(value) -> str:
+    if isinstance(value, list):
+        blob = json.dumps(value).encode()
+    else:
+        blob = np.ascontiguousarray(value).tobytes()
+    return hashlib.sha256(blob).hexdigest()
+
+
+def digests_of(got: dict) -> dict:
+    keys = (
+        "positions",
+        "velocities",
+        "masses",
+        "numbers",
+        "constraints",
+        "cell",
+        "energy",
+        "energy_set",
+        "frame_index",
+        "frame_index_set",
+        "pbc",
+        "symbol_runs",
+    )
+    out = {key: _array_digest(got[key]) for key in keys}
+    forces = got.get("forces")
+    out["forces"] = None if forces is None else _array_digest(forces)
+    return out
+
+
+def assert_digests(got: dict, expected: dict) -> None:
+    got_d = digests_of(got)
+    for key, value in expected.items():
+        if got_d.get(key) != value:
+            raise AssertionError(("digest", key))
+
+
+def execute_insert_row(request: dict) -> dict:
+    spec = request["spec"]
+    kind = request["kind"]
+    name = spec["name"]
+    work = Path(request["work"])
+    if spec.get("paper_text"):
+        text = paper_con_text(spec["n_frames"], spec["n_atoms"])
+        frames = readcon.read_con_string(text)
+        atoms_list = []
+        records = []
+        for i, frame in enumerate(frames):
+            atoms = frame.to_ase()
+            atoms.info["frame_index"] = i
+            pos = np.array(frame.coords_array(), dtype=np.float64)
+            cell = np.diag(np.array(frame.cell, dtype=np.float64))
+            masses = np.array([atom.mass for atom in frame.atoms], dtype=np.float64)
+            records.append(
+                {
+                    "symbols": [atom.symbol for atom in frame.atoms],
+                    "positions": pos,
+                    "cell": cell,
+                    "pbc": tuple(bool(x) for x in atoms.pbc),
+                    "masses": masses,
+                    "forces": None,
+                    "energy": None,
+                    "frame_index": i,
+                    "geometry_only": True,
+                }
+            )
+            atoms_list.append(atoms)
+        payload = {
+            "text": text,
+            "atoms": atoms_list,
+            "records": records,
+            "n_frames": spec["n_frames"],
+            "geometry_only": True,
+        }
+    else:
+        text, atoms_list, records = build_records(spec["n_frames"], spec["n_atoms"])
+        stamp_frame_index(atoms_list)
+        payload = {
+            "text": text,
+            "atoms": atoms_list,
+            "records": records,
+            "n_frames": spec["n_frames"],
+            "geometry_only": False,
+        }
+    lines = [f"warmup protocol=fair workload={name} op=insert tool={kind}"]
+    timed_insert(kind, name, payload, work)
+    values = []
+    inner = []
+    disk = None
+    for i in range(N_SAMPLES):
+        stat = timed_insert(kind, name, payload, work)
+        values.append(stat["seconds"])
+        inner.append(stat["inner_n"])
+        disk = stat["disk_bytes"]
+        lines.append(
+            f"sample protocol=fair workload={name} op=insert tool={kind} "
+            f"cache=cold-file i={i} seconds={stat['seconds']} "
+            f"inner_n={stat['inner_n']} timed_span_s={stat['timed_span_s']:.6f} "
+            f"disk_bytes={stat['disk_bytes']}"
+        )
+    row = {
+        "protocol": "fair",
+        "workload": name,
+        "n_frames": spec["n_frames"],
+        "n_atoms": spec["n_atoms"],
+        "atoms_total": spec["n_frames"] * spec["n_atoms"],
+        "op": "insert",
+        "cache": "cold-file",
+        "tool": kind,
+        "fidelity": "exact",
+        "disk_bytes": disk,
+        "peak_rss_bytes": vm_hwm(),
+        "inner_n": inner,
+        "span_s": INSERT_SPAN_S,
+        "log": lines,
+        **summarize(values),
+    }
+    return row
+
+
+def execute_read_row(request: dict) -> dict:
+    kind = request["kind"]
+    op = request["op"]
+    cache = request["cache"]
+    name = request["name"]
+    dest = Path(request["dest"])
+    n_frames = int(request["n_frames"])
+    mid = n_frames // 2
+    expected = request["digests"]
+    lines = []
+    samples = []
+    cold_meta = []
+    holder = {}
+
+    def open_kind():
+        if kind == "readcon-db":
+            return open_readcon(dest / "corpus")
+        return open_ase_reader(dest / "atoms.db")
+
+    def prepare():
+        if kind in holder:
+            close_reader(kind, holder.pop("db"))
+        return prepare_cold_files(kind, dest)
+
+    if cache == "warm":
+        holder["db"] = open_kind()
+        fetch_materialized(kind, holder["db"], op, mid)
+        assert_digests(fetch_materialized(kind, holder["db"], op, mid), expected)
+        lines.append(
+            f"warmup protocol=fair workload={name} op={op} tool={kind} cache={cache}"
+        )
+    else:
+        prepare()
+        db = open_kind()
+        try:
+            got = fetch_materialized(kind, db, op, mid)
+            assert_digests(got, expected)
+        finally:
+            close_reader(kind, db)
+            db = None
+            if kind == "readcon-db":
+                gc.collect()
+        lines.append(
+            f"warmup protocol=fair workload={name} op={op} tool={kind} cache={cache}"
+        )
+
+    for i in range(N_SAMPLES):
+        state: dict = {}
+        labels: list[tuple[float, str]] = []
+
+        def setup(labels=labels, state=state) -> None:
+            frac, label = prepare()
+            labels.append((frac, label))
+            state["db"] = open_kind()
+
+        def teardown(state=state) -> None:
+            assert_digests(state["got"], expected)
+            close_reader(kind, state["db"])
+            state["db"] = None
+            state["got"] = None
+            if kind == "readcon-db":
+                gc.collect()
+
+        def run_timed(state=state) -> None:
+            state["got"] = fetch_materialized(kind, state["db"], op, mid)
+
+        if cache == "cold":
+            stat = sample_operation(run_timed, setup, teardown)
+            resident = max(frac for frac, _label in labels)
+            cold_label = (
+                "verified"
+                if all(label == "verified" for _frac, label in labels)
+                else "resident"
+            )
+            cold_meta.append(
+                {
+                    "resident_fraction": resident,
+                    "cold_label": cold_label,
+                    "seconds": stat["seconds"],
+                    "inner_n": stat["inner_n"],
+                }
+            )
+            if cold_label == "verified":
+                samples.append(stat["seconds"])
+            extra = f" resident_fraction={resident:.6f} cold_label={cold_label}"
+        else:
+
+            def run_warm(state=state) -> None:
+                state["got"] = fetch_materialized(kind, holder["db"], op, mid)
+
+            def check_warm(state=state) -> None:
+                assert_digests(state["got"], expected)
+                state["got"] = None
+
+            stat = sample_operation(run_warm, teardown=check_warm)
+            samples.append(stat["seconds"])
+            extra = ""
+        lines.append(
+            f"sample protocol=fair workload={name} op={op} tool={kind} "
+            f"cache={cache} i={i} seconds={stat['seconds']} "
+            f"inner_n={stat['inner_n']} timed_span_s={stat['timed_span_s']:.6f}{extra}"
+        )
+    if "db" in holder:
+        close_reader(kind, holder["db"])
+    used = samples or [item["seconds"] for item in cold_meta]
+    row = {
+        "protocol": "fair",
+        "workload": name,
+        "n_frames": n_frames,
+        "n_atoms": int(request["n_atoms"]),
+        "atoms_total": n_frames * int(request["n_atoms"]),
+        "op": op,
+        "cache": cache,
+        "tool": kind,
+        "fidelity": "exact",
+        "disk_bytes": disk_bytes(kind, dest),
+        "peak_rss_bytes": vm_hwm(),
+        "span_s": SAMPLE_S,
+        "log": lines,
+        **summarize(used),
+    }
+    if cache == "cold":
+        row["cold_verified_n"] = len(samples)
+        row["cold_samples"] = cold_meta
+        row["inner_n"] = [item["inner_n"] for item in cold_meta]
+    return row
+
+
+def execute_row(request: dict) -> dict:
+    if request["what"] == "insert":
+        return execute_insert_row(request)
+    return execute_read_row(request)
+
+
+def spawn_row(request: dict) -> dict:
+    """One table row, in a process whose high-water mark starts at zero."""
+    env = os.environ.copy()
+    env["READCON_DB_ROW"] = "1"
+    proc = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve()), "--row"],
+        check=False,
+        input=json.dumps(request),
+        text=True,
+        capture_output=True,
+        env=env,
+    )
+    if proc.returncode != 0:
+        tail = (proc.stderr or "")[-4000:] + (proc.stdout or "")[-2000:]
+        raise RuntimeError(tail)
+    return json.loads(proc.stdout)
+
+
+def digests_for_records(records: list[dict]) -> dict:
+    """sha256 of the arrays both tools must return for these frames."""
+    probe = {
+        "positions": np.stack([rec["positions"] for rec in records]),
+        "masses": np.stack([rec["masses"] for rec in records]),
+        "cell": np.stack([rec["cell"] for rec in records]),
+        "velocities": np.zeros(
+            (len(records), records[0]["positions"].shape[0], 3), dtype=np.float64
+        ),
+        "constraints": np.zeros(
+            (len(records), records[0]["positions"].shape[0], 3), dtype=np.uint8
+        ),
+        "numbers": np.stack(
+            [
+                np.array(
+                    [__import__("ase").data.atomic_numbers[s] for s in rec["symbols"]],
+                    dtype=np.uint32,
+                )
+                for rec in records
+            ]
+        ),
+        "energy": np.array(
+            [np.float64(rec["energy"] or 0.0) for rec in records],
+            dtype=np.float64,
+        ),
+        "energy_set": [rec.get("energy") is not None for rec in records],
+        "frame_index": np.array(
+            [np.float64(rec["frame_index"]) for rec in records],
+            dtype=np.float64,
+        ),
+        "frame_index_set": [True for _ in records],
+        "pbc": [tuple(bool(x) for x in rec["pbc"]) for rec in records],
+        "symbol_runs": [
+            [
+                list(run)
+                for run in (rec.get("symbol_runs") or _symbol_runs(rec["symbols"]))
+            ]
+            for rec in records
+        ],
+        "forces": None
+        if records[0].get("forces") is None
+        else np.stack([rec["forces"] for rec in records]),
+    }
+    for rec, vel in zip(records, probe["velocities"]):
+        if rec.get("velocities") is not None:
+            vel[...] = rec["velocities"]
+    return digests_of(probe)
+
+
 def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
     rows = []
     for spec in workloads:
@@ -1050,45 +1535,14 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
                 "geometry_only": False,
             }
         log.line(f"workload {name} bytes={len(text)} build_done")
-        # Insert: unlink+create each sample, one warmup, six serial samples.
-        insert_samples = {"readcon-db": [], "ase.db": []}
-        insert_meta = {"readcon-db": [], "ase.db": []}
-
+        # One fresh process per row, so peak RSS does not carry over.
         for kind in ("readcon-db", "ase.db"):
-            timed_insert(kind, name, payload, work)
-            log.line(f"warmup protocol=fair workload={name} op=insert tool={kind}")
-        for i in range(N_SAMPLES):
-            order = ("readcon-db", "ase.db") if i % 2 == 0 else ("ase.db", "readcon-db")
-            for kind in order:
-                stat = timed_insert(kind, name, payload, work)
-                insert_samples[kind].append(stat["seconds"])
-                insert_meta[kind].append(stat)
-                log.line(
-                    f"sample protocol=fair workload={name} op=insert tool={kind} "
-                    f"cache=cold-file i={i} seconds={stat['seconds']} "
-                    f"inner_n={stat['inner_n']} timed_span_s={stat['timed_span_s']:.6f} "
-                    f"disk_bytes={stat['disk_bytes']} peak_rss_bytes={stat['peak_rss_bytes']}"
-                )
-        for kind, values in insert_samples.items():
-            meta = insert_meta[kind]
-            rows.append(
-                {
-                    "protocol": "fair",
-                    "workload": name,
-                    "n_frames": spec["n_frames"],
-                    "n_atoms": spec["n_atoms"],
-                    "atoms_total": spec["n_frames"] * spec["n_atoms"],
-                    "op": "insert",
-                    "cache": "cold-file",
-                    "tool": kind,
-                    "fidelity": "exact",
-                    "disk_bytes": meta[0]["disk_bytes"],
-                    "peak_rss_bytes": max(item["peak_rss_bytes"] for item in meta),
-                    "inner_n": [item["inner_n"] for item in meta],
-                    "span_s": INSERT_SPAN_S,
-                    **summarize(values),
-                }
+            row = spawn_row(
+                {"what": "insert", "kind": kind, "spec": spec, "work": str(work)}
             )
+            for line in row.pop("log"):
+                log.line(line)
+            rows.append(row)
         if spec.get("insert_only"):
             continue
         # One store of each tool for reads. Built outside the read timer.
@@ -1099,215 +1553,31 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
             gc.collect()
             stored[kind] = dest
         mid = spec["n_frames"] // 2
-        # Full read and the selected frame share one sample index. The column
-        # scan is the same once the readonly open is outside the clock.
         ops = ("full_read", "selected")
         for cache in ("cold", "warm"):
-            samples = {op: {"readcon-db": [], "ase.db": []} for op in ops}
-            cold_meta = {op: {"readcon-db": [], "ase.db": []} for op in ops}
-            holders = {}
-
-            def prepare_cold(kind: str, stored=stored, holders=holders):
-                dest = stored[kind]
-                if kind in holders:
-                    close_reader(kind, holders.pop(kind))
-                return prepare_cold_files(kind, dest)
-
-            def open_kind(kind: str, stored=stored):
-                dest = stored[kind]
-                if kind == "readcon-db":
-                    return open_readcon(dest / "corpus")
-                return open_ase_reader(dest / "atoms.db")
-
-            def run_op(
-                kind: str,
-                db,
-                op: str,
-                n_frames=spec["n_frames"],
-                records=payload["records"],
-                mid=mid,
-            ):
-                if op == "full_read":
-                    if kind == "readcon-db":
-                        return full_read_readcon(db, n_frames, records)
-                    return full_read_ase(db, n_frames, records)
-                rec = records[mid]
-                if kind == "readcon-db":
-                    return selected_readcon(db, mid, rec)
-                return selected_ase(db, mid, rec)
-
-            def fetch(kind: str, db, op: str, mid=mid):
-                """The query only. The element-wise check stays outside the clock."""
-                if kind == "readcon-db":
-                    if op == "full_read":
-                        return db.read_columns(1)
-                    return db.read_columns(1, mid)
-                if op == "full_read":
-                    return list(db.select())
-                return list(db.select(f"frame_index={int(mid)}"))
-
-            def check_fetched(
-                kind: str,
-                got,
-                op: str,
-                n_frames=spec["n_frames"],
-                records=payload["records"],
-                mid=mid,
-            ) -> None:
-                if kind == "readcon-db":
-                    if op == "full_read":
-                        if int(got["n_frames"]) != n_frames:
-                            raise AssertionError(got["n_frames"])
-                        geometry_only = (
-                            records[0].get("geometry_only", False)
-                            or records[0].get("forces") is None
-                        )
-                        _check_columns(got, records, geometry_only)
-                        return
-                    if int(got["n_frames"]) != 1:
-                        raise AssertionError(got["n_frames"])
-                    rec = records[mid]
-                    geometry_only = (
-                        rec.get("geometry_only", False) or rec.get("forces") is None
-                    )
-                    _check_columns(got, [rec], geometry_only)
-                    return
-                if op == "full_read":
-                    rows = sorted(
-                        got,
-                        key=lambda row: int(row.key_value_pairs["frame_index"]),
-                    )
-                    if len(rows) != n_frames:
-                        raise AssertionError(len(rows))
-                    for row, rec in zip(rows, records):
-                        assert_ase_matches(row, rec)
-                    return
-                if len(got) != 1:
-                    raise AssertionError(len(got))
-                assert_ase_matches(got[0], records[mid])
-
-            if cache == "warm":
-                for kind in ("readcon-db", "ase.db"):
-                    holders[kind] = open_kind(kind)
-                    for op in ops:
-                        run_op(kind, holders[kind], op)
-                        log.line(
-                            f"warmup protocol=fair workload={name} op={op} tool={kind} cache={cache}"
-                        )
-            else:
-                for op in ops:
-                    for kind in ("readcon-db", "ase.db"):
-                        prepare_cold(kind)
-                        db = open_kind(kind)
-                        try:
-                            run_op(kind, db, op)
-                        finally:
-                            close_reader(kind, db)
-                        log.line(
-                            f"warmup protocol=fair workload={name} op={op} tool={kind} cache={cache}"
-                        )
-            for i in range(N_SAMPLES):
-                tools = (
-                    ("readcon-db", "ase.db") if i % 2 == 0 else ("ase.db", "readcon-db")
-                )
-                op_order = ops if i % 2 == 0 else ("selected", "full_read")
-                for kind in tools:
-                    for op in op_order:
-                        resident = None
-                        cold_label = None
-                        state: dict = {}
-                        labels: list[tuple[float, str]] = []
-
-                        def setup(kind=kind, labels=labels, state=state) -> None:
-                            frac, label = prepare_cold(kind)
-                            labels.append((frac, label))
-                            state["db"] = open_kind(kind)
-
-                        def teardown(kind=kind, op=op, state=state) -> None:
-                            check_fetched(kind, state["got"], op)
-                            close_reader(kind, state["db"])
-                            state["db"] = None
-                            state["got"] = None
-                            if kind == "readcon-db":
-                                gc.collect()
-
-                        def run_timed(kind=kind, op=op, state=state) -> None:
-                            state["got"] = fetch(kind, state["db"], op)
-
-                        if cache == "cold":
-                            stat = sample_operation(run_timed, setup, teardown)
-                            resident = max(frac for frac, _label in labels)
-                            cold_label = (
-                                "verified"
-                                if all(label == "verified" for _frac, label in labels)
-                                else "resident"
-                            )
-                            cold_meta[op][kind].append(
-                                {
-                                    "resident_fraction": resident,
-                                    "cold_label": cold_label,
-                                    "seconds": stat["seconds"],
-                                    "inner_n": stat["inner_n"],
-                                }
-                            )
-                            if cold_label == "verified":
-                                samples[op][kind].append(stat["seconds"])
-                        else:
-                            db = holders[kind]
-
-                            def run_warm(kind=kind, db=db, op=op, state=state) -> None:
-                                state["got"] = fetch(kind, db, op)
-
-                            def check_warm(kind=kind, op=op, state=state) -> None:
-                                check_fetched(kind, state["got"], op)
-                                state["got"] = None
-
-                            stat = sample_operation(run_warm, teardown=check_warm)
-                            resident = None
-                            cold_label = None
-                            samples[op][kind].append(stat["seconds"])
-                        extra = (
-                            f" inner_n={stat['inner_n']} timed_span_s={stat['timed_span_s']:.6f} "
-                            f"peak_rss_bytes={stat['peak_rss_bytes']}"
-                        )
-                        if resident is not None:
-                            extra += f" resident_fraction={resident:.6f} cold_label={cold_label}"
-                        log.line(
-                            f"sample protocol=fair workload={name} op={op} tool={kind} "
-                            f"cache={cache} i={i} seconds={stat['seconds']}{extra}"
-                        )
-                        samples[op][kind + ":peak"] = max(
-                            samples[op].get(kind + ":peak", 0), stat["peak_rss_bytes"]
-                        )
-            for kind in list(holders):
-                close_reader(kind, holders.pop(kind))
-            gc.collect()
             for op in ops:
+                used = (
+                    payload["records"]
+                    if op == "full_read"
+                    else [payload["records"][mid]]
+                )
+                digests = digests_for_records(used)
                 for kind in ("readcon-db", "ase.db"):
-                    used = samples[op][kind]
-                    if cache == "cold" and not used:
-                        used = [item["seconds"] for item in cold_meta[op][kind]]
-                    row = {
-                        "protocol": "fair",
-                        "workload": name,
-                        "n_frames": spec["n_frames"],
-                        "n_atoms": spec["n_atoms"],
-                        "atoms_total": spec["n_frames"] * spec["n_atoms"],
-                        "op": op,
-                        "cache": cache,
-                        "tool": kind,
-                        "fidelity": "exact",
-                        "disk_bytes": disk_bytes(kind, stored[kind]),
-                        "peak_rss_bytes": samples[op].get(kind + ":peak", 0),
-                        "span_s": SAMPLE_S,
-                        **summarize(used),
-                    }
-                    if cache == "cold":
-                        row["cold_verified_n"] = len(samples[op][kind])
-                        row["cold_samples"] = cold_meta[op][kind]
-                        row["inner_n"] = [
-                            item["inner_n"] for item in cold_meta[op][kind]
-                        ]
+                    row = spawn_row(
+                        {
+                            "what": "read",
+                            "kind": kind,
+                            "op": op,
+                            "cache": cache,
+                            "name": name,
+                            "dest": str(stored[kind]),
+                            "n_frames": spec["n_frames"],
+                            "n_atoms": spec["n_atoms"],
+                            "digests": digests,
+                        }
+                    )
+                    for line in row.pop("log"):
+                        log.line(line)
                     rows.append(row)
         for dest in stored.values():
             shutil.rmtree(dest, ignore_errors=True)
@@ -1363,13 +1633,15 @@ def write_markdown(
         "",
         "Insert creates the database outside the clock and times the commit.",
         "A full read and the selected-row query (`frame_index` of the middle",
-        "frame) time the query only: open, directory fsync, fadvise,",
-        "mincore, the field check, and the collector stay outside. A read",
-        "shorter than 50 ms repeats until the timed spans add to 50 ms. A",
-        "commit shorter than 2 s repeats until they add to 2 s, because",
-        "those fsyncs stay correlated well past 250 ms. The sample is that",
-        "mean. A row that stayed above an IQR/median of 0.15 was measured",
-        "again at a longer span; that budget is `span_s` on the row.",
+        "frame) copy positions, cell, masses, atomic numbers, constraints,",
+        "and velocities into NumPy arrays. ASE does the same via toatoms().",
+        "db5 timed only the sqlite fetch, which is why its 1M-atom warm",
+        "full read was 0.0166 s against db4's 0.226 s. Open, directory",
+        "fsync, fadvise, mincore, and the field check stay outside the",
+        "clock. Each row is its own process. A short read repeats to 50 ms",
+        "and a short commit to 2 s. A row that stayed above an IQR/median",
+        "of 0.15 was measured again at a longer span; that budget is",
+        "`span_s` on the row.",
         "",
         "| workload | op | cache | tool | n | median s | IQR s | IQR/median | disk B | peak RSS B | fidelity |",
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
@@ -1430,7 +1702,13 @@ def main() -> None:
         default="all",
     )
     ap.add_argument("--self-check", action="store_true")
+    ap.add_argument("--row", action="store_true")
     args = ap.parse_args()
+    if args.row:
+        request = json.loads(sys.stdin.read())
+        json.dump(execute_row(request), sys.stdout)
+        sys.stdout.write("\n")
+        return
     published = {
         "readcon-db": summarize(PUBLISHED_READCON),
         "ase.db": summarize(PUBLISHED_ASE),

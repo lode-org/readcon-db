@@ -367,7 +367,46 @@ pub struct SpanFacts {
 /// float syntax, and the fixed flag. No per-atom object is built. Force
 /// magnitudes are reduced to `fmax`. Rows of a large block are checked
 /// in parallel.
+#[allow(dead_code)] // index-only entry; ingest uses project_frame_cooked
 pub fn project_frame(bytes: &[u8]) -> Result<SpanFacts> {
+    Ok(project_frame_parts(bytes, false)?.0)
+}
+
+/// Index fields plus an RCSO blob, from the same byte walk.
+///
+/// The coordinate scan already parses every float and fixed flag. Cooking
+/// keeps those values instead of building a `ConFrame` and parsing again.
+pub(crate) fn project_frame_cooked(bytes: &[u8]) -> Result<(SpanFacts, Vec<u8>)> {
+    let (facts, acc) = project_frame_parts(bytes, true)?;
+    let blob = finish_cook(&facts, acc.unwrap_or_else(CookAcc::empty))?;
+    Ok((facts, blob))
+}
+
+struct CookAcc {
+    positions: Vec<f64>,
+    forces: Vec<f64>,
+    velocities: Vec<f64>,
+    constraints: Vec<u8>,
+    masses: Vec<f64>,
+    runs: Vec<(String, u32)>,
+    cell: [f64; 9],
+}
+
+impl CookAcc {
+    fn empty() -> Self {
+        Self {
+            positions: Vec::new(),
+            forces: Vec::new(),
+            velocities: Vec::new(),
+            constraints: Vec::new(),
+            masses: Vec::new(),
+            runs: Vec::new(),
+            cell: [0.0; 9],
+        }
+    }
+}
+
+fn project_frame_parts(bytes: &[u8], cook: bool) -> Result<(SpanFacts, Option<CookAcc>)> {
     let mut cur = Cur { bytes, i: 0 };
     if cur.rest_blank() {
         return Err(Error::Parse("empty frame".into()));
@@ -387,8 +426,12 @@ pub fn project_frame(bytes: &[u8]) -> Result<SpanFacts> {
         return Err(Error::Parse("type-count line must be one integer".into()));
     }
     let n_types = n_types_line[0];
+    let mut acc = cook.then(CookAcc::empty);
+    if let Some(acc) = acc.as_mut() {
+        acc.cell = cell_row_major(gate.lattice, &boxl, &angles);
+    }
     if n_types == 0 {
-        return Ok(facts);
+        return Ok((facts, acc));
     }
     let counts = uints(cur.take()?)?;
     if counts.len() != n_types {
@@ -404,6 +447,13 @@ pub fn project_frame(bytes: &[u8]) -> Result<SpanFacts> {
     }
     let masses = f64s(cur.take()?, n_types)?;
     facts.total_mass = total_mass(&counts, &masses);
+    let natoms_sum: usize = counts.iter().sum();
+    if let Some(acc) = acc.as_mut() {
+        acc.positions.resize(natoms_sum * 3, 0.0);
+        acc.constraints.resize(natoms_sum * 3, 0);
+        acc.masses = masses.clone();
+        acc.runs.reserve(n_types);
+    }
     let mut species = std::collections::BTreeMap::<String, u32>::new();
     let mut natoms = 0u32;
     for count in &counts {
@@ -414,16 +464,35 @@ pub fn project_frame(bytes: &[u8]) -> Result<SpanFacts> {
         }
         let n = u32::try_from(*count).map_err(|_| Error::Parse("count overflow".into()))?;
         if !symbol.is_empty() {
-            *species.entry(symbol).or_insert(0) += n;
+            *species.entry(symbol.clone()).or_insert(0) += n;
         }
-        check_vector_block(
-            &mut cur,
-            *count,
-            "atom data",
-            gate.spec as u32,
-            false,
-            false,
-        )?;
+        let spec = gate.spec as u32;
+        if let Some(acc) = acc.as_mut() {
+            let start = (natoms as usize) * 3;
+            let end = start + (*count) * 3;
+            check_vector_block(
+                &mut cur,
+                *count,
+                "atom data",
+                spec,
+                false,
+                false,
+                Some(&mut acc.positions[start..end]),
+                Some(&mut acc.constraints[start..end]),
+            )?;
+            acc.runs.push((symbol, n));
+        } else {
+            check_vector_block(
+                &mut cur,
+                *count,
+                "atom data",
+                spec,
+                false,
+                false,
+                None,
+                None,
+            )?;
+        }
         natoms += n;
     }
     facts.n_atoms = natoms;
@@ -447,7 +516,14 @@ pub fn project_frame(bytes: &[u8]) -> Result<SpanFacts> {
             break;
         }
         let _blank = cur.take()?;
-        note_section(&mut cur, &counts, gate.spec as u32, &mut facts, &mut fmax)?;
+        note_section(
+            &mut cur,
+            &counts,
+            gate.spec as u32,
+            &mut facts,
+            &mut fmax,
+            acc.as_mut(),
+        )?;
     }
     facts.fmax = fmax;
     if facts.has_velocities && gate.spec >= 3 && gate.minor >= 1 && !gate.units_time {
@@ -455,7 +531,86 @@ pub fn project_frame(bytes: &[u8]) -> Result<SpanFacts> {
             "minor >= 1 requires units.time when a velocities section is present".into(),
         ));
     }
-    Ok(facts)
+    Ok((facts, acc))
+}
+
+fn finish_cook(facts: &SpanFacts, acc: CookAcc) -> Result<Vec<u8>> {
+    let n = facts.n_atoms as usize;
+    let mass_uniform = if n == 0 {
+        Some(0.0)
+    } else if !acc.masses.is_empty()
+        && acc
+            .masses
+            .iter()
+            .all(|m| m.to_bits() == acc.masses[0].to_bits())
+    {
+        Some(acc.masses[0])
+    } else {
+        None
+    };
+    let expanded = if mass_uniform.is_none() {
+        let mut out = Vec::with_capacity(n);
+        for ((_, count), mass) in acc.runs.iter().zip(&acc.masses) {
+            out.extend(std::iter::repeat(*mass).take(*count as usize));
+        }
+        out
+    } else {
+        Vec::new()
+    };
+    let constraints = if acc.constraints.iter().any(|b| *b != 0) {
+        Some(acc.constraints.as_slice())
+    } else {
+        None
+    };
+    let forces = if acc.forces.len() == n * 3 {
+        acc.forces.as_slice()
+    } else {
+        &[]
+    };
+    let velocities = if acc.velocities.len() == n * 3 {
+        acc.velocities.as_slice()
+    } else {
+        &[]
+    };
+    let runs: Vec<(&str, u32)> = acc
+        .runs
+        .iter()
+        .map(|(sym, count)| (sym.as_str(), *count))
+        .collect();
+    let pbc = facts.pbc.unwrap_or([false, false, false]);
+    crate::cooked_soa::CookedSoa::encode_columns(
+        facts.n_atoms,
+        &acc.positions,
+        forces,
+        velocities,
+        mass_uniform,
+        &expanded,
+        constraints,
+        acc.cell,
+        facts.energy.unwrap_or(0.0),
+        facts.energy.is_some(),
+        facts.frame_index.unwrap_or(0.0),
+        facts.frame_index.is_some(),
+        pbc,
+        facts.pbc.is_some(),
+        &runs,
+    )
+}
+
+fn cell_row_major(lattice: Option<[[f64; 3]; 3]>, boxl: &[f64], angles: &[f64]) -> [f64; 9] {
+    let m = if let Some(lv) = lattice {
+        lv
+    } else if boxl.len() >= 3 && angles.len() >= 3 {
+        readcon_core::types::cell_vectors(
+            [boxl[0], boxl[1], boxl[2]],
+            [angles[0], angles[1], angles[2]],
+        )
+    } else {
+        [[0.0; 3]; 3]
+    };
+    [
+        m[0][0], m[0][1], m[0][2], m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2],
+    ]
 }
 
 fn note_section(
@@ -464,6 +619,7 @@ fn note_section(
     spec: u32,
     facts: &mut SpanFacts,
     fmax: &mut Option<f64>,
+    mut cook: Option<&mut CookAcc>,
 ) -> Result<()> {
     for count in counts {
         let _symbol = cur
@@ -480,14 +636,36 @@ fn note_section(
         match kind {
             "Forces" => {
                 facts.has_forces = true;
-                let local = check_vector_block(cur, *count, where_, spec, true, true)?;
+                let n = *count;
+                let mut block = Vec::new();
+                let xyz = if cook.is_some() {
+                    block.resize(n * 3, 0.0);
+                    Some(block.as_mut_slice())
+                } else {
+                    None
+                };
+                let local = check_vector_block(cur, n, where_, spec, true, true, xyz, None)?;
+                if let Some(c) = cook.as_mut() {
+                    c.forces.extend_from_slice(&block);
+                }
                 if let Some(mag) = local {
                     *fmax = Some(fmax.map_or(mag, |cur| cur.max(mag)));
                 }
             }
             "Velocities" => {
                 facts.has_velocities = true;
-                check_vector_block(cur, *count, where_, spec, true, false)?;
+                let n = *count;
+                let mut block = Vec::new();
+                let xyz = if cook.is_some() {
+                    block.resize(n * 3, 0.0);
+                    Some(block.as_mut_slice())
+                } else {
+                    None
+                };
+                check_vector_block(cur, n, where_, spec, true, false, xyz, None)?;
+                if let Some(c) = cook.as_mut() {
+                    c.velocities.extend_from_slice(&block);
+                }
             }
             "Energies" => {
                 facts.has_energy = true;
@@ -495,7 +673,7 @@ fn note_section(
                 check_scalar_rows(cur.bytes, &ranges, spec)?;
             }
             _ => {
-                check_vector_block(cur, *count, where_, spec, true, false)?;
+                check_vector_block(cur, *count, where_, spec, true, false, None, None)?;
             }
         }
     }
@@ -511,14 +689,24 @@ fn check_vector_block(
     spec: u32,
     id_required: bool,
     fmax: bool,
+    xyz_out: Option<&mut [f64]>,
+    mask_out: Option<&mut [u8]>,
 ) -> Result<Option<f64>> {
     if n < 8_192 {
         let mut max_mag = None;
-        for _ in 0..n {
+        let mut xyz_out = xyz_out;
+        let mut mask_out = mask_out;
+        for i in 0..n {
             let line = cur.take().map_err(|_| {
                 Error::Parse(format!("file ended unexpectedly while reading {where_}"))
             })?;
-            let xyz = check_vector_line(line, spec, id_required)?;
+            let (xyz, mask) = check_vector_line(line, spec, id_required)?;
+            if let Some(buf) = xyz_out.as_mut() {
+                buf[i * 3..i * 3 + 3].copy_from_slice(&xyz);
+            }
+            if let Some(buf) = mask_out.as_mut() {
+                buf[i * 3..i * 3 + 3].copy_from_slice(&mask);
+            }
             if fmax {
                 let mag = (xyz[0] * xyz[0] + xyz[1] * xyz[1] + xyz[2] * xyz[2]).sqrt();
                 if mag.is_finite() {
@@ -529,7 +717,15 @@ fn check_vector_block(
         return Ok(max_mag);
     }
     let ranges = take_row_ranges(cur, n, where_)?;
-    check_vector_rows(cur.bytes, &ranges, spec, id_required, fmax)
+    check_vector_rows(
+        cur.bytes,
+        &ranges,
+        spec,
+        id_required,
+        fmax,
+        xyz_out,
+        mask_out,
+    )
 }
 
 fn take_row_ranges(cur: &mut Cur<'_>, n: usize, where_: &str) -> Result<Vec<(usize, usize)>> {
@@ -553,9 +749,11 @@ fn check_vector_rows(
     spec: u32,
     id_required: bool,
     fmax: bool,
+    mut xyz_out: Option<&mut [f64]>,
+    mut mask_out: Option<&mut [u8]>,
 ) -> Result<Option<f64>> {
     if ranges.len() < 8_192 {
-        return check_vector_rows_seq(bytes, ranges, spec, id_required, fmax);
+        return check_vector_rows_seq(bytes, ranges, spec, id_required, fmax, xyz_out, mask_out);
     }
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
@@ -567,9 +765,26 @@ fn check_vector_rows(
     std::thread::scope(|scope| {
         let mut joins = Vec::new();
         for piece in ranges.chunks(chunk) {
-            joins.push(
-                scope.spawn(move || check_vector_rows_seq(bytes, piece, spec, id_required, fmax)),
-            );
+            let n = piece.len();
+            let xyz_piece = match xyz_out {
+                Some(buf) => {
+                    let (head, tail) = buf.split_at_mut(n * 3);
+                    xyz_out = Some(tail);
+                    Some(head)
+                }
+                None => None,
+            };
+            let mask_piece = match mask_out {
+                Some(buf) => {
+                    let (head, tail) = buf.split_at_mut(n * 3);
+                    mask_out = Some(tail);
+                    Some(head)
+                }
+                None => None,
+            };
+            joins.push(scope.spawn(move || {
+                check_vector_rows_seq(bytes, piece, spec, id_required, fmax, xyz_piece, mask_piece)
+            }));
         }
         for join in joins {
             match join.join().expect("row check") {
@@ -591,10 +806,18 @@ fn check_vector_rows_seq(
     spec: u32,
     id_required: bool,
     fmax: bool,
+    mut xyz_out: Option<&mut [f64]>,
+    mut mask_out: Option<&mut [u8]>,
 ) -> Result<Option<f64>> {
     let mut max_mag = None;
-    for &(start, end) in ranges {
-        let xyz = check_vector_line(&bytes[start..end], spec, id_required)?;
+    for (i, &(start, end)) in ranges.iter().enumerate() {
+        let (xyz, mask) = check_vector_line(&bytes[start..end], spec, id_required)?;
+        if let Some(buf) = xyz_out.as_mut() {
+            buf[i * 3..i * 3 + 3].copy_from_slice(&xyz);
+        }
+        if let Some(buf) = mask_out.as_mut() {
+            buf[i * 3..i * 3 + 3].copy_from_slice(&mask);
+        }
         if fmax {
             let mag = (xyz[0] * xyz[0] + xyz[1] * xyz[1] + xyz[2] * xyz[2]).sqrt();
             if mag.is_finite() {
@@ -626,7 +849,7 @@ fn next_token(line: &[u8], mut i: usize) -> Option<(usize, usize)> {
     Some((start, i))
 }
 
-fn check_vector_line(line: &[u8], spec: u32, id_required: bool) -> Result<[f64; 3]> {
+fn check_vector_line(line: &[u8], spec: u32, id_required: bool) -> Result<([f64; 3], [u8; 3])> {
     let mut i = 0usize;
     let mut xyz = [0.0f64; 3];
     for (slot, dest) in xyz.iter_mut().enumerate() {
@@ -639,7 +862,7 @@ fn check_vector_line(line: &[u8], spec: u32, id_required: bool) -> Result<[f64; 
     let Some((start, end)) = next_token(line, i) else {
         return Err(width_err(3));
     };
-    parse_flag(&line[start..end], spec)?;
+    let mask = fixed_axes(&line[start..end], spec)?;
     i = end;
     match next_token(line, i) {
         Some((start, end)) => {
@@ -658,7 +881,7 @@ fn check_vector_line(line: &[u8], spec: u32, id_required: bool) -> Result<[f64; 
         None if id_required => return Err(width_err(4)),
         None => {}
     }
-    Ok(xyz)
+    Ok((xyz, mask))
 }
 
 fn check_scalar_line(line: &[u8], spec: u32) -> Result<()> {
@@ -702,7 +925,7 @@ fn parse_f64_token(tok: &[u8]) -> Result<f64> {
     Ok(val)
 }
 
-fn parse_flag(tok: &[u8], spec: u32) -> Result<()> {
+fn fixed_axes(tok: &[u8], spec: u32) -> Result<[u8; 3]> {
     if tok.is_empty() || !tok.iter().all(|b| b.is_ascii_digit()) {
         return Err(Error::Parse(format!(
             "invalid fixed flag: {}",
@@ -718,14 +941,31 @@ fn parse_flag(tok: &[u8], spec: u32) -> Result<()> {
                 String::from_utf8_lossy(tok)
             ))
         })?;
-    let ok = if spec < 2 { val <= 1 } else { val <= 7 };
-    if !ok {
+    if spec < 2 {
+        return match val {
+            0 => Ok([0, 0, 0]),
+            1 => Ok([1, 1, 1]),
+            _ => Err(Error::Parse(format!(
+                "invalid fixed flag: {}",
+                String::from_utf8_lossy(tok)
+            ))),
+        };
+    }
+    if val > 7 {
         return Err(Error::Parse(format!(
             "invalid fixed flag: {}",
             String::from_utf8_lossy(tok)
         )));
     }
-    Ok(())
+    Ok([
+        u8::from(val & 1 != 0),
+        u8::from(val & 2 != 0),
+        u8::from(val & 4 != 0),
+    ])
+}
+
+fn parse_flag(tok: &[u8], spec: u32) -> Result<()> {
+    fixed_axes(tok, spec).map(|_| ())
 }
 
 fn parse_id(tok: &[u8]) -> Result<()> {
@@ -742,6 +982,7 @@ struct MetaGate {
     spec: u64,
     minor: u64,
     units_time: bool,
+    lattice: Option<[[f64; 3]; 3]>,
 }
 
 fn facts_from_meta(line: &[u8]) -> Result<(SpanFacts, MetaGate)> {
@@ -772,6 +1013,7 @@ fn facts_from_meta(line: &[u8]) -> Result<(SpanFacts, MetaGate)> {
                 spec: 0,
                 minor: 0,
                 units_time: false,
+                lattice: None,
             },
         ));
     }
@@ -785,6 +1027,7 @@ fn facts_from_meta(line: &[u8]) -> Result<(SpanFacts, MetaGate)> {
             .and_then(|units| units.get("time"))
             .and_then(serde_json::Value::as_str)
             .is_some_and(|unit| !unit.trim().is_empty()),
+        lattice: lattice_matrix(&v),
     };
     facts.energy = v.get("energy").and_then(json_finite);
     if facts.energy.is_some() {
@@ -869,6 +1112,24 @@ fn total_mass(counts: &[usize], masses: &[f64]) -> Option<f64> {
         sum += mi * ni;
     }
     sum.is_finite().then_some(sum)
+}
+
+fn lattice_matrix(v: &serde_json::Value) -> Option<[[f64; 3]; 3]> {
+    let rows = v.get("lattice_vectors")?.as_array()?;
+    if rows.len() != 3 {
+        return None;
+    }
+    let mut m = [[0.0f64; 3]; 3];
+    for (i, row) in rows.iter().enumerate() {
+        let arr = row.as_array()?;
+        if arr.len() != 3 {
+            return None;
+        }
+        for (j, cell) in arr.iter().enumerate() {
+            m[i][j] = json_finite(cell)?;
+        }
+    }
+    Some(m)
 }
 
 fn lattice_volume(rows: &[serde_json::Value]) -> Option<f64> {
@@ -1031,6 +1292,56 @@ mod tests {
         assert_eq!(got.frame_index[0], 3.0);
         assert_eq!(&got.pbc[..3], &[true, true, false]);
         assert_eq!(got.symbol_runs[0], vec![("Cu".into(), 1)]);
+    }
+
+    #[test]
+    fn cooked_span_matches_the_parsed_blob() {
+        for name in [
+            "tiny_cuh2.con",
+            "tiny_cuh2_forces.con",
+            "tiny_cuh2_vel_forces.con",
+            "tiny_multi_cuh2.con",
+            "sulfolene.con",
+        ] {
+            let text = fixture(name);
+            let mut iter = ConFrameIterator::new(&text);
+            let mut n = 0u32;
+            while let Some(item) = iter.next_with_raw_span(&text) {
+                let (frame, raw) = item.unwrap();
+                let facts = project_frame(raw.as_bytes()).unwrap();
+                assert_eq!(facts.n_atoms as usize, frame.atom_data.len(), "{name}");
+                let (_facts, cooked) = project_frame_cooked(raw.as_bytes()).unwrap();
+                let parsed = crate::cooked_soa::CookedSoa::encode_frame(&frame).unwrap();
+                let got =
+                    crate::cooked_soa::MaterializedFrame::from_blob(&cooked).expect("span blob");
+                let expect =
+                    crate::cooked_soa::MaterializedFrame::from_blob(&parsed).expect("parsed blob");
+                assert_eq!(got.positions, expect.positions, "{name} positions");
+                assert_eq!(got.forces, expect.forces, "{name} forces");
+                assert_eq!(got.velocities, expect.velocities, "{name} velocities");
+                assert_eq!(got.masses, expect.masses, "{name} masses");
+                assert_eq!(got.numbers, expect.numbers, "{name} numbers");
+                assert_eq!(got.constraints, expect.constraints, "{name} constraints");
+                assert_eq!(got.cell, expect.cell, "{name} cell");
+                assert_eq!(
+                    got.energy.to_bits(),
+                    expect.energy.to_bits(),
+                    "{name} energy"
+                );
+                assert_eq!(got.energy_set, expect.energy_set, "{name}");
+                assert_eq!(
+                    got.frame_index.to_bits(),
+                    expect.frame_index.to_bits(),
+                    "{name} index"
+                );
+                assert_eq!(got.frame_index_set, expect.frame_index_set, "{name}");
+                assert_eq!(got.pbc, expect.pbc, "{name} pbc");
+                assert_eq!(got.pbc_set, expect.pbc_set, "{name}");
+                assert_eq!(got.symbol_runs, expect.symbol_runs, "{name} runs");
+                n += 1;
+            }
+            assert!(n > 0, "{name}");
+        }
     }
 
     #[test]
