@@ -705,6 +705,83 @@ fn read_vec3_block(bytes: &[u8], n: usize) -> Result<Vec<[f64; 3]>> {
     Ok(out)
 }
 
+/// Lead bytes of one zstd frame holding several small RCSO blobs.
+/// `0xFC` cannot start `RCSO`, so a per-frame blob is not read as a group.
+pub const COOKED_GROUP_TAG: [u8; 2] = [0xFC, 0x01];
+
+pub fn is_cooked_group(stored: &[u8]) -> bool {
+    stored.starts_with(&COOKED_GROUP_TAG)
+}
+
+/// One zstd frame of length-prefixed RCSO blobs, in frame order.
+pub fn pack_cooked_group(blobs: &[&[u8]]) -> Result<Vec<u8>> {
+    let mut payload = Vec::new();
+    for blob in blobs {
+        if blob.len() > u32::MAX as usize {
+            return Err(Error::Message("cooked blob exceeds u32".into()));
+        }
+        payload.extend_from_slice(&(blob.len() as u32).to_le_bytes());
+        payload.extend_from_slice(blob);
+    }
+    let compressed = zstd::stream::encode_all(&payload[..], 1)
+        .map_err(|e| Error::Message(format!("zstd encode: {e}")))?;
+    let mut out = Vec::with_capacity(6 + compressed.len());
+    out.extend_from_slice(&COOKED_GROUP_TAG);
+    out.extend_from_slice(&(blobs.len() as u32).to_le_bytes());
+    out.extend_from_slice(&compressed);
+    Ok(out)
+}
+
+/// Decompressed RCSO blobs in pack order. `buf` is the plain payload;
+/// `ranges` index it, so a single-frame read copies one blob.
+pub struct CookedGroup {
+    buf: Vec<u8>,
+    ranges: Vec<std::ops::Range<usize>>,
+}
+
+impl CookedGroup {
+    #[allow(dead_code)]
+    pub fn is_empty(&self) -> bool {
+        self.ranges.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.ranges.len()
+    }
+
+    pub fn member(&self, slot: usize) -> Option<&[u8]> {
+        self.ranges.get(slot).map(|range| &self.buf[range.clone()])
+    }
+}
+
+/// RCSO blobs in the order they were packed.
+pub fn unpack_cooked_group(stored: &[u8]) -> Result<CookedGroup> {
+    if stored.len() < 6 || !is_cooked_group(stored) {
+        return Err(Error::Message("corrupt cooked group".into()));
+    }
+    let count = u32::from_le_bytes(stored[2..6].try_into().unwrap()) as usize;
+    let buf = zstd::stream::decode_all(&stored[6..])
+        .map_err(|e| Error::Message(format!("corrupt cooked group: {e}")))?;
+    let mut ranges = Vec::with_capacity(count);
+    let mut i = 0usize;
+    while ranges.len() < count {
+        if i + 4 > buf.len() {
+            return Err(Error::Message("corrupt cooked group".into()));
+        }
+        let n = u32::from_le_bytes(buf[i..i + 4].try_into().unwrap()) as usize;
+        i += 4;
+        if i + n > buf.len() {
+            return Err(Error::Message("corrupt cooked group".into()));
+        }
+        ranges.push(i..i + n);
+        i += n;
+    }
+    if ranges.len() != count || i != buf.len() {
+        return Err(Error::Message("corrupt cooked group".into()));
+    }
+    Ok(CookedGroup { buf, ranges })
+}
+
 #[cfg(test)]
 fn resident_bytes() -> usize {
     let status = std::fs::read_to_string("/proc/self/status").expect("status");

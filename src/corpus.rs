@@ -1,3 +1,4 @@
+use std::cell::UnsafeCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Cursor;
@@ -300,6 +301,13 @@ pub struct ConCorpus {
     hash_by_frame: Database<Bytes, Bytes>,
     /// Optional derived SoA numerics (`FrameKey` → cooked bytes). Not authoritative.
     frames_soa: Database<Bytes, Bytes>,
+    /// Unpacked small cooked groups, indexed by frame for one trajectory.
+    /// Filled at open so a query copies bytes and does not decompress.
+    /// Large per-frame blobs are not cached.
+    ///
+    /// Written only from `finish_open`, before the value is shared. Later
+    /// calls only read it, including from other threads.
+    cooked_cache: UnsafeCell<CookedCache>,
     /// Optional topology HEX ‖ 0xff ‖ FrameKey. Missing on readonly of older corpora.
     idx_topo: Option<Database<Bytes, Unit>>,
     /// Optional FrameKey → HEX. Authority for a matching `reindex` rebuild.
@@ -310,6 +318,10 @@ pub struct ConCorpus {
     /// Optional FrameKey → version ‖ canonical hash ‖ content hash.
     canon_by_frame: Option<Database<Bytes, Bytes>>,
 }
+
+// SAFETY: `cooked_cache` is written only in `finish_open`, before this value
+// is placed where another thread can see it. After that every access is a read.
+unsafe impl Sync for ConCorpus {}
 
 fn frame_has_forces(frame: &ConFrame) -> bool {
     readcon_core::index_proj::frame_has_forces(frame)
@@ -617,7 +629,46 @@ fn small_data_len(path: &Path) -> Option<usize> {
 }
 
 fn finish_open(corpus: ConCorpus) -> Result<ConCorpus> {
+    corpus.fill_cooked_cache()?;
     Ok(corpus)
+}
+
+/// Unpacked small cooked frames for a single trajectory.
+struct CookedCache {
+    traj: u64,
+    frames: Vec<Option<Vec<u8>>>,
+}
+
+impl CookedCache {
+    fn empty() -> Self {
+        Self {
+            traj: 0,
+            frames: Vec::new(),
+        }
+    }
+}
+
+/// One named table: payload bytes and the B-tree pages LMDB charged.
+#[derive(Clone, Debug)]
+pub struct TableUsage {
+    /// Database name.
+    pub name: &'static str,
+    /// Number of entries.
+    pub entries: u64,
+    /// Sum of key lengths.
+    pub key_bytes: u64,
+    /// Sum of value lengths.
+    pub value_bytes: u64,
+    /// Leaf pages.
+    pub leaf_pages: u64,
+    /// Branch pages.
+    pub branch_pages: u64,
+    /// Overflow pages.
+    pub overflow_pages: u64,
+    /// LMDB page size, the same for every table.
+    pub page_size: u32,
+    /// `(leaf + branch + overflow) * page_size`.
+    pub page_bytes: u64,
 }
 
 impl ConCorpus {
@@ -904,6 +955,7 @@ impl ConCorpus {
                 frame_by_hash,
                 hash_by_frame,
                 frames_soa,
+                cooked_cache: UnsafeCell::new(CookedCache::empty()),
                 idx_topo,
                 topo_by_frame,
                 idx_canon,
@@ -955,6 +1007,7 @@ impl ConCorpus {
             frame_by_hash,
             hash_by_frame,
             frames_soa,
+            cooked_cache: UnsafeCell::new(CookedCache::empty()),
             idx_topo: Some(idx_topo),
             topo_by_frame: Some(topo_by_frame),
             idx_canon: Some(idx_canon),
@@ -1600,9 +1653,113 @@ impl ConCorpus {
         Ok(out)
     }
 
+    /// Bytes each table occupies. `page_bytes` is the B-tree, including
+    /// LMDB's page overhead. `key_bytes` and `value_bytes` are the payload.
+    pub fn table_usage(&self) -> Result<Vec<TableUsage>> {
+        let rtxn = self.read_txn()?;
+        let mut tables: Vec<(&str, Database<Bytes, Bytes>)> = vec![
+            ("frames", self.frames.remap_types()),
+            ("traj_meta", self.traj_meta.remap_types()),
+            ("idx_natoms", self.idx_natoms.remap_types()),
+            ("idx_symbol", self.idx_symbol.remap_types()),
+            ("idx_energy", self.idx_energy.remap_types()),
+            ("idx_flags", self.idx_flags.remap_types()),
+            ("idx_elem_count", self.idx_elem_count.remap_types()),
+            ("idx_formula", self.idx_formula.remap_types()),
+            ("idx_fmax", self.idx_fmax.remap_types()),
+            ("idx_mass", self.idx_mass.remap_types()),
+            ("idx_volume", self.idx_volume.remap_types()),
+            ("idx_pbc", self.idx_pbc.remap_types()),
+            ("idx_meta", self.idx_meta.remap_types()),
+            ("frame_by_hash", self.frame_by_hash),
+            ("hash_by_frame", self.hash_by_frame),
+            ("frames_soa", self.frames_soa),
+        ];
+        if let Some(d) = self.idx_topo {
+            tables.push(("idx_topo", d.remap_types()));
+        }
+        if let Some(d) = self.topo_by_frame {
+            tables.push(("topo_by_frame", d));
+        }
+        if let Some(d) = self.idx_canon {
+            tables.push(("idx_canon", d.remap_types()));
+        }
+        if let Some(d) = self.canon_by_frame {
+            tables.push(("canon_by_frame", d));
+        }
+        let mut out = Vec::with_capacity(tables.len());
+        for (name, db) in tables {
+            let stat = db.stat(&rtxn)?;
+            let mut key_bytes = 0u64;
+            let mut value_bytes = 0u64;
+            for kv in db.iter(&rtxn)? {
+                let (k, v) = kv?;
+                key_bytes += k.len() as u64;
+                value_bytes += v.len() as u64;
+            }
+            let pages = stat
+                .leaf_pages
+                .saturating_add(stat.branch_pages)
+                .saturating_add(stat.overflow_pages) as u64;
+            out.push(TableUsage {
+                name,
+                entries: stat.entries as u64,
+                key_bytes,
+                value_bytes,
+                leaf_pages: stat.leaf_pages as u64,
+                branch_pages: stat.branch_pages as u64,
+                overflow_pages: stat.overflow_pages as u64,
+                page_size: stat.page_size,
+                page_bytes: pages.saturating_mul(stat.page_size as u64),
+            });
+        }
+        Ok(out)
+    }
+
     /// Share one zstd frame across an aligned run when that is shorter than
     /// the per-frame values. `prepared` must still be per-frame bytes from
     /// [`Self::build_index_puts`]. Runs outside the write transaction.
+    /// Pack small RCSO blobs that share a 64-frame run into one zstd value.
+    ///
+    /// An 8-atom cooked blob is 524 bytes, and a thousand of them were half
+    /// the file. Consecutive frames of one structure compress together to
+    /// about one page per 64 frames. A blob over 4 KiB stays itself: that is
+    /// the 100k-atom coordinate payload, and compressing it made the warm
+    /// read slower than the copy.
+    fn pack_small_cooked(prepared: &mut [PreparedIndexPuts]) {
+        const SMALL: usize = 4096;
+        let mut i = 0;
+        while i < prepared.len() {
+            let gid = prepared[i].fk.frame_idx / crate::frame_codec::GROUP_LEN;
+            let traj = prepared[i].fk.traj_id;
+            let mut j = i + 1;
+            while j < prepared.len()
+                && prepared[j].fk.traj_id == traj
+                && prepared[j].fk.frame_idx / crate::frame_codec::GROUP_LEN == gid
+            {
+                j += 1;
+            }
+            let pack = j - i > 1
+                && prepared[i..j]
+                    .iter()
+                    .all(|p| !p.cooked.is_empty() && p.cooked.len() <= SMALL);
+            if pack {
+                let views: Vec<&[u8]> =
+                    prepared[i..j].iter().map(|p| p.cooked.as_slice()).collect();
+                if let Ok(packed) = crate::cooked_soa::pack_cooked_group(&views) {
+                    let raw: usize = prepared[i..j].iter().map(|p| p.cooked.len()).sum();
+                    if packed.len() < raw {
+                        prepared[i].cooked = packed;
+                        for row in &mut prepared[i + 1..j] {
+                            row.cooked.clear();
+                        }
+                    }
+                }
+            }
+            i = j;
+        }
+    }
+
     fn group_prepared(prepared: &mut [PreparedIndexPuts]) -> Result<()> {
         if prepared.len() < 2 {
             return Ok(());
@@ -1628,6 +1785,7 @@ impl ConCorpus {
         replace_meta: bool,
         compress: bool,
     ) -> Result<u32> {
+        Self::pack_small_cooked(prepared);
         if compress {
             Self::group_prepared(prepared)?;
         }
@@ -1820,6 +1978,7 @@ impl ConCorpus {
                         None,
                     )?);
                 }
+                Self::pack_small_cooked(&mut prepared);
                 if compress {
                     Self::group_prepared(&mut prepared)?;
                 }
@@ -1868,6 +2027,7 @@ impl ConCorpus {
         }
         let mut prepared =
             Self::prepare_trajectory_str_at(traj_id, text, start_idx, self.compress_on())?;
+        Self::pack_small_cooked(&mut prepared);
         if self.compress_on() {
             Self::group_prepared(&mut prepared)?;
         }
@@ -2664,8 +2824,163 @@ impl ConCorpus {
     /// Does **not** read `frames` (CON text).
     pub fn get_cooked_soa_bytes(&self, key: FrameKey) -> Result<Option<Vec<u8>>> {
         let rtxn = self.read_txn()?;
+        let mut cache = None;
+        self.cooked_member(&rtxn, key, &mut cache)
+    }
+
+    /// One frame's RCSO bytes. Small frames share a zstd group stored at the
+    /// run's first frame. A per-frame value still wins when it is present,
+    /// so an overwrite of one frame does not have to repack the run.
+    fn fill_cooked_cache(&self) -> Result<()> {
+        // A 100k-atom corpus keeps one multi-megabyte blob per frame. Walking
+        // those values at open dominated the cold metadata row. Small-frame
+        // groups are the only thing this cache holds, and those files are
+        // well under 32 MiB.
+        let len = fs::metadata(self.path.join("data.mdb"))
+            .map(|meta| meta.len())
+            .unwrap_or(0);
+        if len > 32 * 1024 * 1024 {
+            return Ok(());
+        }
+        let rtxn = self.read_txn()?;
+        let mut traj: Option<u64> = None;
+        let mut frames: Vec<Option<Vec<u8>>> = Vec::new();
+        for item in self.frames_soa.iter(&rtxn)? {
+            let (k, v) = item?;
+            if !crate::cooked_soa::is_cooked_group(v) {
+                continue;
+            }
+            let Some(head) = FrameKey::from_bytes(k) else {
+                continue;
+            };
+            if traj.is_some_and(|id| id != head.traj_id) {
+                // More than one trajectory: leave the cache empty and
+                // decode groups on demand.
+                // SAFETY: this runs from `finish_open` before the corpus is shared.
+                unsafe {
+                    *self.cooked_cache.get() = CookedCache::empty();
+                }
+                return Ok(());
+            }
+            traj = Some(head.traj_id);
+            let group = crate::cooked_soa::unpack_cooked_group(v)?;
+            let end = head.frame_idx as usize + group.len();
+            if frames.len() < end {
+                frames.resize_with(end, || None);
+            }
+            for slot in 0..group.len() {
+                let Some(bytes) = group.member(slot) else {
+                    continue;
+                };
+                frames[head.frame_idx as usize + slot] = Some(bytes.to_vec());
+            }
+        }
+        // SAFETY: this runs from `finish_open` before the corpus is shared.
+        unsafe {
+            *self.cooked_cache.get() = CookedCache {
+                traj: traj.unwrap_or(0),
+                frames,
+            };
+        }
+        Ok(())
+    }
+
+    fn cooked_member(
+        &self,
+        rtxn: &heed::RoTxn<'_>,
+        key: FrameKey,
+        cache: &mut Option<(u32, crate::cooked_soa::CookedGroup)>,
+    ) -> Result<Option<Vec<u8>>> {
+        // SAFETY: `finish_open` finished writing the cache before any query.
+        let warm = unsafe { &*self.cooked_cache.get() };
+        if warm.traj == key.traj_id {
+            if let Some(Some(bytes)) = warm.frames.get(key.frame_idx as usize) {
+                return Ok(Some(bytes.clone()));
+            }
+        }
         let fk_b = key.to_bytes();
-        Ok(self.frames_soa.get(&rtxn, &fk_b[..])?.map(|b| b.to_vec()))
+        if let Some(blob) = self.frames_soa.get(rtxn, &fk_b[..])? {
+            if !crate::cooked_soa::is_cooked_group(blob) {
+                Self::willneed(blob);
+                return Ok(Some(blob.to_vec()));
+            }
+        }
+        let head_idx =
+            key.frame_idx / crate::frame_codec::GROUP_LEN * crate::frame_codec::GROUP_LEN;
+        if cache.as_ref().map(|(head, _)| *head) != Some(head_idx) {
+            let head_b = FrameKey {
+                traj_id: key.traj_id,
+                frame_idx: head_idx,
+            }
+            .to_bytes();
+            let Some(blob) = self.frames_soa.get(rtxn, &head_b[..])? else {
+                return Ok(None);
+            };
+            if !crate::cooked_soa::is_cooked_group(blob) {
+                if head_idx == key.frame_idx {
+                    Self::willneed(blob);
+                    return Ok(Some(blob.to_vec()));
+                }
+                return Ok(None);
+            }
+            Self::willneed(blob);
+            let members = crate::cooked_soa::unpack_cooked_group(blob)?;
+            *cache = Some((head_idx, members));
+        }
+        let slot = (key.frame_idx - head_idx) as usize;
+        Ok(cache
+            .as_ref()
+            .and_then(|(_, members)| members.member(slot).map(|bytes| bytes.to_vec())))
+    }
+
+    /// Borrow one frame's RCSO bytes for `body`. A small-frame group was
+    /// unpacked at open, so this does not decompress on the query.
+    fn with_frame_cooked<T>(
+        &self,
+        rtxn: &heed::RoTxn<'_>,
+        key: FrameKey,
+        cache: &mut Option<(u32, crate::cooked_soa::CookedGroup)>,
+        body: impl FnOnce(&[u8]) -> T,
+    ) -> Result<Option<T>> {
+        // SAFETY: `finish_open` finished writing the cache before any query.
+        let warm = unsafe { &*self.cooked_cache.get() };
+        if warm.traj == key.traj_id {
+            if let Some(Some(bytes)) = warm.frames.get(key.frame_idx as usize) {
+                return Ok(Some(body(bytes)));
+            }
+        }
+        let fk_b = key.to_bytes();
+        if let Some(blob) = self.frames_soa.get(rtxn, &fk_b[..])? {
+            if !crate::cooked_soa::is_cooked_group(blob) {
+                Self::willneed(blob);
+                return Ok(Some(body(blob)));
+            }
+        }
+        let head_idx =
+            key.frame_idx / crate::frame_codec::GROUP_LEN * crate::frame_codec::GROUP_LEN;
+        if cache.as_ref().map(|(head, _)| *head) != Some(head_idx) {
+            let head_b = FrameKey {
+                traj_id: key.traj_id,
+                frame_idx: head_idx,
+            }
+            .to_bytes();
+            let Some(blob) = self.frames_soa.get(rtxn, &head_b[..])? else {
+                return Ok(None);
+            };
+            if !crate::cooked_soa::is_cooked_group(blob) {
+                if head_idx == key.frame_idx {
+                    Self::willneed(blob);
+                    return Ok(Some(body(blob)));
+                }
+                return Ok(None);
+            }
+            Self::willneed(blob);
+            *cache = Some((head_idx, crate::cooked_soa::unpack_cooked_group(blob)?));
+        }
+        let slot = (key.frame_idx - head_idx) as usize;
+        Ok(cache
+            .as_ref()
+            .and_then(|(_, members)| members.member(slot).map(body)))
     }
 
     /// True if a **valid** RCSO blob is stored (decode succeeds). Missing/corrupt → false.
@@ -2706,10 +3021,10 @@ impl ConCorpus {
         keys.sort_unstable();
         let mut values = Vec::new();
         let mut n_atoms: Option<u32> = None;
+        let mut cooked_cache = None;
         for key in &keys {
-            let fk_b = key.to_bytes();
-            if let Some(blob) = self.frames_soa.get(&rtxn, &fk_b[..])? {
-                if let Some(n) = crate::cooked_soa::CookedSoa::copy_positions(blob, &mut values) {
+            if let Some(blob) = self.cooked_member(&rtxn, *key, &mut cooked_cache)? {
+                if let Some(n) = crate::cooked_soa::CookedSoa::copy_positions(&blob, &mut values) {
                     match n_atoms {
                         None => n_atoms = Some(n),
                         Some(prev) if prev == n => {}
@@ -2805,7 +3120,14 @@ impl ConCorpus {
         frame: Option<u32>,
         span: Option<(u32, u32)>,
     ) -> Result<MaterializedRead> {
-        self.prefetch_small_corpus();
+        // A file under 1 MiB was prefetched when it was opened. Advising
+        // again on every query is slower than the copy, and it showed up
+        // once the cooked groups pulled frames-1000 under that limit.
+        // SAFETY: the cache is immutable after `finish_open`.
+        let cached = unsafe { !(*self.cooked_cache.get()).frames.is_empty() };
+        if !cached {
+            self.prefetch_small_corpus();
+        }
         let rtxn = self.read_txn()?;
         let keys = if let Some(frame_idx) = frame {
             vec![FrameKey { traj_id, frame_idx }]
@@ -2835,14 +3157,13 @@ impl ConCorpus {
         let mut n_atoms: Option<u32> = None;
         let mut forces_set = true;
         let mut velocities_set = true;
+        let mut cooked_cache = None;
         for key in &keys {
-            let fk_b = key.to_bytes();
-            let cooked = if let Some(blob) = self.frames_soa.get(&rtxn, &fk_b[..])? {
-                Self::willneed(blob);
-                crate::cooked_soa::MaterializedFrame::from_blob(blob)
-            } else {
-                None
-            };
+            let cooked = self
+                .with_frame_cooked(&rtxn, *key, &mut cooked_cache, |blob| {
+                    crate::cooked_soa::MaterializedFrame::from_blob(blob)
+                })?
+                .flatten();
             let cooked = match cooked {
                 Some(frame) => frame,
                 None => {
@@ -4005,7 +4326,8 @@ impl<'a> IngestSession<'a> {
         ConCorpus::traj_claimed(txn, corpus, traj_id)
     }
 
-    fn put_prepared(&mut self, prepared: &[PreparedIndexPuts]) -> Result<()> {
+    fn put_prepared(&mut self, prepared: &mut [PreparedIndexPuts]) -> Result<()> {
+        ConCorpus::pack_small_cooked(prepared);
         let corpus = self.corpus;
         let txn = self.txn()?;
         for p in prepared {
@@ -4104,7 +4426,7 @@ impl<'a> IngestSession<'a> {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        self.put_prepared(&prepared)
+        self.put_prepared(&mut prepared)
     }
 
     pub(crate) fn commit(mut self) -> Result<()> {
@@ -6129,7 +6451,7 @@ x
         {
             let mut session = IngestSession::begin(&db).unwrap();
             session.claim(7).unwrap();
-            session.put_prepared(&prepared).unwrap();
+            session.put_prepared(&mut prepared).unwrap();
             session.put_traj_meta(7, n, "partial.con".into()).unwrap();
         }
         assert!(db.traj_meta(7).unwrap().is_none());
@@ -6152,7 +6474,7 @@ x
         {
             let mut session = IngestSession::begin(&db).unwrap();
             session.claim(3).unwrap();
-            session.put_prepared(&prepared).unwrap();
+            session.put_prepared(&mut prepared).unwrap();
             session
                 .put_traj_meta(3, n, "tiny_multi_cuh2.con".into())
                 .unwrap();

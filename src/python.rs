@@ -36,6 +36,29 @@ impl PyConCorpus {
         Ok(Self { inner })
     }
 
+    /// Per-table payload and B-tree bytes. Outside any benchmark clock.
+    fn table_usage(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        let rows = self
+            .inner
+            .table_usage()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let out = PyList::empty(py);
+        for row in rows {
+            let item = PyDict::new(py);
+            item.set_item("name", row.name)?;
+            item.set_item("entries", row.entries)?;
+            item.set_item("key_bytes", row.key_bytes)?;
+            item.set_item("value_bytes", row.value_bytes)?;
+            item.set_item("leaf_pages", row.leaf_pages)?;
+            item.set_item("branch_pages", row.branch_pages)?;
+            item.set_item("overflow_pages", row.overflow_pages)?;
+            item.set_item("page_size", row.page_size)?;
+            item.set_item("page_bytes", row.page_bytes)?;
+            out.append(item)?;
+        }
+        Ok(out.unbind())
+    }
+
     /// RCSO bytes for a unidirectional broadcast on the *caller* communicator.
     /// Rank 0 packs; workers call :func:`unpack_positions` on the copy.
     fn pack_frame(&self, traj_id: u64, frame_idx: u32) -> PyResult<Vec<u8>> {

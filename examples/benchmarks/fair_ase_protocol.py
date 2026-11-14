@@ -1255,6 +1255,32 @@ def lmdb_files(corpus: Path) -> list[Path]:
     return [p for p in (corpus / "data.mdb", corpus / "lock.mdb") if p.is_file()]
 
 
+def record_table_usage(out: Path, workload: str, dest: Path) -> None:
+    """Bytes per LMDB table. This is not a timed row."""
+    db = open_readcon(dest / "corpus", warm=True)
+    try:
+        tables = list(db.table_usage())
+    finally:
+        db = None
+        gc.collect()
+    file_bytes = (dest / "corpus" / "data.mdb").stat().st_size
+    page_bytes = sum(int(row["page_bytes"]) for row in tables)
+    path = out / "tables.json"
+    existing = []
+    if path.is_file():
+        existing = json.loads(path.read_text())
+    existing.append(
+        {
+            "workload": workload,
+            "file_bytes": file_bytes,
+            "page_bytes": page_bytes,
+            "overhead_bytes": file_bytes - page_bytes,
+            "tables": tables,
+        }
+    )
+    path.write_text(json.dumps(existing, indent=2) + "\n")
+
+
 def disk_bytes(kind: str, dest: Path) -> int:
     if kind == "readcon-db":
         path = dest / "corpus" / "data.mdb"
@@ -1839,6 +1865,8 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
             insert_fair(kind, payload, dest)
             gc.collect()
             stored[kind] = dest
+            if kind == "readcon-db":
+                record_table_usage(work.parent, name, dest)
         mid = spec["n_frames"] // 2
         ops = spec.get("ops") or ("full_read", "selected")
         caches = ("cold", "warm")
