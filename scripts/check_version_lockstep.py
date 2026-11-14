@@ -26,7 +26,7 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parent.parent
 # The published writer whose CON and JSON round trips the tests rely on.
-READCON_CORE_PIN = "=0.23.0"
+READCON_CORE_PIN = "=0.23.2"
 
 
 def read(root, rel):
