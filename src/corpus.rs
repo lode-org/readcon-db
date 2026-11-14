@@ -1726,6 +1726,73 @@ impl ConCorpus {
     /// about one page per 64 frames. A blob over 4 KiB stays itself: that is
     /// the 100k-atom coordinate payload, and compressing it made the warm
     /// read slower than the copy.
+    /// Fold new frames into the cooked group that already occupies their
+    /// `GROUP_LEN` bucket. Cleared rows are not written again.
+    fn absorb_cooked_group(
+        &self,
+        wtxn: &mut RwTxn<'_>,
+        prepared: &mut [PreparedIndexPuts],
+    ) -> Result<()> {
+        let Some(first) = prepared.first() else {
+            return Ok(());
+        };
+        let head_idx =
+            first.fk.frame_idx / crate::frame_codec::GROUP_LEN * crate::frame_codec::GROUP_LEN;
+        if head_idx == first.fk.frame_idx {
+            return Ok(());
+        }
+        let head_b = FrameKey {
+            traj_id: first.fk.traj_id,
+            frame_idx: head_idx,
+        }
+        .to_bytes();
+        let Some(blob) = self.frames_soa.get(wtxn, &head_b[..])? else {
+            return Ok(());
+        };
+        if !crate::cooked_soa::is_cooked_group(blob) {
+            return Ok(());
+        }
+        let existing = crate::cooked_soa::unpack_cooked_group(blob)?;
+        let start = (first.fk.frame_idx - head_idx) as usize;
+        if start > existing.len() {
+            return Ok(());
+        }
+        let mut members: Vec<Vec<u8>> = (0..existing.len())
+            .map(|slot| existing.member(slot).unwrap_or(b"").to_vec())
+            .collect();
+        let mut absorbed = 0usize;
+        for row in prepared.iter() {
+            let slot = (row.fk.frame_idx - head_idx) as usize;
+            if row.fk.traj_id != first.fk.traj_id
+                || row.fk.frame_idx / crate::frame_codec::GROUP_LEN
+                    != first.fk.frame_idx / crate::frame_codec::GROUP_LEN
+                || row.cooked.is_empty()
+                || row.cooked.len() > 4096
+            {
+                break;
+            }
+            if slot > members.len() {
+                break;
+            }
+            if slot == members.len() {
+                members.push(row.cooked.clone());
+            } else {
+                members[slot] = row.cooked.clone();
+            }
+            absorbed += 1;
+        }
+        if absorbed == 0 {
+            return Ok(());
+        }
+        let views: Vec<&[u8]> = members.iter().map(|member| member.as_slice()).collect();
+        let packed = crate::cooked_soa::pack_cooked_group(&views)?;
+        self.frames_soa.put(wtxn, &head_b[..], &packed[..])?;
+        for row in &mut prepared[..absorbed] {
+            row.cooked.clear();
+        }
+        Ok(())
+    }
+
     fn pack_small_cooked(prepared: &mut [PreparedIndexPuts]) {
         const SMALL: usize = 4096;
         let mut i = 0;
@@ -1739,7 +1806,11 @@ impl ConCorpus {
             {
                 j += 1;
             }
-            let pack = j - i > 1
+            // A group value lives at the run's first frame index. A later
+            // append that continues the run must join that value, not write
+            // a second group under a non-head key.
+            let pack = prepared[i].fk.frame_idx % crate::frame_codec::GROUP_LEN == 0
+                && j - i > 1
                 && prepared[i..j]
                     .iter()
                     .all(|p| !p.cooked.is_empty() && p.cooked.len() <= SMALL);
@@ -1800,6 +1871,11 @@ impl ConCorpus {
             }
             for p in prepared.iter() {
                 self.put_index_puts(wtxn, p)?;
+            }
+            // Same abort point as the batched path: the group is in this
+            // transaction and disappears if the commit never happens.
+            if fail_injected_group(1) {
+                return Err(Error::Message("injected insert failure".into()));
             }
             let n_frames = prepared.last().map(|p| p.fk.frame_idx + 1).unwrap_or(0);
             let existing: Option<TrajMeta> = if replace_meta {
@@ -2162,6 +2238,9 @@ impl ConCorpus {
         let hint = source_hint.into();
         let input_bytes = prepared_bytes(&prepared).saturating_add(hint.len());
         self.with_write(input_bytes, |wtxn| {
+            // Join a partly full cooked group before packing any new run.
+            self.absorb_cooked_group(wtxn, &mut prepared)?;
+            Self::pack_small_cooked(&mut prepared);
             let tid_key = traj_id.to_be_bytes();
             let live: Option<TrajMeta> =
                 if let Some(existing) = self.traj_meta.get(wtxn, &tid_key[..])? {
@@ -2835,7 +2914,9 @@ impl ConCorpus {
         // A 100k-atom corpus keeps one multi-megabyte blob per frame. Walking
         // those values at open dominated the cold metadata row. Small-frame
         // groups are the only thing this cache holds, and those files are
-        // well under 32 MiB.
+        // well under 32 MiB. A file just over the threshold still returns
+        // the grouped bytes: the query unpacks that one group when it is
+        // read, instead of every group at open.
         let len = fs::metadata(self.path.join("data.mdb"))
             .map(|meta| meta.len())
             .unwrap_or(0);
@@ -2869,10 +2950,29 @@ impl ConCorpus {
                 frames.resize_with(end, || None);
             }
             for slot in 0..group.len() {
-                let Some(bytes) = group.member(slot) else {
-                    continue;
+                let frame_idx = head.frame_idx + slot as u32;
+                let own = if frame_idx == head.frame_idx {
+                    None
+                } else {
+                    let fk_b = FrameKey {
+                        traj_id: head.traj_id,
+                        frame_idx,
+                    }
+                    .to_bytes();
+                    self.frames_soa
+                        .get(&rtxn, &fk_b[..])?
+                        .filter(|blob| {
+                            !blob.is_empty() && !crate::cooked_soa::is_cooked_group(blob)
+                        })
+                        .map(|blob| blob.to_vec())
                 };
-                frames[head.frame_idx as usize + slot] = Some(bytes.to_vec());
+                let bytes = own.or_else(|| {
+                    group
+                        .member(slot)
+                        .filter(|bytes| !bytes.is_empty())
+                        .map(|bytes| bytes.to_vec())
+                });
+                frames[head.frame_idx as usize + slot] = bytes;
             }
         }
         // SAFETY: this runs from `finish_open` before the corpus is shared.
@@ -2895,9 +2995,13 @@ impl ConCorpus {
         let warm = unsafe { &*self.cooked_cache.get() };
         if warm.traj == key.traj_id {
             if let Some(Some(bytes)) = warm.frames.get(key.frame_idx as usize) {
-                return Ok(Some(bytes.clone()));
+                if !bytes.is_empty() {
+                    return Ok(Some(bytes.clone()));
+                }
             }
         }
+        // Ungrouped blobs, including every 100k-atom frame, are stored under
+        // their own key. Return that value before any group-head lookup.
         let fk_b = key.to_bytes();
         if let Some(blob) = self.frames_soa.get(rtxn, &fk_b[..])? {
             if !crate::cooked_soa::is_cooked_group(blob) {
@@ -2928,9 +3032,12 @@ impl ConCorpus {
             *cache = Some((head_idx, members));
         }
         let slot = (key.frame_idx - head_idx) as usize;
-        Ok(cache
-            .as_ref()
-            .and_then(|(_, members)| members.member(slot).map(|bytes| bytes.to_vec())))
+        Ok(cache.as_ref().and_then(|(_, members)| {
+            members
+                .member(slot)
+                .filter(|bytes| !bytes.is_empty())
+                .map(|bytes| bytes.to_vec())
+        }))
     }
 
     /// Borrow one frame's RCSO bytes for `body`. A small-frame group was
@@ -2943,10 +3050,15 @@ impl ConCorpus {
         body: impl FnOnce(&[u8]) -> T,
     ) -> Result<Option<T>> {
         // SAFETY: `finish_open` finished writing the cache before any query.
+        // An empty cache means this file was not grouped at open (a large
+        // corpus, or more than one trajectory). The next lookup is the
+        // per-frame blob and does not touch a group.
         let warm = unsafe { &*self.cooked_cache.get() };
         if warm.traj == key.traj_id {
             if let Some(Some(bytes)) = warm.frames.get(key.frame_idx as usize) {
-                return Ok(Some(body(bytes)));
+                if !bytes.is_empty() {
+                    return Ok(Some(body(bytes)));
+                }
             }
         }
         let fk_b = key.to_bytes();
@@ -2978,9 +3090,12 @@ impl ConCorpus {
             *cache = Some((head_idx, crate::cooked_soa::unpack_cooked_group(blob)?));
         }
         let slot = (key.frame_idx - head_idx) as usize;
-        Ok(cache
-            .as_ref()
-            .and_then(|(_, members)| members.member(slot).map(body)))
+        Ok(cache.as_ref().and_then(|(_, members)| {
+            members
+                .member(slot)
+                .filter(|bytes| !bytes.is_empty())
+                .map(body)
+        }))
     }
 
     /// True if a **valid** RCSO blob is stored (decode succeeds). Missing/corrupt → false.
@@ -3274,10 +3389,50 @@ impl ConCorpus {
         let bytes = crate::cooked_soa::CookedSoa::encode_frame(&fr)?;
         let n = bytes.len();
         self.with_write(n, |wtxn| {
-            let fk_b = key.to_bytes();
-            self.frames_soa.put(wtxn, &fk_b[..], &bytes[..])?;
+            self.put_cooked_slot(wtxn, key, &bytes)?;
             Ok(n)
         })
+    }
+
+    /// Write one frame's RCSO. A grouped slot is replaced inside the group
+    /// so the head value stays a group and the other members stay readable.
+    fn put_cooked_slot(&self, wtxn: &mut RwTxn<'_>, key: FrameKey, bytes: &[u8]) -> Result<()> {
+        let fk_b = key.to_bytes();
+        let head_idx =
+            key.frame_idx / crate::frame_codec::GROUP_LEN * crate::frame_codec::GROUP_LEN;
+        let head_b = FrameKey {
+            traj_id: key.traj_id,
+            frame_idx: head_idx,
+        }
+        .to_bytes();
+        let grouped = self
+            .frames_soa
+            .get(wtxn, &head_b[..])?
+            .filter(|blob| crate::cooked_soa::is_cooked_group(blob))
+            .map(|blob| blob.to_vec());
+        if let Some(blob) = grouped {
+            let group = crate::cooked_soa::unpack_cooked_group(&blob)?;
+            let slot = (key.frame_idx - head_idx) as usize;
+            if slot <= group.len() {
+                let mut members: Vec<Vec<u8>> = (0..group.len())
+                    .map(|i| group.member(i).unwrap_or(b"").to_vec())
+                    .collect();
+                if slot == members.len() {
+                    members.push(bytes.to_vec());
+                } else {
+                    members[slot] = bytes.to_vec();
+                }
+                let views: Vec<&[u8]> = members.iter().map(|member| member.as_slice()).collect();
+                let packed = crate::cooked_soa::pack_cooked_group(&views)?;
+                self.frames_soa.put(wtxn, &head_b[..], &packed[..])?;
+                if head_idx != key.frame_idx {
+                    let _ = self.frames_soa.delete(wtxn, &fk_b[..])?;
+                }
+                return Ok(());
+            }
+        }
+        self.frames_soa.put(wtxn, &fk_b[..], bytes)?;
+        Ok(())
     }
 
     /// On-disk `frames` value, tagged or legacy. Tests and `migrate` use this.
@@ -3359,10 +3514,47 @@ impl ConCorpus {
     }
 
     /// Drop cooked tier for one key (CON text and indexes untouched).
+    ///
+    /// A frame that lives in a shared group is punched out of that group.
+    /// An empty group is removed. A per-frame override is removed too.
     pub fn delete_cooked_soa(&self, key: FrameKey) -> Result<()> {
         self.with_write(0, |wtxn| {
             let fk_b = key.to_bytes();
-            let _ = self.frames_soa.delete(wtxn, &fk_b[..])?;
+            let head_idx =
+                key.frame_idx / crate::frame_codec::GROUP_LEN * crate::frame_codec::GROUP_LEN;
+            let head_b = FrameKey {
+                traj_id: key.traj_id,
+                frame_idx: head_idx,
+            }
+            .to_bytes();
+            let grouped = self
+                .frames_soa
+                .get(wtxn, &head_b[..])?
+                .filter(|blob| crate::cooked_soa::is_cooked_group(blob))
+                .map(|blob| blob.to_vec());
+            if head_idx != key.frame_idx {
+                let _ = self.frames_soa.delete(wtxn, &fk_b[..])?;
+            }
+            if let Some(blob) = grouped {
+                let group = crate::cooked_soa::unpack_cooked_group(&blob)?;
+                let mut members: Vec<Vec<u8>> = (0..group.len())
+                    .map(|slot| group.member(slot).unwrap_or(b"").to_vec())
+                    .collect();
+                let slot = (key.frame_idx - head_idx) as usize;
+                if slot < members.len() {
+                    members[slot].clear();
+                }
+                if members.iter().all(|member| member.is_empty()) {
+                    let _ = self.frames_soa.delete(wtxn, &head_b[..])?;
+                } else {
+                    let views: Vec<&[u8]> =
+                        members.iter().map(|member| member.as_slice()).collect();
+                    let packed = crate::cooked_soa::pack_cooked_group(&views)?;
+                    self.frames_soa.put(wtxn, &head_b[..], &packed[..])?;
+                }
+            } else if head_idx == key.frame_idx {
+                let _ = self.frames_soa.delete(wtxn, &fk_b[..])?;
+            }
             Ok(())
         })
     }
@@ -6462,6 +6654,318 @@ x
             db.canonical_dump().unwrap(),
             fresh.canonical_dump().unwrap()
         );
+    }
+
+    fn tiny_copies(n: usize) -> (String, Vec<String>) {
+        let one = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let mut text = String::new();
+        let mut frames = Vec::with_capacity(n);
+        for _ in 0..n {
+            let mut frame = one.clone();
+            if !frame.ends_with('\n') {
+                frame.push('\n');
+            }
+            text.push_str(&frame);
+            frames.push(frame);
+        }
+        (text, frames)
+    }
+
+    fn reopen(dir: &std::path::Path) -> ConCorpus {
+        ConCorpus::open(dir).unwrap()
+    }
+
+    fn raw_soa(db: &ConCorpus, frame: u32) -> Option<Vec<u8>> {
+        let rtxn = db.read_txn().unwrap();
+        let fk = FrameKey {
+            traj_id: 1,
+            frame_idx: frame,
+        }
+        .to_bytes();
+        db.frames_soa
+            .get(&rtxn, &fk[..])
+            .unwrap()
+            .map(|blob| blob.to_vec())
+    }
+
+    fn frame_positions(db: &ConCorpus, traj: u64, frame: u32) -> Vec<f64> {
+        let got = db.read_materialized(traj, Some(frame)).unwrap();
+        assert_eq!(got.n_frames, 1);
+        got.positions
+    }
+
+    fn text_positions(text: &str) -> Vec<f64> {
+        let frame = ConFrameIterator::new(text).next().unwrap().unwrap();
+        let blob = crate::cooked_soa::CookedSoa::encode_frame(&frame).unwrap();
+        crate::cooked_soa::MaterializedFrame::from_blob(&blob)
+            .unwrap()
+            .positions
+    }
+
+    #[test]
+    fn append_extends_a_partly_full_cooked_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let (first, frames) = tiny_copies(3);
+        {
+            let db = ConCorpus::open(dir.path()).unwrap();
+            db.append_trajectory_str(1, &first, "partial").unwrap();
+        }
+        let db = reopen(dir.path());
+        assert!(crate::cooked_soa::is_cooked_group(
+            &raw_soa(&db, 0).unwrap()
+        ));
+        let (more, extra) = tiny_copies(2);
+        db.extend_trajectory_str(1, &more, "more").unwrap();
+        drop(db);
+        let db = reopen(dir.path());
+        assert_eq!(db.traj_meta(1).unwrap().unwrap().n_frames, 5);
+        let mut expected = frames;
+        expected.extend(extra);
+        for (i, text) in expected.iter().enumerate() {
+            assert_eq!(
+                frame_positions(&db, 1, i as u32),
+                text_positions(text),
+                "frame {i}"
+            );
+        }
+        let head = raw_soa(&db, 0).unwrap();
+        let group = crate::cooked_soa::unpack_cooked_group(&head).unwrap();
+        assert_eq!(group.len(), 5);
+        assert!(raw_soa(&db, 3).is_none());
+    }
+
+    #[test]
+    fn replace_and_delete_inside_a_cooked_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let (text, mut frames) = tiny_copies(4);
+        {
+            let db = ConCorpus::open(dir.path()).unwrap();
+            db.append_trajectory_str(1, &text, "group").unwrap();
+            let mut shifted = frames[2].replace("0.63940000000000108", "1.63940000000000108");
+            assert_ne!(shifted, frames[2]);
+            if !shifted.ends_with('\n') {
+                shifted.push('\n');
+            }
+            db.with_write(shifted.len(), |wtxn| {
+                let fk = FrameKey {
+                    traj_id: 1,
+                    frame_idx: 2,
+                }
+                .to_bytes();
+                db.frames.put(wtxn, &fk[..], shifted.as_bytes())?;
+                Ok(())
+            })
+            .unwrap();
+            frames[2] = shifted;
+            db.cook_frame(FrameKey {
+                traj_id: 1,
+                frame_idx: 2,
+            })
+            .unwrap();
+            let head_text = frames[0].replace("0.63940000000000108", "2.63940000000000108");
+            let head_frame = ConFrameIterator::new(&head_text).next().unwrap().unwrap();
+            let head_blob = crate::cooked_soa::CookedSoa::encode_frame(&head_frame).unwrap();
+            db.with_write(head_blob.len(), |wtxn| {
+                db.put_cooked_slot(
+                    wtxn,
+                    FrameKey {
+                        traj_id: 1,
+                        frame_idx: 0,
+                    },
+                    &head_blob,
+                )
+            })
+            .unwrap();
+            frames[0] = head_text;
+        }
+        let original_head = {
+            let one = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+            let mut frame = one;
+            if !frame.ends_with('\n') {
+                frame.push('\n');
+            }
+            frame
+        };
+        let db = reopen(dir.path());
+        for (i, text) in frames.iter().enumerate() {
+            assert_eq!(
+                frame_positions(&db, 1, i as u32),
+                text_positions(text),
+                "replaced frame {i}"
+            );
+        }
+        assert!(crate::cooked_soa::is_cooked_group(
+            &raw_soa(&db, 0).unwrap()
+        ));
+        db.delete_cooked_soa(FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        })
+        .unwrap();
+        db.delete_cooked_soa(FrameKey {
+            traj_id: 1,
+            frame_idx: 2,
+        })
+        .unwrap();
+        drop(db);
+        let db = reopen(dir.path());
+        assert!(!db
+            .has_valid_cooked_soa(FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap());
+        assert!(!db
+            .has_valid_cooked_soa(FrameKey {
+                traj_id: 1,
+                frame_idx: 2,
+            })
+            .unwrap());
+        assert!(db
+            .has_valid_cooked_soa(FrameKey {
+                traj_id: 1,
+                frame_idx: 1,
+            })
+            .unwrap());
+        assert!(db
+            .has_valid_cooked_soa(FrameKey {
+                traj_id: 1,
+                frame_idx: 3,
+            })
+            .unwrap());
+        let mut after_delete = frames;
+        // The head frame's CON text was not rewritten. Deleting its cooked
+        // slot falls back to that text. Frame 2's text was rewritten.
+        after_delete[0] = original_head;
+        for (i, text) in after_delete.iter().enumerate() {
+            assert_eq!(
+                frame_positions(&db, 1, i as u32),
+                text_positions(text),
+                "after delete {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn abort_mid_ingest_leaves_no_half_written_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let (text, frames) = tiny_copies(4);
+        let db = ConCorpus::open(dir.path()).unwrap();
+        testing_fail_after_groups(1);
+        let err = db.append_trajectory_str(1, &text, "abort").unwrap_err();
+        assert!(err.to_string().contains("injected"), "{err}");
+        assert!(db.list_frame_keys().unwrap().is_empty());
+        assert!(raw_soa(&db, 0).is_none());
+        db.append_trajectory_str(1, &text, "kept").unwrap();
+        let (more, _) = tiny_copies(2);
+        let mut prepared = ConCorpus::prepare_trajectory_str_at(1, &more, 4, true).unwrap();
+        {
+            let mut session = IngestSession::begin(&db).unwrap();
+            session.put_prepared(&mut prepared).unwrap();
+        }
+        drop(db);
+        let db = reopen(dir.path());
+        assert_eq!(db.list_frame_keys().unwrap().len(), 4);
+        let head = raw_soa(&db, 0).unwrap();
+        assert_eq!(
+            crate::cooked_soa::unpack_cooked_group(&head).unwrap().len(),
+            4
+        );
+        for (i, text) in frames.iter().enumerate() {
+            assert_eq!(frame_positions(&db, 1, i as u32), text_positions(text));
+        }
+    }
+
+    #[test]
+    fn db15_per_frame_blobs_stay_readable_when_db16_appends() {
+        let dir = tempfile::tempdir().unwrap();
+        let (text, frames) = tiny_copies(4);
+        {
+            let db = ConCorpus::open(dir.path()).unwrap();
+            db.append_trajectory_str(1, &text, "grouped").unwrap();
+            let head = raw_soa(&db, 0).unwrap();
+            let group = crate::cooked_soa::unpack_cooked_group(&head).unwrap();
+            let members: Vec<Vec<u8>> = (0..group.len())
+                .map(|slot| group.member(slot).unwrap().to_vec())
+                .collect();
+            db.with_write(0, |wtxn| {
+                for (slot, member) in members.iter().enumerate() {
+                    let fk = FrameKey {
+                        traj_id: 1,
+                        frame_idx: slot as u32,
+                    }
+                    .to_bytes();
+                    db.frames_soa.put(wtxn, &fk[..], member)?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        }
+        let db = reopen(dir.path());
+        let stored = raw_soa(&db, 0).unwrap();
+        assert!(
+            !crate::cooked_soa::is_cooked_group(&stored),
+            "db15 stored one RCSO value per frame"
+        );
+        for (i, text) in frames.iter().enumerate() {
+            assert_eq!(frame_positions(&db, 1, i as u32), text_positions(text));
+        }
+        let (more, extra) = tiny_copies(2);
+        db.extend_trajectory_str(1, &more, "append").unwrap();
+        drop(db);
+        let db = reopen(dir.path());
+        assert!(!crate::cooked_soa::is_cooked_group(
+            &raw_soa(&db, 0).unwrap()
+        ));
+        let mut expected = frames;
+        expected.extend(extra);
+        for (i, text) in expected.iter().enumerate() {
+            assert_eq!(
+                frame_positions(&db, 1, i as u32),
+                text_positions(text),
+                "db15 frame {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn corpus_just_over_32mib_reads_groups_without_the_open_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let (text, frames) = tiny_copies(4);
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_str(1, &text, "small").unwrap();
+        let pad = vec![0u8; 32 * 1024 * 1024 + 1];
+        db.with_write(pad.len(), |wtxn| {
+            let fk = FrameKey {
+                traj_id: 9,
+                frame_idx: 0,
+            }
+            .to_bytes();
+            db.frames_soa.put(wtxn, &fk[..], &pad)?;
+            Ok(())
+        })
+        .unwrap();
+        let len = std::fs::metadata(dir.path().join("data.mdb"))
+            .unwrap()
+            .len();
+        assert!(len > 32 * 1024 * 1024, "data.mdb is {len} bytes");
+        drop(db);
+        let db = reopen(dir.path());
+        let warm = unsafe { &*db.cooked_cache.get() };
+        assert!(warm.frames.is_empty());
+        for (i, text) in frames.iter().enumerate() {
+            assert_eq!(
+                frame_positions(&db, 1, i as u32),
+                text_positions(text),
+                "lazy frame {i}"
+            );
+            assert!(db
+                .has_valid_cooked_soa(FrameKey {
+                    traj_id: 1,
+                    frame_idx: i as u32,
+                })
+                .unwrap());
+        }
     }
 
     #[test]
