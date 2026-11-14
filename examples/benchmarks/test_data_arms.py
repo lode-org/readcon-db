@@ -6,9 +6,13 @@ import shutil
 from collections import Counter
 from pathlib import Path
 
-import fair_ase_protocol as fair
 import numpy as np
 import pytest
+
+pytest.importorskip("readcon")
+pytest.importorskip("readcon_db")
+
+import fair_ase_protocol as fair
 from readcon_db import ConCorpus
 
 # Species counts of the pinned NhaA gro, in the order the arm writes.
