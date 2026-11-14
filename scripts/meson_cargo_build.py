@@ -53,10 +53,19 @@ def main(argv: list[str]) -> int:
     rustc_args = ["--crate-type=cdylib", "--crate-type=staticlib"]
     if sys.platform.startswith("linux"):
         rustc_args.append(f"-Clink-arg=-Wl,-soname,{shared_name}")
+        # See readcon-core. Rust TLS and mimalloc's C TLS are both
+        # initial-exec unless asked otherwise, and either one sets
+        # DF_STATIC_TLS.
+        rustc_args.append("-Ztls-model=global-dynamic")
     elif sys.platform == "darwin":
         rustc_args.append(f"-Clink-arg=-Wl,-install_name,@rpath/{shared_name}")
     cmd.extend(["--", *rustc_args])
     env = os.environ.copy()
+    if sys.platform.startswith("linux"):
+        env["RUSTC_BOOTSTRAP"] = "1"
+        cflags = env.get("CFLAGS", "")
+        if "-ftls-model=global-dynamic" not in cflags:
+            env["CFLAGS"] = (cflags + " -ftls-model=global-dynamic").strip()
     subprocess.check_call(cmd, cwd=src_root, env=env)
     built = Path(target_dir) / profile
     shutil.copy2(built / shared_name, out_shared)
