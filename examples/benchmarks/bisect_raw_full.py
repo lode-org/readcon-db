@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -84,6 +85,16 @@ def write_record(dest: Path, steps: list[dict], commit: str, tree: str) -> None:
     (dest / "RESULTS.md").write_text("\n".join(lines))
 
 
+def corpus_ready(dest: Path, sha: str) -> bool:
+    """A corpus is reused only when the commit that wrote it is ``sha``."""
+    stamp = dest.parent / "corpus.commit"
+    return (
+        (dest / "data.mdb").is_file()
+        and stamp.is_file()
+        and stamp.read_text().strip() == sha
+    )
+
+
 def _sha(label: str) -> str:
     return dict(MEASURED)[label]
 
@@ -130,12 +141,14 @@ def main() -> None:
     tree = drv.fair.git_out("rev-parse", f"{commit}^{{tree}}")
     wheels = {label: drv.ensure_tree_prefix(label, sha) for label, sha in MEASURED}
     root = REPO / "build" / "bisect-raw"
-    for label, _sha_text in MEASURED:
+    for label, sha in MEASURED:
         # Corpus write lives with the wheel that will read it.
         dest = root / label / "corpus"
-        if (dest / "data.mdb").is_file():
+        if corpus_ready(dest, sha):
             continue
-        dest.mkdir(parents=True, exist_ok=True)
+        if dest.exists():
+            shutil.rmtree(dest)
+        dest.mkdir(parents=True)
         code = r"""
 import sys
 sys.path.insert(0, sys.argv[2])
@@ -151,6 +164,7 @@ print(db.append_trajectory_str(1, text, source="traj.con"))
             [str(dest), str(REPO / "examples" / "benchmarks")],
             "raw",
         )
+        (dest.parent / "corpus.commit").write_text(sha + "\n")
     for _ in range(18):
         load = os.getloadavg()[0]
         if load <= 0.5:
