@@ -3,7 +3,7 @@ use std::sync::Arc;
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyIndexError, PyRuntimeError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
+use pyo3::types::{PyDict, PyList, PyTuple};
 
 use crate::canonical::AtomOrderHit;
 use crate::corpus::ConCorpus;
@@ -1243,12 +1243,25 @@ fn buffer_array<'py>(
     let np = py
         .import("numpy")
         .map_err(|_| PyRuntimeError::new_err("read_columns requires numpy"))?;
-    let buf = PyBytes::new(py, raw);
+    let shape_t = PyTuple::new(py, shape.iter().copied())?;
     let kwargs = PyDict::new(py);
     kwargs.set_item("dtype", dtype)?;
-    let flat = np.call_method("frombuffer", (buf,), Some(&kwargs))?;
-    let shape_t = PyTuple::new(py, shape.iter().copied())?;
-    flat.call_method1("reshape", (shape_t,))
+    // `empty` is writable. `frombuffer` on a `bytes` object is not, and the
+    // shuffled path already returns writable arrays.
+    let arr = np.call_method("empty", (shape_t,), Some(&kwargs))?;
+    let view = PyBuffer::<u8>::get(&arr)?;
+    let dst = view
+        .as_mut_slice(py)
+        .ok_or_else(|| PyRuntimeError::new_err("numpy array is not a writable byte buffer"))?;
+    if dst.len() != raw.len() {
+        return Err(PyRuntimeError::new_err(
+            "numpy array does not match the column length",
+        ));
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(raw.as_ptr(), dst.as_ptr() as *mut u8, raw.len());
+    }
+    Ok(arr)
 }
 
 fn numpy_empty<'py>(py: Python<'py>, shape: &[usize]) -> PyResult<Bound<'py, PyAny>> {
