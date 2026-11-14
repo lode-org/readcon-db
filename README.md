@@ -123,8 +123,11 @@ Both stores get the same records: symbols, positions, cell,
 periodicity, masses, forces, energy, and `frame_index`. ASE is SQLite
 with `journal_mode=DELETE` and `synchronous=FULL`. Each insert is one
 transaction and one commit fsync, on a database file created for that
-sample. One warmup is discarded. Six serial samples alternate the two
-tools. The summary is the Hyndman–Fan type-7 median and IQR. Every
+sample. One warmup is discarded.
+<!-- fair-docs:begin readme-n -->
+Twelve serial samples alternate the two tools.
+<!-- fair-docs:end readme-n -->
+The summary is the Hyndman–Fan type-7 median and IQR. Every
 stored field is checked by its float64 bytes; a mismatch aborts the run.
 
 `open` reads a corpus under 1 MiB with one `pread` before it returns.
@@ -137,9 +140,10 @@ close does not call `gc.collect()`. Full reads and the selected frame
 copy the same materialized columns. The single-frame query is
 `frame_index` of the middle frame. The rules are in `FAIRNESS.md`.
 
-The published CPC log (`paper/cpc/logs/db.log`, 40 frames of 8 Cu, no
-warmup) is readcon-db 4.67 ms and ASE 72.3 ms (IQR 37.7 ms). ASE
-committed and fsynced once per frame.
+<!-- fair-docs:begin readme-cpc -->
+The published CPC samples in `published_db_v2` (40 frames of 8 Cu, n=6) are readcon-db 4.6724e-03 s and ASE 7.2318e-02 s (IQR 3.7693e-02 s).
+<!-- fair-docs:end readme-cpc -->
+ASE committed and fsynced once per frame.
 
 <!-- fair-docs:begin readme-fair -->
 Type-7 medians from `examples/benchmarks/results/fair-db29/campaign.json`, in seconds. n is the stored sample count.

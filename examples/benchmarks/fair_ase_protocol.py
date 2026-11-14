@@ -27,8 +27,8 @@ before it maps the environment, so selected cold is the query after
 that prefetch. cold-open does the same advice outside the clock and
 times the open plus the query, for both tools. The harness does not
 read the file. A sample that stays resident is labeled and left out of
-the cold median. n = 6, serial, type-7 median and IQR. Every stored
-field is checked; a mismatch aborts.
+the cold median. n is at least 12, serial, type-7 median and IQR.
+Every stored field is checked; a mismatch aborts.
 """
 
 from __future__ import annotations

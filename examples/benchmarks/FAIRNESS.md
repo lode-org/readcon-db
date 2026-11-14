@@ -43,9 +43,7 @@ Both tools get the same cache treatment on every row.
 then the query. The open stays outside the clock. The harness does
 not read the file. readcon-db's open reads a corpus under 1 MiB with
 one `pread` before it returns, so the query is a read after that
-prefetch. `readahead(2)` instead of the `pread` left the full read
-waiting on the rest of the fault on some samples and not on others
-(about 0.50 ms against 0.76 ms). ASE gets the same harness steps:
+prefetch. ASE gets the same harness steps:
 drop, then sqlite's own open, then the query.
 
 `warm-after-open`: the same drop, then that tool's own open, then the
@@ -57,8 +55,7 @@ ASE's open is sqlite's open. The harness does not read the file.
 Automatic collection is off for every read row, for both tools, and
 restored when the row returns. A collection between iterations is
 outside the clock, but it returns heap pages and the next open faults
-them. On the full-read cold-open row that fault stepped the means
-from about 0.33 ms to 0.43 ms halfway through the twelve.
+them.
 
 `warm`: one warmup read on the already open store, then the query.
 Both tools.
@@ -66,10 +63,13 @@ Both tools.
 No cpufreq governor is exposed here, and the TSC is constant. For a
 corpus under 1 MiB the query also `posix_fadvise(WILLNEED)`s the
 database file and `madvise(WILLNEED)`s a cooked value of at least
-4 KiB before copying it. The db8 frames-100 selected
-cold row, open outside the clock, is n=12, median 1.56e-4 s, p90 of
-those means 1.95e-4 s, IQR/median 0.251. Its per-call distribution is
-`bench/db8/noise.json`. The db9 rows are `bench/db9/`.
+4 KiB before copying it.
+
+<!-- fair-docs:begin fairness-db8 -->
+The db8 frames-100 selected cold row, open outside the clock, is n=12, median 1.6688e-04 s, p90 of those means 1.7715e-04 s, IQR/median 0.10058. Its per-call distribution is `bench/db8/noise.json`.
+<!-- fair-docs:end fairness-db8 -->
+
+The db9 rows are `bench/db9/`.
 
 Cooked frames are stored in frame-key order, one RCSO blob per frame.
 A 100-frame `tiny_cuh2` trajectory is 27,900 cooked bytes: 9 pages,
@@ -79,12 +79,11 @@ be 7 pages. `frames-100` is about 180 KiB. `open` reads a corpus under
 cold is the query after that prefetch and `cold-open` is the
 end-to-end number. The per-frame blobs stay.
 
-The CPC ingest is `db_v2.py` in readcon-core, recorded in
-`paper/cpc/logs/db.log` (2026-11-05, 40 frames of 8 Cu). readcon-db's
-six samples have type-7 median **0.00467 s**. ASE's six samples are
-0.0542, 0.0592, 0.0634, 0.0812, 0.1035, 0.1035 s. Type-7 median
-**0.0723 s**, Q1 0.0602 s, Q3 0.0979 s, IQR **0.0377 s**. That is the
-wide band around 0.07–0.10 s. No sample was dropped to shrink it.
+The CPC ingest is `db_v2.py` in readcon-core.
+
+<!-- fair-docs:begin fairness-cpc -->
+The published CPC samples in `results/fair-db29/campaign.json` (`published_db_v2`, 40 frames of 8 Cu) give readcon-db a type-7 median **4.6724e-03 s** (n=6). ASE's 6 samples are 1.0352e-01 s, 8.1242e-02 s, 1.0350e-01 s, 5.9195e-02 s, 6.3394e-02 s, 5.4239e-02 s. Type-7 median **7.2318e-02 s**, Q1 6.0244e-02 s, Q3 9.7937e-02 s, IQR **3.7693e-02 s**.
+<!-- fair-docs:end fairness-cpc -->
 
 ## What the published timer actually did
 
@@ -100,7 +99,7 @@ Both sides stored a different row.
   each commit fsyncs. Forty frames are forty fsyncs. The backend,
   journal mode, and synchronous level were not recorded.
 * Nothing was read back. The check is the frame count.
-* There is no discarded warmup. The six repeats alternate which tool
+* There is no discarded warmup. The repeats alternate which tool
   runs first. ASE's samples are slower when they follow readcon-db's
   commit, and the CON file stays in the page cache after the first
   parse while each sqlite file is a new inode only after the child
@@ -133,10 +132,14 @@ changes the harness.
   used. A fresh file would still be in the page cache after the write,
   and it would not be a colder read than the advice. A warm read is
   the next read on the open store. One warmup is discarded for every
-  series. Samples are serial, the two tools alternate, n = 6. The
-  summary is the type-7 median and IQR (NumPy `percentile` method
-  `linear`). The timed close does not call `gc.collect()`: that walk
-  was an 8 ms floor on every cold readcon-db sample.
+  series.
+
+<!-- fair-docs:begin fairness-n -->
+Samples are serial, the two tools alternate, n = 12.
+<!-- fair-docs:end fairness-n -->
+
+* The summary is the type-7 median and IQR (NumPy `percentile` method
+  `linear`). The timed close does not call `gc.collect()`.
 * After every insert, and inside every read, each stored field is
   compared by its float64 bytes. A mismatch aborts the run. Raw lines
   are `results/fair-db29/campaign.log`.
@@ -151,30 +154,23 @@ fixed-flag, and force rows are checked for field count and float syntax,
 and the declared atom counts are checked, without building a per-atom
 object. A long row block is scanned on several threads. Force magnitudes
 still reduce to `fmax` with the same fast-float kernel as a frame parse,
-and the bytes stored are still that span (zstd when it shrinks). On this
-host the million-atom prepare was about 0.41 s when it built one atom
-per site and about 0.15 s from the span, of which zstd was about 0.08 s
-and the commit about 0.01 s. The fair insert of that frame is the
-10^6-atom row in the generated table below. Texts at or below 512 KiB
+and the bytes stored are still that span (zstd when it shrinks). The fair
+insert of that frame is the 10^6-atom row in the generated table below.
+Texts at or below 512 KiB
 keep the full parse, and a malformed frame is rejected at both sizes.
 
 Cold readcon-db times include a readonly open. The previous cold rows
 were slower than ASE on the small corpora because the timed close
 called `gc.collect()` and the open was writable, so it could commit.
-The read itself was not that slow: a one-frame open plus column read
-is a few hundred microseconds once the collection is outside the
-timer. The default map stays 8 MiB, and reopening an existing corpus
-still maps at least twice `data.mdb`.
+The read itself is the open plus the column read once the collection
+is outside the timer. The default map stays 8 MiB, and reopening an
+existing corpus still maps at least twice `data.mdb`.
 
 ## Warm full read
 
 The old full read copied the span out of LMDB, decompressed it into a
 Python `str`, then `readcon.read_con_string` built a frame object and
-the check walked one Python atom per site. On the 54,086,580-byte
-million-atom CON that split was about 0.055 s to materialise the text
-and 0.148 s to build the frame, and the atom walk took the measured
-warm read to 1.22 s. readcon-core's own serial parse of a CON this size
-is about 0.039 s, so the gap was the copy and the per-atom objects.
+the check walked one Python atom per site.
 
 `ConCorpus.read_columns` parses the stored bytes in place when they are
 uncompressed, decompresses a zstd group once, and fills column buffers
