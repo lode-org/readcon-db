@@ -130,6 +130,12 @@ impl Columns {
         self.symbols[i].clear();
     }
 
+    /// Replace the content hash of one slot. The slot must already be occupied.
+    #[cfg(test)]
+    pub fn set_hash(&mut self, frame_idx: u32, hash: [u8; 16]) {
+        self.hash[frame_idx as usize] = hash;
+    }
+
     /// Replace the slot for `frame_idx`.
     pub fn set(&mut self, frame_idx: u32, slot: ScalarSlot) {
         let i = frame_idx as usize;

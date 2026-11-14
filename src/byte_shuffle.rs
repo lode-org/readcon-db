@@ -124,14 +124,22 @@ unsafe fn unshuffle8_avx2(src: &[u8], n: usize, dst: &mut [u8]) {
 #[target_feature(enable = "avx2")]
 unsafe fn load_unshuffle_block(src: *const u8, n: usize, i: usize) -> [__m256i; 8] {
     let plane = |b: usize| _mm256_loadu_si256(src.add(b * n + i) as *const __m256i);
-    let a0 = plane(0);
-    let a1 = plane(1);
-    let a2 = plane(2);
-    let a3 = plane(3);
-    let a4 = plane(4);
-    let a5 = plane(5);
-    let a6 = plane(6);
-    let a7 = plane(7);
+    transpose_32([
+        plane(0),
+        plane(1),
+        plane(2),
+        plane(3),
+        plane(4),
+        plane(5),
+        plane(6),
+        plane(7),
+    ])
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn transpose_32(planes: [__m256i; 8]) -> [__m256i; 8] {
+    let [a0, a1, a2, a3, a4, a5, a6, a7] = planes;
 
     let b0 = _mm256_unpacklo_epi8(a0, a1);
     let b1 = _mm256_unpackhi_epi8(a0, a1);
@@ -208,31 +216,64 @@ pub fn unshuffle_interleave(x: &[u8], y: &[u8], z: &[u8], dst: &mut [f64]) {
     unshuffle_bytes(z, unsafe {
         std::slice::from_raw_parts_mut(zs.as_mut_ptr().cast::<u8>(), n * 8)
     });
-    interleave_xyz_scalar(&xs, &ys, &zs, dst);
+    interleave_xyz(&xs, &ys, &zs, dst);
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn prefetch_planes(src: *const u8, n: usize, i: usize) {
+    if i + 64 <= n {
+        for b in 0..8 {
+            _mm_prefetch(src.add(b * n + i) as *const i8, _MM_HINT_T0);
+        }
+    }
+}
+
+/// Write 32 restored `x, y, z` values. The blocks are the transpose output,
+/// four `f64`s each, already in element order. Nothing is staged in a
+/// second column buffer.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn interleave_blocks(dst: *mut f64, x: [__m256i; 8], y: [__m256i; 8], z: [__m256i; 8]) {
+    for g in 0..8 {
+        let xp = _mm256_castsi256_pd(x[g]);
+        let yp = _mm256_castsi256_pd(y[g]);
+        let zp = _mm256_castsi256_pd(z[g]);
+        let out = dst.add(g * 12);
+        store_xyz_pair(
+            out,
+            _mm256_castpd256_pd128(xp),
+            _mm256_castpd256_pd128(yp),
+            _mm256_castpd256_pd128(zp),
+        );
+        store_xyz_pair(
+            out.add(6),
+            _mm256_extractf128_pd(xp, 1),
+            _mm256_extractf128_pd(yp, 1),
+            _mm256_extractf128_pd(zp, 1),
+        );
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn unshuffle_interleave_avx2(x: &[u8], y: &[u8], z: &[u8], dst: &mut [f64]) {
+    unshuffle_interleave_from(x, y, z, dst, 0);
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn unshuffle_interleave_from(x: &[u8], y: &[u8], z: &[u8], dst: &mut [f64], start: usize) {
     let n = x.len() / 8;
-    let mut i = 0usize;
+    let mut i = start;
     while i + 32 <= n {
-        let mut xb = [0f64; 32];
-        let mut yb = [0f64; 32];
-        let mut zb = [0f64; 32];
-        store_unshuffle_block(
-            xb.as_mut_ptr().cast::<u8>(),
-            load_unshuffle_block(x.as_ptr(), n, i),
-        );
-        store_unshuffle_block(
-            yb.as_mut_ptr().cast::<u8>(),
-            load_unshuffle_block(y.as_ptr(), n, i),
-        );
-        store_unshuffle_block(
-            zb.as_mut_ptr().cast::<u8>(),
-            load_unshuffle_block(z.as_ptr(), n, i),
-        );
-        interleave_xyz_avx2(&xb, &yb, &zb, &mut dst[i * 3..(i + 32) * 3]);
+        prefetch_planes(x.as_ptr(), n, i + 64);
+        prefetch_planes(y.as_ptr(), n, i + 64);
+        prefetch_planes(z.as_ptr(), n, i + 64);
+        let xb = load_unshuffle_block(x.as_ptr(), n, i);
+        let yb = load_unshuffle_block(y.as_ptr(), n, i);
+        let zb = load_unshuffle_block(z.as_ptr(), n, i);
+        interleave_blocks(dst.as_mut_ptr().add(i * 3), xb, yb, zb);
         i += 32;
     }
     if i < n {
@@ -359,7 +400,7 @@ mod tests {
 
     #[test]
     fn interleave_matches_the_scalar_order() {
-        for n in [0usize, 1, 2, 3, 4, 5, 31, 32, 33, 16383, 16385] {
+        for n in [0usize, 1, 2, 3, 4, 5, 31, 32, 33, 64, 96, 128, 16383, 16385] {
             let x: Vec<f64> = (0..n).map(|i| i as f64 + 0.25).collect();
             let y: Vec<f64> = (0..n).map(|i| i as f64 + 10.5).collect();
             let z: Vec<f64> = (0..n).map(|i| i as f64 - 3.5).collect();

@@ -296,26 +296,62 @@ fn decode_soa_columns(blobs: &[Vec<u8>]) -> Result<MaterializedRead> {
     } else {
         Vec::new()
     };
+    let metas = decode_shuffled_soa_into(blobs, &mut positions, &mut forces, &mut velocities)?;
+    Ok(assemble_soa_read(
+        natoms, has_f, has_v, positions, forces, velocities, metas,
+    ))
+}
+
+/// Decode component-major frames into caller buffers.
+///
+/// The coordinate slices are the destination: a full read can be the NumPy
+/// array, so the unshuffle is not copied out of a second column buffer.
+/// `None` is not returned here; the caller has already checked the tag.
+pub(crate) fn decode_shuffled_soa_into(
+    blobs: &[Vec<u8>],
+    positions: &mut [f64],
+    forces: &mut [f64],
+    velocities: &mut [f64],
+) -> Result<Vec<crate::cooked_soa::MaterializedFrame>> {
+    if blobs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let natoms = u32::from_le_bytes(blobs[0][2..6].try_into().unwrap());
+    let flags = u32::from_le_bytes(blobs[0][6..10].try_into().unwrap());
+    let stride = natoms as usize * 3;
+    let n = blobs.len();
+    let has_f = flags & crate::cooked_soa::FLAG_FORCES != 0;
+    let has_v = flags & crate::cooked_soa::FLAG_VELOCITIES != 0;
+    if positions.len() != n * stride
+        || forces.len() != if has_f { n * stride } else { 0 }
+        || velocities.len() != if has_v { n * stride } else { 0 }
+    {
+        return Err(Error::Message(
+            "shuffled frames in one read do not share a layout".into(),
+        ));
+    }
+    for blob in blobs {
+        let same_n = u32::from_le_bytes(blob[2..6].try_into().unwrap()) == natoms;
+        let same_f = u32::from_le_bytes(blob[6..10].try_into().unwrap()) == flags;
+        if !same_n || !same_f || blob.len() < 2 || blob[0] != 0xFB || blob[1] != 0x04 {
+            return Err(Error::Message(
+                "shuffled frames in one read do not share a layout".into(),
+            ));
+        }
+    }
     let mut metas: Vec<Option<Result<crate::cooked_soa::MaterializedFrame>>> =
         (0..n).map(|_| None).collect();
     let threads = ingest_thread_count().min(n).max(1);
     if threads == 1 {
         fill_soa_chunk(
-            blobs,
-            &mut positions,
-            &mut forces,
-            &mut velocities,
-            &mut metas,
-            stride,
-            has_f,
-            has_v,
+            blobs, positions, forces, velocities, &mut metas, stride, has_f, has_v,
         );
     } else {
         let chunk = n.div_ceil(threads);
         std::thread::scope(|scope| {
-            let mut pos_rest = &mut positions[..];
-            let mut force_rest = &mut forces[..];
-            let mut vel_rest = &mut velocities[..];
+            let mut pos_rest = positions;
+            let mut force_rest = forces;
+            let mut vel_rest = velocities;
             let mut meta_rest = &mut metas[..];
             let mut blob_rest = blobs;
             while !blob_rest.is_empty() {
@@ -347,8 +383,30 @@ fn decode_soa_columns(blobs: &[Vec<u8>]) -> Result<MaterializedRead> {
             }
         });
     }
+    take_soa_metas(metas)
+}
+
+fn take_soa_metas(
+    metas: Vec<Option<Result<crate::cooked_soa::MaterializedFrame>>>,
+) -> Result<Vec<crate::cooked_soa::MaterializedFrame>> {
+    let mut out = Vec::with_capacity(metas.len());
+    for slot in metas {
+        out.push(slot.unwrap()?);
+    }
+    Ok(out)
+}
+
+fn assemble_soa_read(
+    natoms: u32,
+    has_f: bool,
+    has_v: bool,
+    positions: Vec<f64>,
+    forces: Vec<f64>,
+    velocities: Vec<f64>,
+    metas: Vec<crate::cooked_soa::MaterializedFrame>,
+) -> MaterializedRead {
     let mut out = MaterializedRead {
-        n_frames: n as u32,
+        n_frames: metas.len() as u32,
         n_atoms: natoms,
         positions,
         forces,
@@ -357,8 +415,7 @@ fn decode_soa_columns(blobs: &[Vec<u8>]) -> Result<MaterializedRead> {
         velocities_set: has_v,
         ..MaterializedRead::default()
     };
-    for slot in metas {
-        let cooked = slot.unwrap()?;
+    for cooked in metas {
         out.masses.extend(cooked.masses);
         out.numbers.extend(cooked.numbers);
         out.constraints.extend(cooked.constraints);
@@ -371,7 +428,7 @@ fn decode_soa_columns(blobs: &[Vec<u8>]) -> Result<MaterializedRead> {
         out.pbc_set.push(cooked.pbc_set);
         out.symbol_runs.push(cooked.symbol_runs);
     }
-    Ok(out)
+    out
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3764,6 +3821,52 @@ impl ConCorpus {
         Ok(Some(blob.to_vec()))
     }
 
+    /// Component-major shuffled blobs for one span, copied out of the read
+    /// transaction. `None` when any frame is raw, grouped, or a different tag,
+    /// so the caller keeps the path that parses those bytes.
+    #[cfg(feature = "python")]
+    pub(crate) fn copy_shuffled_soa_blobs(
+        &self,
+        traj_id: TrajId,
+        span: Option<(u32, u32)>,
+    ) -> Result<Option<Vec<Vec<u8>>>> {
+        let rtxn = self.read_txn()?;
+        let prefix = traj_id.to_be_bytes();
+        let mut keys = Vec::new();
+        let mut iter = self.frames.prefix_iter(&rtxn, &prefix[..])?;
+        for item in iter.by_ref() {
+            let (k, _) = item?;
+            if let Some(fk) = FrameKey::from_bytes(k) {
+                if fk.traj_id != traj_id {
+                    continue;
+                }
+                if let Some((lo, hi)) = span {
+                    if fk.frame_idx < lo || fk.frame_idx > hi {
+                        continue;
+                    }
+                }
+                keys.push(fk);
+            }
+        }
+        drop(iter);
+        if keys.is_empty() {
+            return Ok(None);
+        }
+        keys.sort_unstable();
+        let mut blobs = Vec::with_capacity(keys.len());
+        for key in keys {
+            let fk_b = key.to_bytes();
+            let Some(blob) = self.frames_soa.get(&rtxn, &fk_b[..])? else {
+                return Ok(None);
+            };
+            if blob.len() < 2 || blob[0] != 0xFB || blob[1] != 0x04 {
+                return Ok(None);
+            }
+            blobs.push(blob.to_vec());
+        }
+        Ok(Some(blobs))
+    }
+
     fn shuffled_frame(
         &self,
         rtxn: &heed::RoTxn<'_>,
@@ -4210,19 +4313,29 @@ impl ConCorpus {
     /// xxHash3-128 of the stored CON text, computed before compression.
     pub fn frame_hash(&self, key: FrameKey) -> Result<ContentHash> {
         let rtxn = self.read_txn()?;
+        self.content_hash_in_txn(&rtxn, key)
+    }
+
+    /// Live content hash for one frame.
+    ///
+    /// `9dcc9ce` stopped writing `hash_by_frame`. The hash now lives in the
+    /// trajectory's scalar columns. A file from before that commit still has
+    /// the per-frame row, and that row wins when it is present. Otherwise the
+    /// column blob is the stored hash. A missing blob is the CON text.
+    fn content_hash_in_txn(&self, rtxn: &heed::RoTxn<'_>, key: FrameKey) -> Result<ContentHash> {
         let fk_b = key.to_bytes();
-        if let Some(b) = self.hash_by_frame.get(&rtxn, &fk_b[..])? {
+        if let Some(b) = self.hash_by_frame.get(rtxn, &fk_b[..])? {
             return ContentHash::from_bytes(b).ok_or_else(|| Error::Message("bad hash".into()));
         }
         if let Some(db) = self.idx_cols {
             let tid = key.traj_id.to_be_bytes();
-            if let Some(blob) = db.get(&rtxn, &tid[..])? {
+            if let Some(blob) = db.get(rtxn, &tid[..])? {
                 if let Some(hash) = crate::idx_cols::stored_hash(blob, key.frame_idx)? {
                     return Ok(ContentHash(hash));
                 }
             }
         }
-        let text = self.get_frame_text_txn(&rtxn, key)?;
+        let text = self.get_frame_text_txn(rtxn, key)?;
         Ok(hash_frame_bytes(text.as_bytes()))
     }
 
@@ -5310,14 +5423,12 @@ impl ConCorpus {
                         crate::canonical::CANONICAL_IDENTITY_VERSION
                     )));
                 }
-                match self.hash_by_frame.get(&rtxn, k)? {
-                    Some(live) if live == content => {}
-                    _ => {
-                        return Err(Error::Message(format!(
-                            "canonical identity index is stale for traj {} frame {}; run index-canonical",
-                            fk.traj_id, fk.frame_idx
-                        )));
-                    }
+                let live = self.content_hash_in_txn(&rtxn, fk)?.to_bytes();
+                if live != content {
+                    return Err(Error::Message(format!(
+                        "canonical identity index is stale for traj {} frame {}; run index-canonical",
+                        fk.traj_id, fk.frame_idx
+                    )));
                 }
             }
         }
@@ -8139,5 +8250,83 @@ x
         assert!(path.join("data.mdb").is_file());
         let db = reopen(&path);
         assert!(db.traj_meta(1).unwrap().is_some());
+    }
+
+    fn hash_table_entries(db: &ConCorpus, name: &str) -> u64 {
+        db.table_usage()
+            .unwrap()
+            .into_iter()
+            .find(|row| row.name == name)
+            .unwrap()
+            .entries
+    }
+
+    /// `9dcc9ce` stopped writing `hash_by_frame`. The canonical stale check
+    /// reads the column blob instead, and still honors a legacy row.
+    /// `migrate_scalar_indexes` backfills the blob for a file that only has
+    /// the old table.
+    #[test]
+    fn canonical_check_uses_column_hash_and_migrate_backfills_it() {
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_str(1, &text, "tiny_cuh2.con").unwrap();
+        let key = FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        assert_eq!(hash_table_entries(&db, "hash_by_frame"), 0);
+        assert_eq!(db.index_canonical_identity().unwrap(), 1);
+        assert_eq!(db.find_by_atom_order_text(&text).unwrap().len(), 1);
+
+        let hash = db.frame_hash(key).unwrap().to_bytes();
+        db.with_write(0, |wtxn| {
+            let fk = key.to_bytes();
+            db.hash_by_frame.put(wtxn, &fk[..], &hash[..])?;
+            let tid = key.traj_id.to_be_bytes();
+            db.idx_cols.unwrap().delete(wtxn, &tid[..])?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(hash_table_entries(&db, "idx_cols"), 0);
+        assert_eq!(db.find_by_atom_order_text(&text).unwrap().len(), 1);
+
+        db.with_write(0, |wtxn| {
+            let fk = key.to_bytes();
+            db.hash_by_frame.put(wtxn, &fk[..], &[0u8; 16][..])?;
+            Ok(())
+        })
+        .unwrap();
+        let stale = db.find_by_atom_order_text(&text).unwrap_err();
+        assert!(stale.to_string().contains("stale"), "{stale}");
+        assert!(stale.to_string().contains("index-canonical"), "{stale}");
+
+        db.with_write(0, |wtxn| {
+            let fk = key.to_bytes();
+            db.hash_by_frame.put(wtxn, &fk[..], &hash[..])?;
+            Ok(())
+        })
+        .unwrap();
+        db.migrate_scalar_indexes().unwrap();
+        assert_eq!(hash_table_entries(&db, "hash_by_frame"), 0);
+        assert_eq!(hash_table_entries(&db, "idx_cols"), 1);
+        assert_eq!(db.frame_hash(key).unwrap().to_bytes(), hash);
+        assert_eq!(db.find_by_atom_order_text(&text).unwrap().len(), 1);
+
+        db.with_write(0, |wtxn| {
+            let tid = key.traj_id.to_be_bytes();
+            let blob = db.idx_cols.unwrap().get(wtxn, &tid[..])?.unwrap().to_vec();
+            let mut cols = crate::idx_cols::decode(&blob)?;
+            cols.set_hash(0, [0xab; 16]);
+            db.idx_cols.unwrap().put(wtxn, &tid[..], &cols.encode()?)?;
+            Ok(())
+        })
+        .unwrap();
+        let rewritten = db.find_by_atom_order_text(&text).unwrap_err();
+        assert!(rewritten.to_string().contains("stale"), "{rewritten}");
+        assert!(
+            rewritten.to_string().contains("index-canonical"),
+            "{rewritten}"
+        );
     }
 }

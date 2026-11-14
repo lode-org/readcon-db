@@ -833,6 +833,10 @@ impl PyConCorpus {
             if let Some(done) = self.read_shuffled_into_numpy(py, traj_id, frame_idx)? {
                 return Ok(done);
             }
+        } else if let Some(done) =
+            self.read_shuffled_span_into_numpy(py, traj_id, index_min, index_max)?
+        {
+            return Ok(done);
         }
         let mut block = py
             .detach(|| {
@@ -925,6 +929,146 @@ impl PyConCorpus {
         }
         out.set_item("symbol_runs", runs)?;
         Ok(out.unbind())
+    }
+
+    /// Several component-major frames, unshuffled into NumPy arrays allocated
+    /// up front. `None` when any frame is raw or an older tag.
+    fn read_shuffled_span_into_numpy(
+        &self,
+        py: Python<'_>,
+        traj_id: u64,
+        index_min: Option<u32>,
+        index_max: Option<u32>,
+    ) -> PyResult<Option<Py<PyDict>>> {
+        let span = match (index_min, index_max) {
+            (None, None) => None,
+            (lo, hi) => Some((lo.unwrap_or(0), hi.unwrap_or(u32::MAX))),
+        };
+        let blobs = py
+            .detach(|| self.inner.copy_shuffled_soa_blobs(traj_id, span))
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let Some(blobs) = blobs else {
+            return Ok(None);
+        };
+        let Some((natoms, has_f, has_v)) = crate::cooked_soa::shuffled_column_layout(&blobs[0])
+        else {
+            return Ok(None);
+        };
+        let n_frames = blobs.len();
+        let n = natoms as usize;
+        let pos_arr = numpy_empty(py, &[n_frames, n, 3])?;
+        let force_arr = if has_f {
+            Some(numpy_empty(py, &[n_frames, n, 3])?)
+        } else {
+            None
+        };
+        let vel_arr = if has_v {
+            Some(numpy_empty(py, &[n_frames, n, 3])?)
+        } else {
+            None
+        };
+        let pos_buf = PyBuffer::<f64>::get(&pos_arr)?;
+        let force_buf = force_arr.as_ref().map(PyBuffer::<f64>::get).transpose()?;
+        let vel_buf = vel_arr.as_ref().map(PyBuffer::<f64>::get).transpose()?;
+        let writable = |buf: &PyBuffer<f64>| -> PyResult<(*mut f64, usize)> {
+            let slice = buf.as_mut_slice(py).ok_or_else(|| {
+                PyRuntimeError::new_err("numpy array is not a writable float64 buffer")
+            })?;
+            Ok((slice.as_ptr() as *mut f64, slice.len()))
+        };
+        let (pos_ptr, pos_len) = writable(&pos_buf)?;
+        let force_ptr = force_buf.as_ref().map(|buf| writable(buf)).transpose()?;
+        let vel_ptr = vel_buf.as_ref().map(|buf| writable(buf)).transpose()?;
+        let pos_buf_ptr = (pos_ptr as usize, pos_len);
+        let force_buf_ptr = force_ptr.map(|(ptr, len)| (ptr as usize, len));
+        let vel_buf_ptr = vel_ptr.map(|(ptr, len)| (ptr as usize, len));
+        let metas = py
+            .detach(move || unsafe {
+                let pos = std::slice::from_raw_parts_mut(pos_buf_ptr.0 as *mut f64, pos_buf_ptr.1);
+                let mut bare_f = [];
+                let mut bare_v = [];
+                let forces = match force_buf_ptr {
+                    Some((addr, len)) => std::slice::from_raw_parts_mut(addr as *mut f64, len),
+                    None => &mut bare_f[..],
+                };
+                let velocities = match vel_buf_ptr {
+                    Some((addr, len)) => std::slice::from_raw_parts_mut(addr as *mut f64, len),
+                    None => &mut bare_v[..],
+                };
+                crate::corpus::decode_shuffled_soa_into(&blobs, pos, forces, velocities)
+            })
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        drop(pos_buf);
+        drop(force_buf);
+        drop(vel_buf);
+        let mut masses = Vec::new();
+        let mut numbers = Vec::new();
+        let mut constraints = Vec::new();
+        let mut cells = Vec::new();
+        let mut energy = Vec::new();
+        let mut energy_set = Vec::new();
+        let mut frame_index = Vec::new();
+        let mut frame_index_set = Vec::new();
+        let mut pbc = Vec::new();
+        let mut pbc_set = Vec::new();
+        let mut symbol_runs = Vec::new();
+        let mut velocities_set = true;
+        for meta in &metas {
+            masses.extend_from_slice(&meta.masses);
+            numbers.extend_from_slice(&meta.numbers);
+            constraints.extend_from_slice(&meta.constraints);
+            cells.extend_from_slice(&meta.cell);
+            energy.push(meta.energy);
+            energy_set.push(meta.energy_set);
+            frame_index.push(meta.frame_index);
+            frame_index_set.push(meta.frame_index_set);
+            pbc.extend_from_slice(&meta.pbc);
+            pbc_set.push(meta.pbc_set);
+            symbol_runs.push(meta.symbol_runs.clone());
+            velocities_set &= meta.velocities_set;
+        }
+        let out = PyDict::new(py);
+        out.set_item("n_frames", n_frames)?;
+        out.set_item("n_atoms", n)?;
+        out.set_item("positions", pos_arr)?;
+        if let Some(forces) = force_arr {
+            out.set_item("forces", forces)?;
+        } else {
+            out.set_item("forces", py.None())?;
+        }
+        if let Some(velocities) = vel_arr {
+            out.set_item("velocities", velocities)?;
+        } else {
+            out.set_item("velocities", numpy_zeros(py, &[n_frames, n, 3])?)?;
+        }
+        out.set_item("velocities_set", velocities_set)?;
+        out.set_item("masses", f64_array(py, &masses, &[n_frames, n])?)?;
+        out.set_item("numbers", u32_array(py, &numbers, &[n_frames, n])?)?;
+        out.set_item(
+            "constraints",
+            u8_array(py, &constraints, &[n_frames, n, 3])?,
+        )?;
+        out.set_item("cell", f64_array(py, &cells, &[n_frames, 3, 3])?)?;
+        out.set_item("energy", f64_array(py, &energy, &[n_frames])?)?;
+        out.set_item("energy_set", PyList::new(py, energy_set)?)?;
+        out.set_item("frame_index", f64_array(py, &frame_index, &[n_frames])?)?;
+        out.set_item("frame_index_set", PyList::new(py, frame_index_set)?)?;
+        let pbc_list = PyList::empty(py);
+        for flag in pbc.chunks(3) {
+            pbc_list.append(PyTuple::new(py, flag.iter().copied())?)?;
+        }
+        out.set_item("pbc", pbc_list)?;
+        out.set_item("pbc_set", PyList::new(py, pbc_set)?)?;
+        let runs = PyList::empty(py);
+        for frame in &symbol_runs {
+            let one = PyList::empty(py);
+            for (sym, count) in frame {
+                one.append((sym.as_str(), *count))?;
+            }
+            runs.append(one)?;
+        }
+        out.set_item("symbol_runs", runs)?;
+        Ok(Some(out.unbind()))
     }
 
     /// One shuffled frame, unshuffled into NumPy arrays allocated up front.
