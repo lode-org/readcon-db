@@ -1,0 +1,89 @@
+{
+  "commit": "67dc0235955e6c0f50a8e814d4d489fbb387ec65",
+  "tree": "99addc975a22943f44aa024dc4b718d6d5052579",
+  "host": {
+    "commit": "67dc0235955e6c0f50a8e814d4d489fbb387ec65",
+    "tree": "99addc975a22943f44aa024dc4b718d6d5052579",
+    "hostname": "host",
+    "cpu": "Intel(R) Xeon(R) Processor",
+    "ncpu": 8,
+    "n": 30,
+    "source": "examples/benchmarks/raw_full_bisect.py"
+  },
+  "intervals_include_one": true,
+  "steps": [
+    {
+      "left": "aedcbda4",
+      "right": "750b197",
+      "threads": "unset",
+      "n": 30,
+      "paired_median": 0.9908,
+      "ci95": [
+        0.9366,
+        1.2785
+      ],
+      "right_faster": 16
+    },
+    {
+      "left": "aedcbda4",
+      "right": "750b197",
+      "threads": "1",
+      "n": 30,
+      "paired_median": 1.1169,
+      "ci95": [
+        0.989,
+        1.2829
+      ],
+      "right_faster": 11
+    },
+    {
+      "left": "750b197",
+      "right": "d671c32",
+      "threads": "unset",
+      "n": 30,
+      "paired_median": 1.0365,
+      "ci95": [
+        0.9612,
+        1.1562
+      ],
+      "right_faster": 13
+    },
+    {
+      "left": "750b197",
+      "right": "d671c32",
+      "threads": "1",
+      "n": 30,
+      "paired_median": 1.0023,
+      "ci95": [
+        0.9044,
+        1.1178
+      ],
+      "right_faster": 15
+    },
+    {
+      "left": "d671c32",
+      "right": "20a5f64",
+      "threads": "unset",
+      "n": 30,
+      "paired_median": 1.0089,
+      "ci95": [
+        0.9674,
+        1.0537
+      ],
+      "right_faster": 14
+    },
+    {
+      "left": "d671c32",
+      "right": "20a5f64",
+      "threads": "1",
+      "n": 30,
+      "paired_median": 0.9957,
+      "ci95": [
+        0.8876,
+        1.2003
+      ],
+      "right_faster": 15
+    }
+  ],
+  "note": "Paired raw full-read bisect, n=30, 95% CI.\n\nWarm full reads of the lattice arm (100000 atoms, 64 frames), raw codec,\nsame settings on both sides of each step. The median is type-7. The CI is\na 10000-draw percentile bootstrap of the paired ratio at one sample index,\nnumpy Generator seed 0.\n\nEvery interval includes 1. The largest point estimate is aedcbda4 to\n750b197 at one thread, 1.1169 [0.9890, 1.2829], and the newer side was\nfaster on 11 of 30 pairs. The two later steps sit on 1.0. The raw full-read\npath is unchanged from 20a5f64e to this tip (the later source edits are a\nshuffle-decode test and a cfg on the shuffled blob copy), so the same\nintervals cover HEAD. There is no commit whose removal would put the\nslowdown outside the noise.\n"
+}

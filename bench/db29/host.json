@@ -1,0 +1,18 @@
+{
+  "commit": "67dc0235955e6c0f50a8e814d4d489fbb387ec65",
+  "tree": "99addc975a22943f44aa024dc4b718d6d5052579",
+  "hostname": "host",
+  "system": "Linux",
+  "release": "6.12.113+",
+  "machine": "x86_64",
+  "cpu": "Intel(R) Xeon(R) Processor",
+  "ncpu": 8,
+  "loadavg": [
+    1.18310546875,
+    1.115234375,
+    1.08984375
+  ],
+  "n": 12,
+  "serial": true,
+  "settings": "warm full, range, selected; cold bulk full_read; threads unset and 1; raw vs shuffle-zstd; set_cooked_access warm-point vs cold-bulk"
+}

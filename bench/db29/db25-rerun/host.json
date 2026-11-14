@@ -1,0 +1,10 @@
+{
+  "commit": "67dc0235955e6c0f50a8e814d4d489fbb387ec65",
+  "tree": "99addc975a22943f44aa024dc4b718d6d5052579",
+  "hostname": "host",
+  "system": "Linux",
+  "release": "6.12.113+",
+  "machine": "x86_64",
+  "cpu": "Intel(R) Xeon(R) Processor",
+  "ncpu": 8
+}
