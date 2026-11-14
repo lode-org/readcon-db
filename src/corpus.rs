@@ -1,11 +1,11 @@
-use std::cell::UnsafeCell;
+use std::cell::{Cell, RefCell, UnsafeCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Cursor;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use heed::types::{Bytes, Str, Unit};
 use heed::{CompactionOption, Database, Env, EnvFlags, EnvOpenOptions, RwTxn};
@@ -544,6 +544,71 @@ pub struct ConCorpus {
     idx_canon: Option<Database<Bytes, Unit>>,
     /// Optional FrameKey → version ‖ canonical hash ‖ content hash.
     canon_by_frame: Option<Database<Bytes, Bytes>>,
+    /// Deletes a directory this open created when the first user write is rejected.
+    /// Last field so the LMDB env is dropped before the directory is removed.
+    fresh_dir: FreshDir,
+}
+
+/// A corpus directory created by this open. A rejected write, with nothing
+/// committed after that, removes it when the environment has closed.
+struct FreshDir {
+    path: PathBuf,
+    fresh: AtomicBool,
+    kept: AtomicBool,
+    remove: AtomicBool,
+}
+
+impl FreshDir {
+    fn idle() -> Self {
+        Self {
+            path: PathBuf::new(),
+            fresh: AtomicBool::new(false),
+            kept: AtomicBool::new(false),
+            remove: AtomicBool::new(false),
+        }
+    }
+
+    fn created(path: PathBuf) -> Self {
+        Self {
+            path,
+            fresh: AtomicBool::new(true),
+            kept: AtomicBool::new(false),
+            remove: AtomicBool::new(false),
+        }
+    }
+
+    fn note<T>(&self, result: &Result<T>) {
+        if result.is_ok() {
+            self.kept.store(true, Ordering::Relaxed);
+            self.remove.store(false, Ordering::Relaxed);
+            return;
+        }
+        if self.fresh.load(Ordering::Relaxed) && !self.kept.load(Ordering::Relaxed) {
+            self.remove.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+impl Drop for FreshDir {
+    fn drop(&mut self) {
+        if self.remove.load(Ordering::Relaxed) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+/// Removes a directory created by `open` when that open does not succeed.
+struct AbortDir {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl Drop for AbortDir {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
 }
 
 // SAFETY: `cooked_cache` is written only in `finish_open`, before this value
@@ -579,17 +644,62 @@ fn ingest_chunk_bounds(n: usize) -> Vec<(usize, usize)> {
 /// read it. Uncontended in production.
 static COOKED_CODEC_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+thread_local! {
+    static CODEC_GUARD: RefCell<Option<MutexGuard<'static, ()>>> = const { RefCell::new(None) };
+    static CODEC_DEPTH: Cell<u32> = const { Cell::new(0) };
+    /// `Some` for the rest of one write transaction. The hot path loads this
+    /// and does not read the environment again.
+    static CODEC_RAW: Cell<Option<bool>> = const { Cell::new(None) };
+}
+
+struct CodecToken;
+
+impl Drop for CodecToken {
+    fn drop(&mut self) {
+        CODEC_DEPTH.with(|depth| {
+            let next = depth.get().saturating_sub(1);
+            depth.set(next);
+            if next == 0 {
+                CODEC_GUARD.with(|guard| *guard.borrow_mut() = None);
+            }
+        });
+    }
+}
+
+fn lock_codec() -> CodecToken {
+    CODEC_DEPTH.with(|depth| {
+        if depth.get() == 0 {
+            let guard = COOKED_CODEC_LOCK
+                .lock()
+                .unwrap_or_else(|err| err.into_inner());
+            CODEC_GUARD.with(|slot| *slot.borrow_mut() = Some(guard));
+        }
+        depth.set(depth.get() + 1);
+    });
+    CodecToken
+}
+
+struct ClearCodec;
+
+impl Drop for ClearCodec {
+    fn drop(&mut self) {
+        CODEC_RAW.with(|slot| slot.set(None));
+    }
+}
+
 /// A cooked frame of at least 64 KiB is shuffled when the compressed bytes
 /// are smaller. Cooked groups are never rewritten.
 ///
 /// `READCON_DB_COOKED_CODEC` is case-sensitive. Unset uses this default.
 /// The only accepted values are exactly `raw` and `shuffle-zstd`.
+/// A write reads the variable once, before the first put.
 fn wants_shuffle(cooked: &[u8]) -> Result<bool> {
-    let forced_raw = {
-        let _guard = COOKED_CODEC_LOCK
-            .lock()
-            .unwrap_or_else(|err| err.into_inner());
-        cooked_codec_forces_raw()?
+    let forced_raw = match CODEC_RAW.with(|slot| slot.get()) {
+        Some(raw) => raw,
+        None => {
+            let _token = lock_codec();
+            cooked_codec_forces_raw()?
+        }
     };
     if forced_raw || cooked.len() < 64 * 1024 || crate::cooked_soa::is_cooked_group(cooked) {
         return Ok(false);
@@ -993,7 +1103,24 @@ impl ConCorpus {
     /// Run `body` in one write transaction. On `MDB_MAP_FULL`, abort it, grow
     /// the map, and retry the whole transaction up to [`MAP_GROW_RETRIES`]
     /// times. `input_bytes` is the payload size used when choosing the new map.
+    ///
+    /// The cooked-codec variable is read once here, before `body` puts frames.
     pub(crate) fn with_write<T>(
+        &self,
+        input_bytes: usize,
+        body: impl FnMut(&mut RwTxn<'_>) -> Result<T>,
+    ) -> Result<T> {
+        let _token = lock_codec();
+        let forced_raw = cooked_codec_forces_raw()?;
+        drop(_token);
+        CODEC_RAW.with(|slot| slot.set(Some(forced_raw)));
+        let _clear = ClearCodec;
+        let result = self.write_txn(input_bytes, body);
+        self.fresh_dir.note(&result);
+        result
+    }
+
+    fn write_txn<T>(
         &self,
         input_bytes: usize,
         mut body: impl FnMut(&mut RwTxn<'_>) -> Result<T>,
@@ -1105,9 +1232,15 @@ impl ConCorpus {
                     path.display()
                 )));
             }
-        } else {
+        }
+        let created = !readonly && !path.exists();
+        if !readonly {
             fs::create_dir_all(&path)?;
         }
+        let mut abort_dir = AbortDir {
+            path: path.clone(),
+            armed: created,
+        };
         if warm {
             // Before the environment map. A pread after `Env::open` still
             // leaves the meta-page fault and the named-database walks racing
@@ -1186,6 +1319,7 @@ impl ConCorpus {
             let canon_by_frame = env.open_database(&rtxn, Some("canon_by_frame"))?;
             // heed: uncommitted open_database txn → EINVAL on the next RoTxn.
             rtxn.commit()?;
+            abort_dir.armed = false;
             return finish_open(Self {
                 path,
                 env,
@@ -1213,6 +1347,7 @@ impl ConCorpus {
                 topo_by_frame,
                 idx_canon,
                 canon_by_frame,
+                fresh_dir: FreshDir::idle(),
             });
         }
 
@@ -1240,7 +1375,12 @@ impl ConCorpus {
         let canon_by_frame = env.create_database(&mut wtxn, Some("canon_by_frame"))?;
         wtxn.commit()?;
 
-        finish_open(Self {
+        let fresh_dir = if created {
+            FreshDir::created(path.clone())
+        } else {
+            FreshDir::idle()
+        };
+        let opened = finish_open(Self {
             path,
             env,
             txn_gate: RwLock::new(()),
@@ -1267,7 +1407,12 @@ impl ConCorpus {
             topo_by_frame: Some(topo_by_frame),
             idx_canon: Some(idx_canon),
             canon_by_frame: Some(canon_by_frame),
-        })
+            fresh_dir,
+        });
+        if opened.is_ok() {
+            abort_dir.armed = false;
+        }
+        opened
     }
 
     /// RCSO bytes for a unidirectional broadcast on the caller communicator
@@ -2406,23 +2551,29 @@ impl ConCorpus {
         source: impl Into<String>,
     ) -> Result<u32> {
         let source = source.into();
-        Self::species_counts_fit(file_contents)?;
-        // A long trajectory is put one zstd group at a time inside one write
-        // transaction. The group's cooked blob and decompressed text are
-        // dropped after the put. LMDB's dirty pages are the copy that
-        // survives until the single commit. A failed insert aborts that
-        // transaction, so no frame is visible.
-        if file_contents.len() > 512 * 1024 {
-            let spans = readcon_core::index_proj::frame_byte_spans_skip(file_contents)
-                .map_err(|e| Error::Parse(e.to_string()))?;
-            if spans.len() > crate::frame_codec::GROUP_LEN as usize {
-                return self.append_spans_batched(traj_id, file_contents, &spans, source);
+        let result = (|| {
+            Self::species_counts_fit(file_contents)?;
+            // A long trajectory is put one zstd group at a time inside one write
+            // transaction. The group's cooked blob and decompressed text are
+            // dropped after the put. LMDB's dirty pages are the copy that
+            // survives until the single commit. A failed insert aborts that
+            // transaction, so no frame is visible.
+            if file_contents.len() > 512 * 1024 {
+                let spans = readcon_core::index_proj::frame_byte_spans_skip(file_contents)
+                    .map_err(|e| Error::Parse(e.to_string()))?;
+                if spans.len() > crate::frame_codec::GROUP_LEN as usize {
+                    return self.append_spans_batched(traj_id, file_contents, &spans, source);
+                }
             }
-        }
-        // Prepare outside exclusive write section (parallel writers can parse concurrently).
-        let mut prepared =
-            Self::prepare_trajectory_str(traj_id, file_contents, self.compress_on())?;
-        self.commit_prepared(traj_id, &mut prepared, source, false, self.compress_on())
+            // Prepare outside exclusive write section (parallel writers can parse concurrently).
+            let mut prepared =
+                Self::prepare_trajectory_str(traj_id, file_contents, self.compress_on())?;
+            self.commit_prepared(traj_id, &mut prepared, source, false, self.compress_on())
+        })();
+        // A parse error never reaches the write transaction. Note it here so
+        // a directory this open created does not stay behind.
+        self.fresh_dir.note(&result);
+        result
     }
 
     /// Cook and put [`GROUP_LEN`] frames, drop that scratch, then the next group.
@@ -7933,5 +8084,60 @@ x
         assert!(!cooked_codec_forces_raw().unwrap());
         std::env::remove_var("READCON_DB_COOKED_CODEC");
         assert!(!cooked_codec_forces_raw().unwrap());
+    }
+
+    #[test]
+    fn rejected_write_removes_a_fresh_corpus_directory() {
+        let parent = tempfile::tempdir().unwrap();
+        let path = parent.path().join("corpus");
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let _token = lock_codec();
+        let _restore = CodecVar;
+        std::env::set_var("READCON_DB_COOKED_CODEC", "Shuffle-Zstd");
+        let err = {
+            let db = ConCorpus::open(&path).unwrap();
+            assert!(path.join("data.mdb").is_file());
+            db.append_trajectory_str(1, &text, "tiny_cuh2.con")
+                .unwrap_err()
+        };
+        assert!(err.to_string().contains("shuffle-zstd"), "{err}");
+        assert!(!path.exists(), "rejected write left {}", path.display());
+    }
+
+    #[test]
+    fn rejected_write_keeps_a_directory_that_already_existed() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let _token = lock_codec();
+        let _restore = CodecVar;
+        std::env::set_var("READCON_DB_COOKED_CODEC", "nope");
+        let err = {
+            let db = ConCorpus::open(dir.path()).unwrap();
+            db.append_trajectory_str(1, &text, "tiny_cuh2.con")
+                .unwrap_err()
+        };
+        assert!(err.to_string().contains("shuffle-zstd"), "{err}");
+        assert!(dir.path().join("data.mdb").is_file());
+        assert!(dir.path().join("lock.mdb").is_file());
+    }
+
+    #[test]
+    fn rejected_write_keeps_a_corpus_that_already_committed() {
+        let parent = tempfile::tempdir().unwrap();
+        let path = parent.path().join("corpus");
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let db = ConCorpus::open(&path).unwrap();
+        db.append_trajectory_str(1, &text, "tiny_cuh2.con").unwrap();
+        {
+            let _token = lock_codec();
+            let _restore = CodecVar;
+            std::env::set_var("READCON_DB_COOKED_CODEC", "nope");
+            let err = db.append_trajectory_str(2, &text, "again.con").unwrap_err();
+            assert!(err.to_string().contains("shuffle-zstd"), "{err}");
+        }
+        drop(db);
+        assert!(path.join("data.mdb").is_file());
+        let db = reopen(&path);
+        assert!(db.traj_meta(1).unwrap().is_some());
     }
 }

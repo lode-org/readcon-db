@@ -618,7 +618,11 @@ pub fn shuffled_column_layout(stored: &[u8]) -> Option<(u32, bool, bool)> {
 
 struct ZstdScratch {
     dec: zstd::bulk::Decompressor<'static>,
+    /// One decompressed column, reused by the interleaved db20 tag.
     buf: Vec<u8>,
+    /// Decompressed `x`, `y`, and `z` for one component-major block.
+    /// Reused across frames so a full read does not allocate per column.
+    cols: [Vec<u8>; 3],
 }
 
 fn with_zstd_scratch<T>(body: impl FnOnce(&mut ZstdScratch) -> Result<T>) -> Result<T> {
@@ -633,6 +637,7 @@ fn with_zstd_scratch<T>(body: impl FnOnce(&mut ZstdScratch) -> Result<T>) -> Res
             *guard = Some(ZstdScratch {
                 dec,
                 buf: Vec::new(),
+                cols: [Vec::new(), Vec::new(), Vec::new()],
             });
         }
         body(guard.as_mut().unwrap())
@@ -1062,26 +1067,42 @@ fn decode_lanes(stored: &[u8], parts: &[(usize, usize)], dst: &mut [f64]) -> Res
     if dst.is_empty() {
         return Ok(());
     }
-    let dst_len = dst.len() / 3;
-    for (lane, (start, clen)) in parts.iter().enumerate() {
-        let comp = &stored[*start..*start + *clen];
-        with_zstd_scratch(|scratch| {
-            scratch.buf.clear();
-            scratch.buf.reserve(dst_len * 8);
-            scratch
+    if parts.len() != 3 || dst.len() % 3 != 0 {
+        return Err(Error::Message(
+            "shuffled cooked frame length mismatch".into(),
+        ));
+    }
+    let n = dst.len() / 3;
+    // Decompress and unshuffle every lane before the destination is written.
+    // A short or extra part then leaves the caller's buffer unchanged.
+    with_zstd_scratch(|scratch| {
+        for lane in 0..3 {
+            let (start, clen) = parts[lane];
+            let comp = &stored[start..start + clen];
+            let mut col = std::mem::take(&mut scratch.cols[lane]);
+            col.clear();
+            col.reserve(n * 8);
+            let decoded = scratch
                 .dec
-                .decompress_to_buffer(comp, &mut scratch.buf)
-                .map_err(|e| Error::Message(format!("zstd decode: {e}")))?;
-            if scratch.buf.len() != dst_len * 8 {
+                .decompress_to_buffer(comp, &mut col)
+                .map_err(|e| Error::Message(format!("zstd decode: {e}")));
+            let len = col.len();
+            scratch.cols[lane] = col;
+            decoded?;
+            if len != n * 8 {
                 return Err(Error::Message(
                     "shuffled cooked frame has the wrong length".into(),
                 ));
             }
-            scatter_unshuffled(&scratch.buf, dst, lane);
-            Ok(())
-        })?;
-    }
-    Ok(())
+        }
+        crate::byte_shuffle::unshuffle_interleave(
+            &scratch.cols[0],
+            &scratch.cols[1],
+            &scratch.cols[2],
+            dst,
+        );
+        Ok(())
+    })
 }
 
 #[allow(clippy::uninit_vec)]
@@ -1090,37 +1111,6 @@ fn uninit_f64(n: usize) -> Vec<f64> {
     // SAFETY: `f64` has no destructor. Every slot is written before a read.
     unsafe { out.set_len(n) };
     out
-}
-
-fn scatter_unshuffled(shuffled: &[u8], dst: &mut [f64], lane: usize) {
-    let n = dst.len() / 3;
-    debug_assert_eq!(shuffled.len(), n * 8);
-    debug_assert!(lane < 3);
-    let mut i = 0usize;
-    while i + 32 <= n {
-        let mut tile = [0u8; 32 * 8];
-        for b in 0..8 {
-            tile[b * 32..b * 32 + 32].copy_from_slice(&shuffled[b * n + i..b * n + i + 32]);
-        }
-        let mut vals = [0f64; 32];
-        unshuffle_into(&tile, &mut vals);
-        for k in 0..32 {
-            dst[(i + k) * 3 + lane] = vals[k];
-        }
-        i += 32;
-    }
-    if i < n {
-        let rest = n - i;
-        let mut tile = [0u8; 31 * 8];
-        for b in 0..8 {
-            tile[b * rest..b * rest + rest].copy_from_slice(&shuffled[b * n + i..b * n + i + rest]);
-        }
-        let mut vals = [0f64; 31];
-        unshuffle_into(&tile[..rest * 8], &mut vals[..rest]);
-        for k in 0..rest {
-            dst[(i + k) * 3 + lane] = vals[k];
-        }
-    }
 }
 
 fn unshuffle_into(src: &[u8], dst: &mut [f64]) {
@@ -1656,6 +1646,79 @@ mod tests {
         );
     }
 
+    /// Length of each component, then the offset of the trailing RCSO header.
+    fn component_parts(packed: &[u8]) -> (Vec<(usize, usize)>, usize) {
+        let ncomp = u32::from_le_bytes(packed[10..14].try_into().unwrap()) as usize;
+        let mut off = 14usize;
+        let mut parts = Vec::with_capacity(ncomp);
+        for _ in 0..ncomp {
+            let clen = u32::from_le_bytes(packed[off..off + 4].try_into().unwrap()) as usize;
+            off += 4;
+            parts.push((off, clen));
+            off += clen;
+        }
+        (parts, off)
+    }
+
+    /// Shorten one component's payload and its length prefix. Later parts stay aligned.
+    fn cut_component(packed: &[u8], part: usize, new_len: usize) -> Vec<u8> {
+        let (parts, _) = component_parts(packed);
+        let (start, clen) = parts[part];
+        assert!(new_len < clen, "cut {new_len} is not shorter than {clen}");
+        let mut out = Vec::with_capacity(packed.len() - (clen - new_len));
+        out.extend_from_slice(&packed[..start - 4]);
+        out.extend_from_slice(&(new_len as u32).to_le_bytes());
+        out.extend_from_slice(&packed[start..start + new_len]);
+        out.extend_from_slice(&packed[start + clen..]);
+        out
+    }
+
+    /// One more length-prefixed part, and a component count that includes it.
+    fn extra_component(packed: &[u8]) -> Vec<u8> {
+        let (_, header) = component_parts(packed);
+        let mut out = packed.to_vec();
+        let ncomp = u32::from_le_bytes(out[10..14].try_into().unwrap());
+        out[10..14].copy_from_slice(&(ncomp + 1).to_le_bytes());
+        let dummy = [0u8, 1, 2, 3];
+        let mut inserted = Vec::with_capacity(4 + dummy.len());
+        inserted.extend_from_slice(&(dummy.len() as u32).to_le_bytes());
+        inserted.extend_from_slice(&dummy);
+        out.splice(header..header, inserted);
+        out
+    }
+
+    #[test]
+    fn cut_and_extra_components_around_the_threshold_are_rejected() {
+        for n in [16_383usize, 16_385] {
+            let raw = synthetic_rcso(n, true);
+            let packed = compress_shuffled(&raw).unwrap();
+            let n3 = n * 3;
+            let mut positions = vec![0f64; n3];
+            let mut forces = vec![0f64; n3];
+            let mut vels = vec![7f64; n3];
+            for cut in [3usize, 8] {
+                let bad = cut_component(&packed, 0, cut);
+                let err = decompress_shuffled_into(&bad, &mut positions, &mut forces, &mut vels)
+                    .unwrap_err();
+                assert!(
+                    err.to_string().contains("zstd") || err.to_string().contains("length"),
+                    "n={n} cut={cut}: {err}"
+                );
+                assert!(decompress_shuffled(&bad).is_err(), "n={n} cut={cut}");
+                assert_eq!(positions[0], 0.0, "n={n} cut={cut} wrote positions");
+                assert_eq!(forces[0], 0.0, "n={n} cut={cut} wrote forces");
+                assert_eq!(vels[0], 7.0, "n={n} cut={cut} wrote velocities");
+            }
+            let extra = extra_component(&packed);
+            let err = decompress_shuffled_into(&extra, &mut positions, &mut forces, &mut vels)
+                .unwrap_err();
+            assert!(err.to_string().contains("length mismatch"), "n={n}: {err}");
+            assert!(decompress_shuffled(&extra).is_err(), "n={n} extra");
+            assert_eq!(positions[0], 0.0, "n={n} extra wrote positions");
+            assert_eq!(vels[0], 7.0, "n={n} extra wrote velocities");
+        }
+    }
+
     #[test]
     #[ignore]
     fn record_db23_levers() {
@@ -1782,6 +1845,166 @@ mod tests {
             "{{\"scope_two_threads_us\":{scope_us},\"raw_force_bytes\":{},\"high_byte_zstd_bytes\":{high_bytes},\"high_byte_raw_low_bytes\":{},\"high_byte_decode_copy_us\":{high_us},\"rows\":[{}]}}",
             nfor * 8,
             cols.len() * n * 4,
+            rows.join(",")
+        );
+    }
+
+    /// Same rows as [`record_db23_levers`], with the 20 timed rounds kept.
+    /// The mean alone cannot be compared with an IQR from another row.
+    #[test]
+    #[ignore]
+    fn record_db24_levers() {
+        fn type7(samples: &[u128], p: f64) -> f64 {
+            let mut vals = samples.to_vec();
+            vals.sort_unstable();
+            let n = vals.len();
+            if n == 1 {
+                return vals[0] as f64;
+            }
+            let h = (n - 1) as f64 * p;
+            let lo = h.floor() as usize;
+            let hi = h.ceil() as usize;
+            let w = h - lo as f64;
+            vals[lo] as f64 * (1.0 - w) + vals[hi] as f64 * w
+        }
+        fn summarize(samples: &[u128]) -> String {
+            let mean = samples.iter().sum::<u128>() / samples.len() as u128;
+            let iqr = type7(samples, 0.75) - type7(samples, 0.25);
+            let list = samples
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("\"mean_us\":{mean},\"iqr_us\":{iqr},\"samples_us\":[{list}]")
+        }
+        let n = 100_000usize;
+        let raw = synthetic_rcso(n, false);
+        let (_ntot, _flags, npos, nfor, _nvel) = coord_layout(&raw).unwrap();
+        let coords = &raw[HEADER_LEN..HEADER_LEN + (npos + nfor) * 8];
+        let pos = le_f64s(&coords[..npos * 8]);
+        let frc = le_f64s(&coords[npos * 8..]);
+        let mut cols = Vec::new();
+        for src in [&pos, &frc] {
+            for lane in 0..3 {
+                let mut gather = vec![0f64; n];
+                for i in 0..n {
+                    gather[i] = src[i * 3 + lane];
+                }
+                let mut shuffled = vec![0u8; n * 8];
+                crate::byte_shuffle::shuffle_bytes(le_f64_bytes(&gather), &mut shuffled);
+                cols.push(shuffled);
+            }
+        }
+        let sample = |body: &mut dyn FnMut()| -> Vec<u128> {
+            for _ in 0..3 {
+                body();
+            }
+            let mut out = Vec::with_capacity(20);
+            for _ in 0..20 {
+                let t0 = std::time::Instant::now();
+                body();
+                out.push(t0.elapsed().as_micros());
+            }
+            out
+        };
+        let scope = sample(&mut || {
+            std::thread::scope(|scope| {
+                scope.spawn(|| {});
+                scope.spawn(|| {});
+            });
+        });
+        let mut rows = Vec::new();
+        for (level, window) in [(3, 20u32), (3, 12), (1, 12), (-5, 12), (-1, 12)] {
+            let mut compressor = zstd::bulk::Compressor::new(level).unwrap();
+            compressor
+                .set_parameter(zstd::zstd_safe::CParameter::WindowLog(window))
+                .unwrap();
+            compressor
+                .set_parameter(zstd::zstd_safe::CParameter::EnableLongDistanceMatching(
+                    false,
+                ))
+                .unwrap();
+            let mut parts = Vec::new();
+            let mut bytes = 0usize;
+            for col in &cols {
+                let part = compressor.compress(col).unwrap();
+                bytes += part.len();
+                parts.push(part);
+            }
+            let mut decs: Vec<_> = (0..6)
+                .map(|_| zstd::bulk::Decompressor::new().unwrap())
+                .collect();
+            let mut bufs = vec![vec![0u8; n * 8]; 6];
+            let seq = sample(&mut || {
+                for i in 0..6 {
+                    decs[i]
+                        .decompress_to_buffer(&parts[i], &mut bufs[i])
+                        .unwrap();
+                }
+                std::hint::black_box(bufs[0][0]);
+            });
+            let par = sample(&mut || {
+                std::thread::scope(|scope| {
+                    let (left, right) = parts.split_at(3);
+                    let (buf_l, buf_r) = bufs.split_at_mut(3);
+                    let (dec_l, dec_r) = decs.split_at_mut(3);
+                    scope.spawn(move || {
+                        for i in 0..3 {
+                            dec_l[i]
+                                .decompress_to_buffer(&left[i], &mut buf_l[i])
+                                .unwrap();
+                        }
+                    });
+                    scope.spawn(move || {
+                        for i in 0..3 {
+                            dec_r[i]
+                                .decompress_to_buffer(&right[i], &mut buf_r[i])
+                                .unwrap();
+                        }
+                    });
+                });
+                std::hint::black_box(bufs[0][0]);
+            });
+            rows.push(format!(
+                "{{\"level\":{level},\"window\":{window},\"ldm\":false,\"bytes\":{bytes},\"seq\":{{{}}},\"two_threads\":{{{}}}}}",
+                summarize(&seq),
+                summarize(&par)
+            ));
+        }
+        let mut compressor = zstd::bulk::Compressor::new(3).unwrap();
+        compressor
+            .set_parameter(zstd::zstd_safe::CParameter::WindowLog(12))
+            .unwrap();
+        let mut high_bytes = 0usize;
+        let mut high_parts = Vec::new();
+        for col in &cols {
+            let mut high = vec![0u8; n * 4];
+            high[..n].copy_from_slice(&col[4 * n..5 * n]);
+            high[n..2 * n].copy_from_slice(&col[5 * n..6 * n]);
+            high[2 * n..3 * n].copy_from_slice(&col[6 * n..7 * n]);
+            high[3 * n..].copy_from_slice(&col[7 * n..]);
+            let part = compressor.compress(&high).unwrap();
+            high_bytes += part.len();
+            high_parts.push(part);
+        }
+        let mut dec = zstd::bulk::Decompressor::new().unwrap();
+        let mut hbuf = vec![0u8; n * 4];
+        let low = vec![0u8; n * 4];
+        let mut sink = vec![0u8; n * 8];
+        let high = sample(&mut || {
+            for part in &high_parts {
+                dec.decompress_to_buffer(part, &mut hbuf).unwrap();
+                sink[..n * 4].copy_from_slice(&low);
+                sink[n * 4..].copy_from_slice(&hbuf);
+            }
+            std::hint::black_box(sink[0]);
+        });
+        println!(
+            "{{\"rounds\":20,\"untimed\":3,\"scope_two_threads\":{{{}}},\"raw_force_bytes\":{},\"high_byte_zstd_bytes\":{high_bytes},\"high_byte_raw_low_bytes\":{},\"high_byte_decode_copy\":{{{}}},\"rows\":[{}]}}",
+            summarize(&scope),
+            nfor * 8,
+            cols.len() * n * 4,
+            summarize(&high),
             rows.join(",")
         );
     }

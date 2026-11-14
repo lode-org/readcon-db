@@ -41,6 +41,30 @@ pub fn unshuffle_bytes(src: &[u8], dst: &mut [u8]) {
     unshuffle8_scalar(src, n, dst);
 }
 
+/// Pack three scalar columns into `x, y, z` order.
+///
+/// One streaming pass writes each destination cache line once. Scattering
+/// one lane at a time rewrites that line for `x`, then `y`, then `z`.
+pub fn interleave_xyz(x: &[f64], y: &[f64], z: &[f64], dst: &mut [f64]) {
+    assert_eq!(x.len(), y.len());
+    assert_eq!(y.len(), z.len());
+    assert_eq!(dst.len(), x.len().saturating_mul(3));
+    #[cfg(target_arch = "x86_64")]
+    if x.len() >= 4 && is_x86_feature_detected!("avx2") {
+        unsafe { interleave_xyz_avx2(x, y, z, dst) };
+        return;
+    }
+    interleave_xyz_scalar(x, y, z, dst);
+}
+
+fn interleave_xyz_scalar(x: &[f64], y: &[f64], z: &[f64], dst: &mut [f64]) {
+    for i in 0..x.len() {
+        dst[i * 3] = x[i];
+        dst[i * 3 + 1] = y[i];
+        dst[i * 3 + 2] = z[i];
+    }
+}
+
 fn shuffle8_scalar(src: &[u8], n: usize, dst: &mut [u8]) {
     for i in 0..n {
         for b in 0..8 {
@@ -84,72 +108,153 @@ unsafe fn shuffle8_avx2(src: &[u8], n: usize, dst: &mut [u8]) {
 unsafe fn unshuffle8_avx2(src: &[u8], n: usize, dst: &mut [u8]) {
     let mut i = 0usize;
     while i + 32 <= n {
-        let plane = |b: usize| _mm256_loadu_si256(src.as_ptr().add(b * n + i) as *const __m256i);
-        let a0 = plane(0);
-        let a1 = plane(1);
-        let a2 = plane(2);
-        let a3 = plane(3);
-        let a4 = plane(4);
-        let a5 = plane(5);
-        let a6 = plane(6);
-        let a7 = plane(7);
-
-        let b0 = _mm256_unpacklo_epi8(a0, a1);
-        let b1 = _mm256_unpackhi_epi8(a0, a1);
-        let b2 = _mm256_unpacklo_epi8(a2, a3);
-        let b3 = _mm256_unpackhi_epi8(a2, a3);
-        let b4 = _mm256_unpacklo_epi8(a4, a5);
-        let b5 = _mm256_unpackhi_epi8(a4, a5);
-        let b6 = _mm256_unpacklo_epi8(a6, a7);
-        let b7 = _mm256_unpackhi_epi8(a6, a7);
-
-        let c0 = _mm256_unpacklo_epi16(b0, b2);
-        let c1 = _mm256_unpackhi_epi16(b0, b2);
-        let c2 = _mm256_unpacklo_epi16(b1, b3);
-        let c3 = _mm256_unpackhi_epi16(b1, b3);
-        let c4 = _mm256_unpacklo_epi16(b4, b6);
-        let c5 = _mm256_unpackhi_epi16(b4, b6);
-        let c6 = _mm256_unpacklo_epi16(b5, b7);
-        let c7 = _mm256_unpackhi_epi16(b5, b7);
-
-        let d0 = _mm256_unpacklo_epi32(c0, c4);
-        let d1 = _mm256_unpackhi_epi32(c0, c4);
-        let d2 = _mm256_unpacklo_epi32(c1, c5);
-        let d3 = _mm256_unpackhi_epi32(c1, c5);
-        let d4 = _mm256_unpacklo_epi32(c2, c6);
-        let d5 = _mm256_unpackhi_epi32(c2, c6);
-        let d6 = _mm256_unpacklo_epi32(c3, c7);
-        let d7 = _mm256_unpackhi_epi32(c3, c7);
-
-        // unpack stays inside 128-bit lanes, so each register holds two
-        // elements from the low 16 and two from the high 16. Stitch the
-        // lanes, then store 32 elements in order.
-        let stitch = |lo: __m256i, hi: __m256i| {
-            (
-                _mm256_permute2x128_si256(lo, hi, 0x20),
-                _mm256_permute2x128_si256(lo, hi, 0x31),
-            )
-        };
-        let (e0, e1) = stitch(d0, d1);
-        let (e2, e3) = stitch(d2, d3);
-        let (e4, e5) = stitch(d4, d5);
-        let (e6, e7) = stitch(d6, d7);
-
-        let out = dst.as_mut_ptr().add(i * 8);
-        _mm256_storeu_si256(out as *mut __m256i, e0);
-        _mm256_storeu_si256(out.add(32) as *mut __m256i, e2);
-        _mm256_storeu_si256(out.add(64) as *mut __m256i, e4);
-        _mm256_storeu_si256(out.add(96) as *mut __m256i, e6);
-        _mm256_storeu_si256(out.add(128) as *mut __m256i, e1);
-        _mm256_storeu_si256(out.add(160) as *mut __m256i, e3);
-        _mm256_storeu_si256(out.add(192) as *mut __m256i, e5);
-        _mm256_storeu_si256(out.add(224) as *mut __m256i, e7);
+        let blocks = load_unshuffle_block(src.as_ptr(), n, i);
+        // unpack stays inside 128-bit lanes. The blocks are 32 elements in order.
+        store_unshuffle_block(dst.as_mut_ptr().add(i * 8), blocks);
         i += 32;
     }
     for j in i..n {
         for b in 0..8 {
             dst[j * 8 + b] = src[b * n + j];
         }
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn load_unshuffle_block(src: *const u8, n: usize, i: usize) -> [__m256i; 8] {
+    let plane = |b: usize| _mm256_loadu_si256(src.add(b * n + i) as *const __m256i);
+    let a0 = plane(0);
+    let a1 = plane(1);
+    let a2 = plane(2);
+    let a3 = plane(3);
+    let a4 = plane(4);
+    let a5 = plane(5);
+    let a6 = plane(6);
+    let a7 = plane(7);
+
+    let b0 = _mm256_unpacklo_epi8(a0, a1);
+    let b1 = _mm256_unpackhi_epi8(a0, a1);
+    let b2 = _mm256_unpacklo_epi8(a2, a3);
+    let b3 = _mm256_unpackhi_epi8(a2, a3);
+    let b4 = _mm256_unpacklo_epi8(a4, a5);
+    let b5 = _mm256_unpackhi_epi8(a4, a5);
+    let b6 = _mm256_unpacklo_epi8(a6, a7);
+    let b7 = _mm256_unpackhi_epi8(a6, a7);
+
+    let c0 = _mm256_unpacklo_epi16(b0, b2);
+    let c1 = _mm256_unpackhi_epi16(b0, b2);
+    let c2 = _mm256_unpacklo_epi16(b1, b3);
+    let c3 = _mm256_unpackhi_epi16(b1, b3);
+    let c4 = _mm256_unpacklo_epi16(b4, b6);
+    let c5 = _mm256_unpackhi_epi16(b4, b6);
+    let c6 = _mm256_unpacklo_epi16(b5, b7);
+    let c7 = _mm256_unpackhi_epi16(b5, b7);
+
+    let d0 = _mm256_unpacklo_epi32(c0, c4);
+    let d1 = _mm256_unpackhi_epi32(c0, c4);
+    let d2 = _mm256_unpacklo_epi32(c1, c5);
+    let d3 = _mm256_unpackhi_epi32(c1, c5);
+    let d4 = _mm256_unpacklo_epi32(c2, c6);
+    let d5 = _mm256_unpackhi_epi32(c2, c6);
+    let d6 = _mm256_unpacklo_epi32(c3, c7);
+    let d7 = _mm256_unpackhi_epi32(c3, c7);
+
+    let stitch = |lo: __m256i, hi: __m256i| {
+        (
+            _mm256_permute2x128_si256(lo, hi, 0x20),
+            _mm256_permute2x128_si256(lo, hi, 0x31),
+        )
+    };
+    let (e0, e1) = stitch(d0, d1);
+    let (e2, e3) = stitch(d2, d3);
+    let (e4, e5) = stitch(d4, d5);
+    let (e6, e7) = stitch(d6, d7);
+    [e0, e2, e4, e6, e1, e3, e5, e7]
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn store_unshuffle_block(out: *mut u8, blocks: [__m256i; 8]) {
+    for (k, block) in blocks.iter().enumerate() {
+        _mm256_storeu_si256(out.add(k * 32) as *mut __m256i, *block);
+    }
+}
+
+/// Unshuffle `x`, `y`, and `z` and write `x, y, z` into `dst` in one pass.
+///
+/// A full-column unshuffle followed by a second interleave reads the columns
+/// again. This writes each restored value straight into the caller buffer.
+pub fn unshuffle_interleave(x: &[u8], y: &[u8], z: &[u8], dst: &mut [f64]) {
+    let n = x.len() / 8;
+    assert_eq!(x.len() % 8, 0);
+    assert_eq!(y.len(), x.len());
+    assert_eq!(z.len(), x.len());
+    assert_eq!(dst.len(), n * 3);
+    #[cfg(target_arch = "x86_64")]
+    if n >= 32 && is_x86_feature_detected!("avx2") {
+        unsafe { unshuffle_interleave_avx2(x, y, z, dst) };
+        return;
+    }
+    let mut xs = vec![0f64; n];
+    let mut ys = vec![0f64; n];
+    let mut zs = vec![0f64; n];
+    unshuffle_bytes(x, unsafe {
+        std::slice::from_raw_parts_mut(xs.as_mut_ptr().cast::<u8>(), n * 8)
+    });
+    unshuffle_bytes(y, unsafe {
+        std::slice::from_raw_parts_mut(ys.as_mut_ptr().cast::<u8>(), n * 8)
+    });
+    unshuffle_bytes(z, unsafe {
+        std::slice::from_raw_parts_mut(zs.as_mut_ptr().cast::<u8>(), n * 8)
+    });
+    interleave_xyz_scalar(&xs, &ys, &zs, dst);
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn unshuffle_interleave_avx2(x: &[u8], y: &[u8], z: &[u8], dst: &mut [f64]) {
+    let n = x.len() / 8;
+    let mut i = 0usize;
+    while i + 32 <= n {
+        let mut xb = [0f64; 32];
+        let mut yb = [0f64; 32];
+        let mut zb = [0f64; 32];
+        store_unshuffle_block(
+            xb.as_mut_ptr().cast::<u8>(),
+            load_unshuffle_block(x.as_ptr(), n, i),
+        );
+        store_unshuffle_block(
+            yb.as_mut_ptr().cast::<u8>(),
+            load_unshuffle_block(y.as_ptr(), n, i),
+        );
+        store_unshuffle_block(
+            zb.as_mut_ptr().cast::<u8>(),
+            load_unshuffle_block(z.as_ptr(), n, i),
+        );
+        interleave_xyz_avx2(&xb, &yb, &zb, &mut dst[i * 3..(i + 32) * 3]);
+        i += 32;
+    }
+    if i < n {
+        let rest = n - i;
+        let mut xs = [0f64; 31];
+        let mut ys = [0f64; 31];
+        let mut zs = [0f64; 31];
+        scalar_plane_tail(x, n, i, &mut xs[..rest]);
+        scalar_plane_tail(y, n, i, &mut ys[..rest]);
+        scalar_plane_tail(z, n, i, &mut zs[..rest]);
+        interleave_xyz_scalar(&xs[..rest], &ys[..rest], &zs[..rest], &mut dst[i * 3..]);
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+fn scalar_plane_tail(src: &[u8], n: usize, i: usize, dst: &mut [f64]) {
+    for (k, slot) in dst.iter_mut().enumerate() {
+        let mut bytes = [0u8; 8];
+        for b in 0..8 {
+            bytes[b] = src[b * n + i + k];
+        }
+        *slot = f64::from_le_bytes(bytes);
     }
 }
 
@@ -213,9 +318,78 @@ unsafe fn unshuffle8_neon(src: &[u8], n: usize, dst: &mut [u8]) {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn interleave_xyz_avx2(x: &[f64], y: &[f64], z: &[f64], dst: &mut [f64]) {
+    let n = x.len();
+    let mut i = 0usize;
+    while i + 4 <= n {
+        let xv = _mm256_loadu_pd(x.as_ptr().add(i));
+        let yv = _mm256_loadu_pd(y.as_ptr().add(i));
+        let zv = _mm256_loadu_pd(z.as_ptr().add(i));
+        let x_lo = _mm256_castpd256_pd128(xv);
+        let x_hi = _mm256_extractf128_pd(xv, 1);
+        let y_lo = _mm256_castpd256_pd128(yv);
+        let y_hi = _mm256_extractf128_pd(yv, 1);
+        let z_lo = _mm256_castpd256_pd128(zv);
+        let z_hi = _mm256_extractf128_pd(zv, 1);
+        store_xyz_pair(dst.as_mut_ptr().add(i * 3), x_lo, y_lo, z_lo);
+        store_xyz_pair(dst.as_mut_ptr().add((i + 2) * 3), x_hi, y_hi, z_hi);
+        i += 4;
+    }
+    if i < n {
+        interleave_xyz_scalar(&x[i..], &y[i..], &z[i..], &mut dst[i * 3..]);
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn store_xyz_pair(out: *mut f64, x: __m128d, y: __m128d, z: __m128d) {
+    let xy0 = _mm_unpacklo_pd(x, y);
+    let xy1 = _mm_unpackhi_pd(x, y);
+    _mm_storeu_pd(out, xy0);
+    _mm_storel_pd(out.add(2), z);
+    _mm_storeu_pd(out.add(3), xy1);
+    _mm_storeh_pd(out.add(5), z);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interleave_matches_the_scalar_order() {
+        for n in [0usize, 1, 2, 3, 4, 5, 31, 32, 33, 16383, 16385] {
+            let x: Vec<f64> = (0..n).map(|i| i as f64 + 0.25).collect();
+            let y: Vec<f64> = (0..n).map(|i| i as f64 + 10.5).collect();
+            let z: Vec<f64> = (0..n).map(|i| i as f64 - 3.5).collect();
+            let mut got = vec![0f64; n * 3];
+            let mut expect = vec![0f64; n * 3];
+            interleave_xyz_scalar(&x, &y, &z, &mut expect);
+            interleave_xyz(&x, &y, &z, &mut got);
+            assert_eq!(got, expect, "n={n}");
+            let mut sx = vec![0u8; n * 8];
+            let mut sy = vec![0u8; n * 8];
+            let mut sz = vec![0u8; n * 8];
+            if n > 0 {
+                shuffle_bytes(
+                    unsafe { std::slice::from_raw_parts(x.as_ptr().cast::<u8>(), n * 8) },
+                    &mut sx,
+                );
+                shuffle_bytes(
+                    unsafe { std::slice::from_raw_parts(y.as_ptr().cast::<u8>(), n * 8) },
+                    &mut sy,
+                );
+                shuffle_bytes(
+                    unsafe { std::slice::from_raw_parts(z.as_ptr().cast::<u8>(), n * 8) },
+                    &mut sz,
+                );
+            }
+            let mut fused = vec![0f64; n * 3];
+            unshuffle_interleave(&sx, &sy, &sz, &mut fused);
+            assert_eq!(fused, expect, "fused n={n}");
+        }
+    }
 
     #[test]
     fn scalar_unshuffle_matches_the_bytes() {
