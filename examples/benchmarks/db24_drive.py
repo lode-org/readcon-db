@@ -49,8 +49,15 @@ def bench_disk() -> Path:
 
 
 def site_packages(prefix: Path) -> Path:
-    found = sorted(prefix.glob("lib/python*/site-packages"))
-    found += sorted(prefix.glob("lib/python*/dist-packages"))
+    found = []
+    for pattern in (
+        "lib/python*/site-packages",
+        "lib/python*/dist-packages",
+        "local/lib/python*/site-packages",
+        "local/lib/python*/dist-packages",
+    ):
+        found.extend(prefix.glob(pattern))
+    found = sorted(set(found))
     if not found:
         raise RuntimeError(f"no site-packages under {prefix}")
     return found[0]
@@ -604,6 +611,9 @@ def write_results(record: dict, levers: dict) -> None:
 
 
 def main() -> None:
+    scratch_tmp = REPO / "build" / "tmp"
+    scratch_tmp.mkdir(parents=True, exist_ok=True)
+    os.environ["TMPDIR"] = str(scratch_tmp)
     root = bench_disk()
     BENCH.mkdir(parents=True, exist_ok=True)
     log_path = BENCH / "campaign.log"
