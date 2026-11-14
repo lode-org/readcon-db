@@ -978,7 +978,7 @@ mod compaction_tests {
         let dest = dir.path().join("dest");
         assert_eq!(ShardedConCorpus::drain_to(&node, &dest).unwrap(), 1);
         let joined = dir.path().join("joined");
-        join_drained_roots(&[dest.clone()], &joined).unwrap();
+        join_drained_roots(std::slice::from_ref(&dest), &joined).unwrap();
         let err = join_drained_roots(&[dest], &joined).unwrap_err();
         assert!(
             err.to_string().contains("join-drained dest exists"),

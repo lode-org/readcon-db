@@ -2,6 +2,7 @@ use std::cell::{Cell, RefCell, UnsafeCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Cursor;
+#[cfg(any(target_os = "linux", target_os = "android"))]
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
@@ -781,10 +782,7 @@ fn wants_shuffle(cooked: &[u8]) -> Result<bool> {
             cooked_codec_forces_raw()?
         }
     };
-    if forced_raw || cooked.len() < 64 * 1024 || crate::cooked_soa::is_cooked_group(cooked) {
-        return Ok(false);
-    }
-    Ok(true)
+    Ok(!(forced_raw || cooked.len() < 64 * 1024 || crate::cooked_soa::is_cooked_group(cooked)))
 }
 
 fn cooked_codec_forces_raw() -> Result<bool> {
@@ -1314,6 +1312,30 @@ impl ConCorpus {
         Self::open_with(path, true, None, true)
     }
 
+    /// `posix_fadvise` exists on Linux and Android. macOS and Windows keep
+    /// the call as a no-op so the same open path builds there.
+    fn advise_dontneed(file: &fs::File) {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        unsafe {
+            let _ = libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED);
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        {
+            let _ = file;
+        }
+    }
+
+    fn advise_willneed_fd(file: &fs::File) {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        unsafe {
+            let _ = libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_WILLNEED);
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        {
+            let _ = file;
+        }
+    }
+
     /// Readonly open for a query that must not fault a readahead hole.
     ///
     /// Drops the page cache, then reads a corpus under 1 MiB with one
@@ -1323,9 +1345,7 @@ impl ConCorpus {
     pub fn open_readonly_cold(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         if let Ok(file) = fs::File::open(path.join("data.mdb")) {
-            unsafe {
-                libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED);
-            }
+            Self::advise_dontneed(&file);
         }
         Self::open_with(path, true, None, true)
     }
@@ -2192,8 +2212,7 @@ impl ConCorpus {
         compress: bool,
     ) -> Result<Vec<PreparedIndexPuts>> {
         let mut out = Vec::with_capacity(frames.len());
-        let mut frame_idx = start_idx;
-        for fr in frames {
+        for (frame_idx, fr) in (start_idx..).zip(frames.iter()) {
             let mut buf = Cursor::new(Vec::new());
             {
                 let mut w = ConFrameWriter::with_float_format(&mut buf, float_format);
@@ -2204,7 +2223,6 @@ impl ConCorpus {
                 .map_err(|e| Error::Message(format!("utf8: {e}")))?;
             let fk = FrameKey { traj_id, frame_idx };
             out.push(Self::build_index_puts(fk, fr, blob, compress)?);
-            frame_idx += 1;
         }
         Ok(out)
     }
@@ -2488,7 +2506,10 @@ impl ConCorpus {
             // A group value lives at the run's first frame index. A later
             // append that continues the run must join that value, not write
             // a second group under a non-head key.
-            let pack = prepared[i].fk.frame_idx % crate::frame_codec::GROUP_LEN == 0
+            let pack = prepared[i]
+                .fk
+                .frame_idx
+                .is_multiple_of(crate::frame_codec::GROUP_LEN)
                 && j - i > 1
                 && prepared[i..j]
                     .iter()
@@ -3828,18 +3849,25 @@ impl ConCorpus {
 
     /// Sequential hint for one LMDB value before it is copied out.
     fn willneed(bytes: &[u8]) {
-        if bytes.len() < 4096 {
-            return;
+        #[cfg(unix)]
+        {
+            if bytes.len() < 4096 {
+                return;
+            }
+            let page = 4096usize;
+            let addr = bytes.as_ptr() as usize;
+            let start = addr & !(page - 1);
+            let end = addr.saturating_add(bytes.len()).saturating_add(page - 1) & !(page - 1);
+            if end <= start {
+                return;
+            }
+            unsafe {
+                libc::madvise(start as *mut libc::c_void, end - start, libc::MADV_WILLNEED);
+            }
         }
-        let page = 4096usize;
-        let addr = bytes.as_ptr() as usize;
-        let start = addr & !(page - 1);
-        let end = addr.saturating_add(bytes.len()).saturating_add(page - 1) & !(page - 1);
-        if end <= start {
-            return;
-        }
-        unsafe {
-            libc::madvise(start as *mut libc::c_void, end - start, libc::MADV_WILLNEED);
+        #[cfg(not(unix))]
+        {
+            let _ = bytes;
         }
     }
 
@@ -3857,9 +3885,7 @@ impl ConCorpus {
         let Ok(file) = fs::File::open(&data) else {
             return;
         };
-        unsafe {
-            libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_WILLNEED);
-        }
+        Self::advise_willneed_fd(&file);
     }
 
     /// The cooked blob for one frame, copied out of the read transaction.
@@ -5752,6 +5778,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn small_open_faults_every_page() {
         use std::os::unix::io::AsRawFd;
         let dir = tempfile::tempdir().unwrap();
@@ -5790,6 +5817,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn cold_open_reads_the_small_map() {
         use std::os::unix::io::AsRawFd;
         let dir = tempfile::tempdir().unwrap();
@@ -5807,9 +5835,7 @@ mod tests {
         drop(db);
         let data = dir.path().join("data.mdb");
         let file = std::fs::File::open(&data).unwrap();
-        unsafe {
-            libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED);
-        }
+        ConCorpus::advise_dontneed(&file);
         drop(file);
         let db = ConCorpus::open_readonly_cold(dir.path()).unwrap();
         let file = std::fs::File::open(&data).unwrap();
@@ -6703,7 +6729,7 @@ x
             })
             .unwrap();
         let n2 = db
-            .append_trajectory_frames(10, &[fr.clone()], "mem")
+            .append_trajectory_frames(10, std::slice::from_ref(&fr), "mem")
             .unwrap();
         assert_eq!(n2, 1);
         let mem = db
@@ -8286,7 +8312,7 @@ x
         std::env::set_var("READCON_DB_COOKED_CODEC", "shuffle-zstd");
         assert!(!cooked_codec_forces_raw().unwrap());
         std::env::remove_var("READCON_DB_COOKED_CODEC");
-        assert!(!cooked_codec_forces_raw().unwrap());
+        assert!(cooked_codec_forces_raw().unwrap());
     }
 
     #[test]

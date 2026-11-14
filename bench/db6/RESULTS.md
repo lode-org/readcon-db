@@ -114,4 +114,3 @@ after a 4 s span. Every other fair row is at or under 0.15.
 | frames-10000 | full_read | warm | ase.db | 6 | 7.8469e-01 | 4.1651e-03 | 0.005 | 10792960 | 180051968 | exact |
 | frames-10000 | selected | warm | readcon-db | 6 | 1.3620e-05 | 1.3357e-07 | 0.010 | 12517376 | 92860416 | exact |
 | frames-10000 | selected | warm | ase.db | 6 | 7.7103e-04 | 2.0886e-06 | 0.003 | 10792960 | 93536256 | exact |
-

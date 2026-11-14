@@ -78,4 +78,3 @@ cached call with a fault, and that mix changes between samples.
 | frames-10000 | full_read | warm | ase.db | 6 | 7.5735e-01 | 1.1153e-02 | 0.015 | 10809344 | 182222848 | exact |
 | frames-10000 | selected | warm | readcon-db | 6 | 1.1752e-05 | 1.4585e-07 | 0.012 | 13176832 | 93839360 | exact |
 | frames-10000 | selected | warm | ase.db | 6 | 7.2130e-04 | 3.3953e-06 | 0.005 | 10809344 | 94294016 | exact |
-

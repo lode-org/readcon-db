@@ -127,11 +127,9 @@ fn main() -> ExitCode {
                 if no_compress {
                     db.set_compress_frames(false);
                 }
-                let mut tid = start;
-                for f in files {
+                for (tid, f) in (start..).zip(files) {
                     let n = db.append_trajectory_path_units(tid, &f, units.clone())?;
                     println!("traj {tid}: {n} frames from {f}");
-                    tid += 1;
                 }
             }
             "ingest-dir" => {

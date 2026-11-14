@@ -77,4 +77,3 @@ the type-7 90th percentile of those means.
 | frames-100 | full_read | warm | ase.db | 6 | 7.6573e-03 | 7.6624e-03 | 5.4557e-06 | 0.001 | 151552 | 94781440 | exact |
 | frames-100 | selected | warm | readcon-db | 6 | 1.2859e-05 | 1.3027e-05 | 1.3611e-07 | 0.011 | 180224 | 93827072 | exact |
 | frames-100 | selected | warm | ase.db | 6 | 1.6465e-04 | 1.6578e-04 | 1.5476e-06 | 0.009 | 151552 | 94191616 | exact |
-

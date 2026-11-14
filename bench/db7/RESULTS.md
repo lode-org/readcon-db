@@ -112,4 +112,3 @@ cached call with a fault, and that mix changes between samples.
 | frames-10000 | full_read | warm | ase.db | 6 | 7.7235e-01 | 2.8860e-03 | 0.004 | 10825728 | 181764096 | exact |
 | frames-10000 | selected | warm | readcon-db | 6 | 1.1117e-05 | 4.2396e-08 | 0.004 | 12517376 | 93528064 | exact |
 | frames-10000 | selected | warm | ase.db | 6 | 7.1936e-04 | 8.0586e-07 | 0.001 | 10825728 | 94031872 | exact |
-

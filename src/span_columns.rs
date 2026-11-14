@@ -1135,10 +1135,9 @@ fn json_finite(v: &serde_json::Value) -> Option<f64> {
         x
     } else if let Some(i) = v.as_i64() {
         i as f64
-    } else if let Some(u) = v.as_u64() {
-        u as f64
     } else {
-        return None;
+        let u = v.as_u64()?;
+        u as f64
     };
     f.is_finite().then_some(f)
 }

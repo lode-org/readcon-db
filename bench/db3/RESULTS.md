@@ -102,4 +102,3 @@ query (`frame_index` of the middle frame) are cold and warm.
 | frames-10000 | 10000 | 8 | selected | cold | ase.db | 3.6696e-03 | 1.4563e-03 | exact |
 | frames-10000 | 10000 | 8 | selected | warm | readcon-db | 8.3625e-05 | 2.5371e-05 | exact |
 | frames-10000 | 10000 | 8 | selected | warm | ase.db | 7.4968e-04 | 4.1090e-05 | exact |
-

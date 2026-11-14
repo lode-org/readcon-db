@@ -112,4 +112,3 @@ The scalar indexes are one `idx_cols` blob. `hash_by_frame` is empty.
 | frames-1000 | 700416 | 356352 | 5.4755e-05 | 3.5980e-05 |
 | frames-10000 | 6266880 | 3362816 | 3.2679e-04 | 1.5097e-04 |
 | traj-100k | 342003712 | 341966848 | 2.8889e-04 | 1.5063e-05 |
-

@@ -242,43 +242,44 @@ pub fn decode(blob: &[u8]) -> Result<Columns> {
     let mut c = Columns::empty();
     c.grow(n);
     let mut off = 8;
-    for i in 0..n {
-        c.energy[i] = u64_at(blob, off, i);
+    for (i, slot) in c.energy.iter_mut().enumerate() {
+        *slot = u64_at(blob, off, i);
     }
     off += n * 8;
-    for i in 0..n {
-        c.fmax[i] = u64_at(blob, off, i);
+    for (i, slot) in c.fmax.iter_mut().enumerate() {
+        *slot = u64_at(blob, off, i);
     }
     off += n * 8;
-    for i in 0..n {
-        c.mass[i] = u64_at(blob, off, i);
+    for (i, slot) in c.mass.iter_mut().enumerate() {
+        *slot = u64_at(blob, off, i);
     }
     off += n * 8;
-    for i in 0..n {
-        c.volume[i] = u64_at(blob, off, i);
+    for (i, slot) in c.volume.iter_mut().enumerate() {
+        *slot = u64_at(blob, off, i);
     }
     off += n * 8;
-    for i in 0..n {
+    for (i, slot) in c.natoms.iter_mut().enumerate() {
         let start = off + i * 4;
-        c.natoms[i] = u32::from_le_bytes(blob[start..start + 4].try_into().unwrap());
+        *slot = u32::from_le_bytes(blob[start..start + 4].try_into().unwrap());
     }
     off += n * 4;
     c.flags.copy_from_slice(&blob[off..off + n]);
     off += n;
     c.pbc.copy_from_slice(&blob[off..off + n]);
     off += n;
-    for ch in 0..META_CHANNELS {
-        for i in 0..n {
-            c.meta[i][ch] = u64_at(blob, off, i);
+    let meta_base = off;
+    for (i, row) in c.meta.iter_mut().enumerate() {
+        for (ch, slot) in row.iter_mut().enumerate() {
+            *slot = u64_at(blob, meta_base + ch * n * 8, i);
         }
-        off += n * 8;
     }
-    for i in 0..n {
+    off += META_CHANNELS * n * 8;
+    for (i, slot) in c.hash.iter_mut().enumerate() {
         let start = off + i * 16;
-        c.hash[i].copy_from_slice(&blob[start..start + 16]);
+        slot.copy_from_slice(&blob[start..start + 16]);
     }
     off += n * 16;
-    for i in 0..n {
+    for syms_slot in &mut c.symbols {
         if off + 2 > blob.len() {
             return Err(Error::Message("corrupt scalar columns".into()));
         }
@@ -302,7 +303,7 @@ pub fn decode(blob: &[u8]) -> Result<Columns> {
             off += 4;
             syms.push((sym, n_atoms));
         }
-        c.symbols[i] = syms;
+        *syms_slot = syms;
     }
     Ok(c)
 }

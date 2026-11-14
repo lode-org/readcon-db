@@ -109,4 +109,3 @@ again at a longer span; that budget is `span_s` on the row.
 | frames-10000 | full_read | warm | ase.db | 6 | 2.6984e-01 | 8.6454e-03 | 0.032 | 10809344 | 546467840 | exact |
 | frames-10000 | selected | warm | readcon-db | 6 | 3.3698e-05 | 1.1082e-06 | 0.033 | 5644288 | 546467840 | exact |
 | frames-10000 | selected | warm | ase.db | 6 | 6.5830e-04 | 9.0681e-06 | 0.014 | 10809344 | 546467840 | exact |
-

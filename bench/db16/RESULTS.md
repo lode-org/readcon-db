@@ -101,4 +101,3 @@ is the database file after that ingest.
 | traj-100k | range | warm | ase.db | 12 | 5.3286e-01 | 5.4588e-01 | 8.9391e-03 | 0.017 |  |  | 384503808 | 2150981632 | exact |
 | traj-100k | metadata | warm | readcon-db | 12 | 3.2773e-06 | 3.3009e-06 | 1.5082e-08 | 0.005 |  |  | 342003712 | 93528064 | exact |
 | traj-100k | metadata | warm | ase.db | 12 | 7.4348e-02 | 7.6829e-02 | 2.3075e-03 | 0.031 |  |  | 384503808 | 143007744 | exact |
-

@@ -401,9 +401,8 @@ impl CookedSoa {
             return None;
         }
         out.reserve(n.saturating_mul(3));
-        for chunk in bytes[HEADER_LEN..end].chunks_exact(8) {
-            let raw: [u8; 8] = chunk.try_into().ok()?;
-            out.push(f64::from_le_bytes(raw));
+        for raw in bytes[HEADER_LEN..end].as_chunks::<8>().0 {
+            out.push(f64::from_le_bytes(*raw));
         }
         Some(natoms)
     }
@@ -796,8 +795,10 @@ fn le_f64s(bytes: &[u8]) -> Vec<f64> {
         slice.to_vec()
     } else {
         bytes
-            .chunks_exact(8)
-            .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|c| f64::from_le_bytes(*c))
             .collect()
     }
 }
@@ -1161,8 +1162,8 @@ fn copy_f64_block(bytes: &[u8], off: usize, n: usize) -> Option<Vec<f64>> {
             std::ptr::copy_nonoverlapping(raw.as_ptr(), out.as_mut_ptr().cast::<u8>(), nbytes);
         }
     } else {
-        for (dst, chunk) in out.iter_mut().zip(raw.chunks_exact(8)) {
-            *dst = f64::from_le_bytes(chunk.try_into().ok()?);
+        for (dst, chunk) in out.iter_mut().zip(raw.as_chunks::<8>().0) {
+            *dst = f64::from_le_bytes(*chunk);
         }
     }
     Some(out)
@@ -1179,8 +1180,8 @@ fn take_u32(bytes: &[u8], off: &mut usize, n: usize) -> Option<Vec<u32>> {
     let raw = bytes.get(*off..*off + nbytes)?;
     *off += nbytes;
     let mut out = Vec::with_capacity(n);
-    for chunk in raw.chunks_exact(4) {
-        out.push(u32::from_le_bytes(chunk.try_into().ok()?));
+    for chunk in raw.as_chunks::<4>().0 {
+        out.push(u32::from_le_bytes(*chunk));
     }
     Some(out)
 }
