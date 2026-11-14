@@ -7,6 +7,11 @@
 //! reads lives in `docs/orgmode/howto/streaming.org`.
 #![deny(missing_docs)]
 
+/// Selects mimalloc's dlopen-safe TLS for the allocator readcon-core links in.
+#[cfg(feature = "local_dynamic_tls")]
+#[allow(unused_imports)]
+use mimalloc as _mimalloc_tls;
+
 pub mod archive;
 mod atom_coord;
 mod canonical;

@@ -22,7 +22,10 @@ crate-type = ["lib", "cdylib", "staticlib"]
 
 [features]
 default = []
-python = ["dep:pyo3"]
+# Unifies onto the mimalloc that readcon-core links into this cdylib.
+# local-dynamic TLS is dlopen-safe. Static builds leave the feature off.
+local_dynamic_tls = ["dep:mimalloc", "mimalloc/local_dynamic_tls"]
+python = ["dep:pyo3", "local_dynamic_tls"]
 capi = []
 # Parallel ingest over a caller-supplied communicator (rsmpi). Needs an MPI
 # implementation and libclang at build time. See src/mpi_ingest.rs.
@@ -39,6 +42,9 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 zstd = { version = "0.13", default-features = false }
 fast-float2 = "0.2"
 libc = "0.2"
+# Present only so a cdylib build can turn on mimalloc's local_dynamic_tls.
+# readcon-core already links mimalloc; Cargo unifies the feature.
+mimalloc = { version = "0.1.43", optional = true, default-features = false, features = ["extended"] }
 
 pyo3 = { version = "0.28", features = ["extension-module"], optional = true }
 mpi = { version = "0.8", optional = true, default-features = false }

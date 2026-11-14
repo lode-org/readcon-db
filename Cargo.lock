@@ -920,6 +920,7 @@ dependencies = [
  "fast-float2",
  "heed",
  "libc",
+ "mimalloc",
  "mpi",
  "pyo3",
  "readcon-core",

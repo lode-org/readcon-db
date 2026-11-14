@@ -4,6 +4,7 @@
 #### Features
 - (**identity**) opt-in canonical hash for frames that differ by atom-id order
 #### Bug Fixes
+- (**tls**) cdylib and Python builds use mimalloc `local_dynamic_tls`, so dlopen does not fail once static TLS surplus is spent
 - (**hash**) `hash_con_text` uses the stored CON span, so `hash-file` finds an ingested frame
 - (**select**) the full atom-count domain is not an `idx_natoms` scan
 - (**lmdb**) default map is 8 MiB; existing corpora still map twice `data.mdb`

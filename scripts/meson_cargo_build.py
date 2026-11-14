@@ -48,19 +48,30 @@ def main(argv: list[str]) -> int:
         cmd.append("--offline")
     if profile == "release":
         cmd.append("--release")
-    if features.strip():
-        cmd.extend(["--features", features.strip()])
-    rustc_args = ["--crate-type=cdylib", "--crate-type=staticlib"]
-    if sys.platform.startswith("linux"):
-        rustc_args.append(f"-Clink-arg=-Wl,-soname,{shared_name}")
-    elif sys.platform == "darwin":
-        rustc_args.append(f"-Clink-arg=-Wl,-install_name,@rpath/{shared_name}")
-    cmd.extend(["--", *rustc_args])
     env = os.environ.copy()
-    subprocess.check_call(cmd, cwd=src_root, env=env)
-    built = Path(target_dir) / profile
-    shutil.copy2(built / shared_name, out_shared)
-    shutil.copy2(built / static_name, out_static)
+    link_args: list[str] = []
+    if sys.platform.startswith("linux"):
+        link_args.append(f"-Clink-arg=-Wl,-soname,{shared_name}")
+    elif sys.platform == "darwin":
+        link_args.append(f"-Clink-arg=-Wl,-install_name,@rpath/{shared_name}")
+    # The cdylib uses mimalloc local-dynamic TLS so a later dlopen does not
+    # need static TLS surplus. The staticlib keeps initial-exec.
+    for crate_type in ("cdylib", "staticlib"):
+        crate_features = features.strip()
+        if crate_type == "cdylib":
+            crate_features = ",".join(
+                part for part in (crate_features, "local_dynamic_tls") if part
+            )
+        crate_cmd = list(cmd)
+        if crate_features:
+            crate_cmd.extend(["--features", crate_features])
+        crate_cmd.extend(["--", f"--crate-type={crate_type}", *link_args])
+        subprocess.check_call(crate_cmd, cwd=src_root, env=env)
+        built = Path(target_dir) / profile
+        if crate_type == "cdylib":
+            shutil.copy2(built / shared_name, out_shared)
+        else:
+            shutil.copy2(built / static_name, out_static)
     return 0
 
 
