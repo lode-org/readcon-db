@@ -36,15 +36,27 @@ def test_driver_writes_the_record_layout(tmp_path) -> None:
     assert host["hostname"] == "host"
 
 
-def test_vm_host_hits_are_only_the_superseded_fair_logs() -> None:
-    assert drv.vm_host_hits(drv.REPO) == [
-        "examples/benchmarks/results/fair/campaign.log",
-        "examples/benchmarks/results/fair/insert-span.log",
-        "examples/benchmarks/results/fair/insert-validate.log",
-    ]
+def test_no_record_names_the_vm_host() -> None:
+    assert drv.vm_host_hits(drv.REPO) == []
     fresh = drv.REPO / "examples" / "benchmarks" / "results" / "fair-db29"
     for name in ("campaign.log", "insert-span.log", "insert-validate.log"):
         assert (fresh / name).read_text().splitlines()[2] == "host host"
+
+
+def test_vm_host_hits_reads_logs_notes_and_json(tmp_path) -> None:
+    fair = tmp_path / "examples" / "benchmarks" / "results" / "fair"
+    fair.mkdir(parents=True)
+    (fair / "campaign.log").write_text("rev\ndate\nhost " + "cursor" + "\n")
+    (tmp_path / "examples" / "benchmarks" / "notes.md").write_text(
+        "Host `" + "cursor" + "`\n"
+    )
+    (fair / "host.json").write_text('{"hostname": "' + "cursor" + '"}\n')
+    (fair / "ok.json").write_text('{"hostname": "host"}\n')
+    assert drv.vm_host_hits(tmp_path) == [
+        "examples/benchmarks/notes.md",
+        "examples/benchmarks/results/fair/campaign.log",
+        "examples/benchmarks/results/fair/host.json",
+    ]
 
 
 def test_recorded_run_refuses_n_below_12(tmp_path) -> None:

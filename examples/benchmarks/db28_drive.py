@@ -38,6 +38,7 @@ def vm_host_hits(root: Path) -> list[str]:
     hits = []
     host_line = "host " + "cursor"
     marked = "`" + "cursor" + "`"
+    json_host = '"hostname": "' + "cursor" + '"'
     for path in sorted(base.rglob("*")):
         if not path.is_file() or path.suffix not in {".py", ".md", ".log", ".json"}:
             continue
@@ -45,7 +46,8 @@ def vm_host_hits(root: Path) -> list[str]:
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
         named = any(
-            line.strip() == host_line or marked in line for line in text.splitlines()
+            line.strip() == host_line or marked in line or json_host in line
+            for line in text.splitlines()
         )
         if named:
             hits.append(path.relative_to(root).as_posix())

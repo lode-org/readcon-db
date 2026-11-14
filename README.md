@@ -117,7 +117,7 @@ Why the published CPC ingest is not a like-for-like timing, and the
 rules this tree uses instead, are in
 [`examples/benchmarks/FAIRNESS.md`](examples/benchmarks/FAIRNESS.md).
 Raw samples are
-[`examples/benchmarks/results/fair/campaign.log`](examples/benchmarks/results/fair/campaign.log).
+[`examples/benchmarks/results/fair-db29/campaign.log`](examples/benchmarks/results/fair-db29/campaign.log).
 
 Both stores get the same records: symbols, positions, cell,
 periodicity, masses, forces, energy, and `frame_index`. ASE is SQLite
