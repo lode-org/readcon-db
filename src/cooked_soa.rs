@@ -577,12 +577,43 @@ impl MaterializedFrame {
     }
 }
 
-/// Tag for a byte-shuffled zstd frame. Not `RCSO` and not a cooked group.
+/// Tag for an interleaved byte-shuffled zstd frame (db20). Not `RCSO`.
 pub const SHUFFLE_ZSTD_TAG: [u8; 2] = [0xFB, 0x03];
+
+/// Tag for a component-major shuffled frame. Each scalar column is its own
+/// zstd frame. `FB 03` still decodes.
+pub const SHUFFLE_ZSTD_SOA_TAG: [u8; 2] = [0xFB, 0x04];
+
+/// Level chosen on a 100k-atom frame: it was smaller than level 1 and the
+/// decode was faster. Negative levels were larger and no faster.
+const SHUFFLE_LEVEL: i32 = 3;
 
 /// True when `stored` is a shuffled zstd frame rather than raw RCSO.
 pub fn is_shuffled_zstd(stored: &[u8]) -> bool {
-    stored.len() >= 2 && stored[0] == SHUFFLE_ZSTD_TAG[0] && stored[1] == SHUFFLE_ZSTD_TAG[1]
+    stored.len() >= 2 && stored[0] == 0xFB && (stored[1] == 0x03 || stored[1] == 0x04)
+}
+
+struct ZstdScratch {
+    dec: zstd::bulk::Decompressor<'static>,
+    buf: Vec<u8>,
+}
+
+fn with_zstd_scratch<T>(body: impl FnOnce(&mut ZstdScratch) -> Result<T>) -> Result<T> {
+    std::thread_local! {
+        static SCRATCH: std::cell::RefCell<Option<ZstdScratch>> = const { std::cell::RefCell::new(None) };
+    }
+    SCRATCH.with(|slot| {
+        let mut guard = slot.borrow_mut();
+        if guard.is_none() {
+            let dec = zstd::bulk::Decompressor::new()
+                .map_err(|e| Error::Message(format!("zstd decode: {e}")))?;
+            *guard = Some(ZstdScratch {
+                dec,
+                buf: Vec::new(),
+            });
+        }
+        body(guard.as_mut().unwrap())
+    })
 }
 
 fn coord_f64s(raw: &[u8]) -> Option<usize> {
@@ -605,16 +636,44 @@ fn coord_f64s(raw: &[u8]) -> Option<usize> {
     Some(n)
 }
 
-/// Byte-shuffle each coordinate column and zstd them at level 1.
-///
-/// Positions, forces, and velocities are shuffled separately. A shuffle of
-/// the concatenated columns cannot be unshuffled one column at a time.
-/// The header and the trailing metadata stay uncompressed so a reader can
-/// unshuffle straight into the position and force buffers.
-pub fn compress_shuffled(raw: &[u8]) -> Result<Vec<u8>> {
+fn coord_layout(raw: &[u8]) -> Result<(usize, u32, usize, usize, usize)> {
     let n = coord_f64s(raw).ok_or_else(|| Error::Message("cooked frame is not RCSO".into()))?;
+    let natoms = u32::from_le_bytes(raw[8..12].try_into().unwrap());
+    let flags = u32::from_le_bytes(raw[12..16].try_into().unwrap());
+    let atoms = natoms as usize;
+    let npos = atoms * 3;
+    let nfor = if flags & FLAG_FORCES != 0 { npos } else { 0 };
+    let nvel = if flags & FLAG_VELOCITIES != 0 {
+        npos
+    } else {
+        0
+    };
+    if npos + nfor + nvel != n {
+        return Err(Error::Message(
+            "shuffled cooked frame length mismatch".into(),
+        ));
+    }
+    Ok((n, flags, npos, nfor, nvel))
+}
+
+/// Byte-shuffle each scalar column and zstd it at level 3.
+///
+/// `x`, `y`, and `z` are separate frames, and the same for forces and
+/// velocities. An interleaved shuffle of `xyz` does not decode in the
+/// noise of a raw copy. The header and the trailing metadata stay
+/// uncompressed. The db20 interleaved tag still decodes.
+pub fn compress_shuffled(raw: &[u8]) -> Result<Vec<u8>> {
+    compress_components(raw, SHUFFLE_ZSTD_SOA_TAG)
+}
+
+/// db20 layout: one zstd frame of the interleaved coordinate bytes.
+#[cfg(test)]
+fn compress_interleaved_shuffle(raw: &[u8]) -> Result<Vec<u8>> {
+    let (n, _, _, _, _) = coord_layout(raw)?;
     let coord_bytes = n * 8;
     let coords = &raw[HEADER_LEN..HEADER_LEN + coord_bytes];
+    let mut shuffled = vec![0u8; coord_bytes];
+    let mut off = 0usize;
     let natoms = u32::from_le_bytes(raw[8..12].try_into().unwrap()) as usize;
     let flags = u32::from_le_bytes(raw[12..16].try_into().unwrap());
     let npos = natoms * 3;
@@ -624,8 +683,6 @@ pub fn compress_shuffled(raw: &[u8]) -> Result<Vec<u8>> {
     } else {
         0
     };
-    let mut shuffled = vec![0u8; coord_bytes];
-    let mut off = 0usize;
     for count in [npos, nfor, nvel] {
         if count == 0 {
             continue;
@@ -640,7 +697,7 @@ pub fn compress_shuffled(raw: &[u8]) -> Result<Vec<u8>> {
     let comp = zstd::bulk::compress(&shuffled, 1)
         .map_err(|e| Error::Message(format!("zstd encode: {e}")))?;
     let suffix = &raw[HEADER_LEN + coord_bytes..];
-    let mut out = Vec::with_capacity(2 + 4 + 4 + comp.len() + suffix.len());
+    let mut out = Vec::with_capacity(2 + 4 + 4 + comp.len() + HEADER_LEN + suffix.len());
     out.extend_from_slice(&SHUFFLE_ZSTD_TAG);
     out.extend_from_slice(&(n as u32).to_le_bytes());
     out.extend_from_slice(&(comp.len() as u32).to_le_bytes());
@@ -650,9 +707,84 @@ pub fn compress_shuffled(raw: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+fn compress_components(raw: &[u8], tag: [u8; 2]) -> Result<Vec<u8>> {
+    let (_n, _flags, npos, nfor, nvel) = coord_layout(raw)?;
+    let natoms = u32::from_le_bytes(raw[8..12].try_into().unwrap());
+    let atoms = natoms as usize;
+    let coord_bytes = (npos + nfor + nvel) * 8;
+    let coords = &raw[HEADER_LEN..HEADER_LEN + coord_bytes];
+    let mut compressor = zstd::bulk::Compressor::new(SHUFFLE_LEVEL)
+        .map_err(|e| Error::Message(format!("zstd encode: {e}")))?;
+    let window = (atoms * 8)
+        .next_power_of_two()
+        .trailing_zeros()
+        .clamp(10, 22);
+    compressor
+        .set_parameter(zstd::zstd_safe::CParameter::WindowLog(window))
+        .map_err(|e| Error::Message(format!("zstd encode: {e}")))?;
+    let mut columns = Vec::new();
+    let mut gather = vec![0f64; atoms];
+    let mut shuffled = vec![0u8; atoms * 8];
+    for (count, base) in [(npos, 0usize), (nfor, npos), (nvel, npos + nfor)] {
+        if count == 0 {
+            continue;
+        }
+        let f64s = le_f64s(&coords[base * 8..base * 8 + count * 8]);
+        for lane in 0..3 {
+            for (i, slot) in gather.iter_mut().enumerate() {
+                *slot = f64s[i * 3 + lane];
+            }
+            let bytes = le_f64_bytes(&gather);
+            crate::byte_shuffle::shuffle_bytes(bytes, &mut shuffled);
+            columns.push(
+                compressor
+                    .compress(&shuffled)
+                    .map_err(|e| Error::Message(format!("zstd encode: {e}")))?,
+            );
+        }
+    }
+    let suffix = &raw[HEADER_LEN + coord_bytes..];
+    let mut out = Vec::new();
+    out.extend_from_slice(&tag);
+    out.extend_from_slice(&natoms.to_le_bytes());
+    out.extend_from_slice(&u32::from_le_bytes(raw[12..16].try_into().unwrap()).to_le_bytes());
+    out.extend_from_slice(&(columns.len() as u32).to_le_bytes());
+    for column in &columns {
+        out.extend_from_slice(&(column.len() as u32).to_le_bytes());
+        out.extend_from_slice(column);
+    }
+    out.extend_from_slice(&raw[..HEADER_LEN]);
+    out.extend_from_slice(suffix);
+    Ok(out)
+}
+
+fn le_f64s(bytes: &[u8]) -> Vec<f64> {
+    if cfg!(target_endian = "little") {
+        let n = bytes.len() / 8;
+        let slice = unsafe { std::slice::from_raw_parts(bytes.as_ptr().cast::<f64>(), n) };
+        slice.to_vec()
+    } else {
+        bytes
+            .chunks_exact(8)
+            .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+            .collect()
+    }
+}
+
+fn le_f64_bytes(xs: &[f64]) -> &[u8] {
+    unsafe { std::slice::from_raw_parts(xs.as_ptr().cast::<u8>(), xs.len() * 8) }
+}
+
 /// Unshuffle one compressed frame straight into its column buffers.
 pub fn decompress_shuffled(stored: &[u8]) -> Result<MaterializedFrame> {
-    if !is_shuffled_zstd(stored) || stored.len() < 10 {
+    if stored.len() >= 2 && stored[1] == SHUFFLE_ZSTD_TAG[1] && stored[0] == 0xFB {
+        return decompress_interleaved(stored);
+    }
+    decompress_components(stored)
+}
+
+fn decompress_interleaved(stored: &[u8]) -> Result<MaterializedFrame> {
+    if stored.len() < 10 {
         return Err(Error::Message("not a shuffled cooked frame".into()));
     }
     let n = u32::from_le_bytes(stored[2..6].try_into().unwrap()) as usize;
@@ -661,16 +793,20 @@ pub fn decompress_shuffled(stored: &[u8]) -> Result<MaterializedFrame> {
         return Err(Error::Message("truncated shuffled cooked frame".into()));
     }
     let comp = &stored[10..10 + comp_len];
-    let mut dec =
-        zstd::bulk::Decompressor::new().map_err(|e| Error::Message(format!("zstd decode: {e}")))?;
-    let shuffled = dec
-        .decompress(comp, n * 8)
-        .map_err(|e| Error::Message(format!("zstd decode: {e}")))?;
-    if shuffled.len() != n * 8 {
-        return Err(Error::Message(
-            "shuffled cooked frame has the wrong length".into(),
-        ));
-    }
+    let shuffled = with_zstd_scratch(|scratch| {
+        scratch.buf.clear();
+        scratch.buf.reserve(n * 8);
+        scratch
+            .dec
+            .decompress_to_buffer(comp, &mut scratch.buf)
+            .map_err(|e| Error::Message(format!("zstd decode: {e}")))?;
+        if scratch.buf.len() != n * 8 {
+            return Err(Error::Message(
+                "shuffled cooked frame has the wrong length".into(),
+            ));
+        }
+        Ok(scratch.buf.clone())
+    })?;
     let rest = &stored[10 + comp_len..];
     if rest.len() < HEADER_LEN || &rest[..4] != COOKED_MAGIC {
         return Err(Error::Message(
@@ -692,12 +828,12 @@ pub fn decompress_shuffled(stored: &[u8]) -> Result<MaterializedFrame> {
             "shuffled cooked frame length mismatch".into(),
         ));
     }
-    let mut positions = vec![0f64; npos];
+    let mut positions = uninit_f64(npos);
     unshuffle_into(&shuffled[..npos * 8], &mut positions);
     let forces = if nfor == 0 {
         Vec::new()
     } else {
-        let mut forces = vec![0f64; nfor];
+        let mut forces = uninit_f64(nfor);
         let start = npos * 8;
         unshuffle_into(&shuffled[start..start + nfor * 8], &mut forces);
         forces
@@ -705,7 +841,7 @@ pub fn decompress_shuffled(stored: &[u8]) -> Result<MaterializedFrame> {
     let (velocities, velocities_set) = if nvel == 0 {
         (Vec::new(), false)
     } else {
-        let mut velocities = vec![0f64; nvel];
+        let mut velocities = uninit_f64(nvel);
         let start = (npos + nfor) * 8;
         unshuffle_into(&shuffled[start..start + nvel * 8], &mut velocities);
         (velocities, true)
@@ -720,6 +856,221 @@ pub fn decompress_shuffled(stored: &[u8]) -> Result<MaterializedFrame> {
         suffix,
     )
     .ok_or_else(|| Error::Message("shuffled cooked frame metadata is corrupt".into()))
+}
+
+fn decompress_components(stored: &[u8]) -> Result<MaterializedFrame> {
+    if stored.len() < 14
+        || stored[0] != SHUFFLE_ZSTD_SOA_TAG[0]
+        || stored[1] != SHUFFLE_ZSTD_SOA_TAG[1]
+    {
+        return Err(Error::Message("not a shuffled cooked frame".into()));
+    }
+    let natoms = u32::from_le_bytes(stored[2..6].try_into().unwrap());
+    let flags = u32::from_le_bytes(stored[6..10].try_into().unwrap());
+    let ncomp = u32::from_le_bytes(stored[10..14].try_into().unwrap()) as usize;
+    let atoms = natoms as usize;
+    let npos = atoms * 3;
+    let nfor = if flags & FLAG_FORCES != 0 { npos } else { 0 };
+    let nvel = if flags & FLAG_VELOCITIES != 0 {
+        npos
+    } else {
+        0
+    };
+    let expect = [npos, nfor, nvel].iter().filter(|n| **n > 0).count() * 3;
+    if ncomp != expect || atoms == 0 {
+        return Err(Error::Message(
+            "shuffled cooked frame length mismatch".into(),
+        ));
+    }
+    let off = 14usize;
+    let mut positions = uninit_f64(npos);
+    let mut forces = if nfor == 0 {
+        Vec::new()
+    } else {
+        uninit_f64(nfor)
+    };
+    let mut velocities = if nvel == 0 {
+        Vec::new()
+    } else {
+        uninit_f64(nvel)
+    };
+    let suffix_at = fill_component_columns(
+        stored,
+        off,
+        ncomp,
+        &mut positions,
+        &mut forces,
+        &mut velocities,
+    )?;
+    let suffix = &stored[suffix_at + HEADER_LEN..];
+    MaterializedFrame::finish(natoms, positions, forces, velocities, nvel != 0, suffix)
+        .ok_or_else(|| Error::Message("shuffled cooked frame metadata is corrupt".into()))
+}
+
+/// Decode coordinate columns into caller buffers. The returned frame carries
+/// the metadata only; its position and force vectors are empty.
+pub(crate) fn decompress_shuffled_into(
+    stored: &[u8],
+    positions: &mut [f64],
+    forces: &mut [f64],
+    velocities: &mut [f64],
+) -> Result<MaterializedFrame> {
+    if stored.len() >= 2 && stored[0] == 0xFB && stored[1] == SHUFFLE_ZSTD_TAG[1] {
+        let frame = decompress_interleaved(stored)?;
+        if positions.len() != frame.positions.len()
+            || forces.len() != frame.forces.len()
+            || velocities.len() != frame.velocities.len()
+        {
+            return Err(Error::Message(
+                "shuffled cooked frame length mismatch".into(),
+            ));
+        }
+        positions.copy_from_slice(&frame.positions);
+        if !forces.is_empty() {
+            forces.copy_from_slice(&frame.forces);
+        }
+        if !velocities.is_empty() {
+            velocities.copy_from_slice(&frame.velocities);
+        }
+        return Ok(frame);
+    }
+    if stored.len() < 14
+        || stored[0] != SHUFFLE_ZSTD_SOA_TAG[0]
+        || stored[1] != SHUFFLE_ZSTD_SOA_TAG[1]
+    {
+        return Err(Error::Message("not a shuffled cooked frame".into()));
+    }
+    let natoms = u32::from_le_bytes(stored[2..6].try_into().unwrap());
+    let flags = u32::from_le_bytes(stored[6..10].try_into().unwrap());
+    let ncomp = u32::from_le_bytes(stored[10..14].try_into().unwrap()) as usize;
+    let atoms = natoms as usize;
+    let npos = atoms * 3;
+    let nfor = if flags & FLAG_FORCES != 0 { npos } else { 0 };
+    let nvel = if flags & FLAG_VELOCITIES != 0 {
+        npos
+    } else {
+        0
+    };
+    if positions.len() != npos || forces.len() != nfor || velocities.len() != nvel {
+        return Err(Error::Message(
+            "shuffled cooked frame length mismatch".into(),
+        ));
+    }
+    let suffix_at = fill_component_columns(stored, 14, ncomp, positions, forces, velocities)?;
+    if stored.len() < suffix_at + HEADER_LEN || &stored[suffix_at..suffix_at + 4] != COOKED_MAGIC {
+        return Err(Error::Message(
+            "shuffled cooked frame is missing its header".into(),
+        ));
+    }
+    MaterializedFrame::finish(
+        natoms,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        nvel != 0,
+        &stored[suffix_at + HEADER_LEN..],
+    )
+    .ok_or_else(|| Error::Message("shuffled cooked frame metadata is corrupt".into()))
+}
+
+fn fill_component_columns(
+    stored: &[u8],
+    mut off: usize,
+    ncomp: usize,
+    positions: &mut [f64],
+    forces: &mut [f64],
+    velocities: &mut [f64],
+) -> Result<usize> {
+    let targets: [&mut [f64]; 3] = [positions, forces, velocities];
+    let mut which = 0usize;
+    let mut lane = 0usize;
+    for _ in 0..ncomp {
+        if off + 4 > stored.len() {
+            return Err(Error::Message("truncated shuffled cooked frame".into()));
+        }
+        let clen = u32::from_le_bytes(stored[off..off + 4].try_into().unwrap()) as usize;
+        off += 4;
+        if off + clen > stored.len() {
+            return Err(Error::Message("truncated shuffled cooked frame".into()));
+        }
+        let comp = &stored[off..off + clen];
+        off += clen;
+        while which < 3 && targets[which].is_empty() {
+            which += 1;
+            lane = 0;
+        }
+        if which >= 3 {
+            return Err(Error::Message(
+                "shuffled cooked frame length mismatch".into(),
+            ));
+        }
+        let dst_len = targets[which].len() / 3;
+        with_zstd_scratch(|scratch| {
+            scratch.buf.clear();
+            scratch.buf.reserve(dst_len * 8);
+            scratch
+                .dec
+                .decompress_to_buffer(comp, &mut scratch.buf)
+                .map_err(|e| Error::Message(format!("zstd decode: {e}")))?;
+            if scratch.buf.len() != dst_len * 8 {
+                return Err(Error::Message(
+                    "shuffled cooked frame has the wrong length".into(),
+                ));
+            }
+            scatter_unshuffled(&scratch.buf, targets[which], lane);
+            Ok(())
+        })?;
+        lane += 1;
+        if lane == 3 {
+            lane = 0;
+            which += 1;
+        }
+    }
+    if stored.len() < off + HEADER_LEN || &stored[off..off + 4] != COOKED_MAGIC {
+        return Err(Error::Message(
+            "shuffled cooked frame is missing its header".into(),
+        ));
+    }
+    Ok(off)
+}
+
+#[allow(clippy::uninit_vec)]
+fn uninit_f64(n: usize) -> Vec<f64> {
+    let mut out = Vec::with_capacity(n);
+    // SAFETY: `f64` has no destructor. Every slot is written before a read.
+    unsafe { out.set_len(n) };
+    out
+}
+
+fn scatter_unshuffled(shuffled: &[u8], dst: &mut [f64], lane: usize) {
+    let n = dst.len() / 3;
+    debug_assert_eq!(shuffled.len(), n * 8);
+    debug_assert!(lane < 3);
+    let mut i = 0usize;
+    while i + 32 <= n {
+        let mut tile = [0u8; 32 * 8];
+        for b in 0..8 {
+            tile[b * 32..b * 32 + 32].copy_from_slice(&shuffled[b * n + i..b * n + i + 32]);
+        }
+        let mut vals = [0f64; 32];
+        unshuffle_into(&tile, &mut vals);
+        for k in 0..32 {
+            dst[(i + k) * 3 + lane] = vals[k];
+        }
+        i += 32;
+    }
+    if i < n {
+        let rest = n - i;
+        let mut tile = [0u8; 31 * 8];
+        for b in 0..8 {
+            tile[b * rest..b * rest + rest].copy_from_slice(&shuffled[b * n + i..b * n + i + rest]);
+        }
+        let mut vals = [0f64; 31];
+        unshuffle_into(&tile[..rest * 8], &mut vals[..rest]);
+        for k in 0..rest {
+            dst[(i + k) * 3 + lane] = vals[k];
+        }
+    }
 }
 
 fn unshuffle_into(src: &[u8], dst: &mut [f64]) {
@@ -1021,6 +1372,64 @@ mod tests {
         assert_eq!(back.forces, plain.forces);
         assert_eq!(back.velocities, plain.velocities);
         assert_eq!(back.energy.to_bits(), plain.energy.to_bits());
+        assert_eq!(&packed[..2], &SHUFFLE_ZSTD_SOA_TAG);
+    }
+
+    #[test]
+    fn db20_interleaved_shuffle_still_round_trips() {
+        let text = fixture("tiny_cuh2_vel_forces.con");
+        let fr = ConFrameIterator::new(&text).next().unwrap().unwrap();
+        let raw = CookedSoa::encode_frame(&fr).unwrap();
+        let packed = compress_interleaved_shuffle(&raw).unwrap();
+        assert_eq!(&packed[..2], &SHUFFLE_ZSTD_TAG);
+        let plain = MaterializedFrame::from_blob(&raw).unwrap();
+        let back = decompress_shuffled(&packed).unwrap();
+        assert_eq!(back.positions, plain.positions);
+        assert_eq!(back.forces, plain.forces);
+        assert_eq!(back.velocities, plain.velocities);
+        assert_eq!(back.energy.to_bits(), plain.energy.to_bits());
+        assert!(MaterializedFrame::from_blob(&raw).is_some());
+        assert!(!is_shuffled_zstd(&raw));
+    }
+
+    #[test]
+    #[ignore]
+    fn profile_component_decode() {
+        let n = 100_000usize;
+        let mut builder =
+            readcon_core::types::ConFrameBuilder::new([10.5, 12.25, 8.0], [90.0, 90.0, 90.0]);
+        let mut forces = Vec::with_capacity(n * 3);
+        for i in 0..n {
+            let x = i as f64 * 0.125;
+            let y = if i == 0 { std::f64::consts::PI } else { 0.5 };
+            let z = 1.0;
+            builder.add_atom("Cu", x, y, z, [false, false, false], i as u64, 63.546);
+            forces.extend_from_slice(&[x * 0.5, y * 0.5, z * 0.5]);
+        }
+        builder.set_forces_from_flat(&forces).unwrap();
+        let mut fr = builder.build().unwrap();
+        fr.header.set_energy(-42.5);
+        let raw = CookedSoa::encode_frame(&fr).unwrap();
+        let packed = compress_shuffled(&raw).unwrap();
+        let rounds = 20u32;
+        for _ in 0..3 {
+            std::hint::black_box(decompress_shuffled(&packed).unwrap());
+            std::hint::black_box(MaterializedFrame::from_blob(&raw).unwrap());
+        }
+        let t0 = std::time::Instant::now();
+        for _ in 0..rounds {
+            std::hint::black_box(decompress_shuffled(&packed).unwrap());
+        }
+        let dec = t0.elapsed().as_micros() / u128::from(rounds);
+        let t1 = std::time::Instant::now();
+        for _ in 0..rounds {
+            std::hint::black_box(MaterializedFrame::from_blob(&raw).unwrap());
+        }
+        let blob = t1.elapsed().as_micros() / u128::from(rounds);
+        eprintln!(
+            "component decode {dec} us | from_blob {blob} us | packed {}",
+            packed.len()
+        );
     }
 
     #[test]

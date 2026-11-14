@@ -259,6 +259,181 @@ fn materialized_from_text(text: &str) -> Result<crate::cooked_soa::MaterializedF
         .ok_or_else(|| Error::Message("cooked frame is missing its arrays".into()))
 }
 
+#[allow(clippy::uninit_vec)]
+fn column_buf(n: usize) -> Vec<f64> {
+    let mut out = Vec::with_capacity(n);
+    // SAFETY: `f64` has no destructor. The decoder writes every slot before a read.
+    unsafe { out.set_len(n) };
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decode_soa_columns(blobs: &[Vec<u8>]) -> Result<MaterializedRead> {
+    let natoms = u32::from_le_bytes(blobs[0][2..6].try_into().unwrap());
+    let flags = u32::from_le_bytes(blobs[0][6..10].try_into().unwrap());
+    let atoms = natoms as usize;
+    let stride = atoms * 3;
+    let n = blobs.len();
+    let has_f = flags & crate::cooked_soa::FLAG_FORCES != 0;
+    let has_v = flags & crate::cooked_soa::FLAG_VELOCITIES != 0;
+    for blob in blobs {
+        let same_n = u32::from_le_bytes(blob[2..6].try_into().unwrap()) == natoms;
+        let same_f = u32::from_le_bytes(blob[6..10].try_into().unwrap()) == flags;
+        if !same_n || !same_f {
+            return Err(Error::Message(
+                "shuffled frames in one read do not share a layout".into(),
+            ));
+        }
+    }
+    let mut positions = column_buf(n * stride);
+    let mut forces = if has_f {
+        column_buf(n * stride)
+    } else {
+        Vec::new()
+    };
+    let mut velocities = if has_v {
+        column_buf(n * stride)
+    } else {
+        Vec::new()
+    };
+    let mut metas: Vec<Option<Result<crate::cooked_soa::MaterializedFrame>>> =
+        (0..n).map(|_| None).collect();
+    let threads = ingest_thread_count().min(n).max(1);
+    if threads == 1 {
+        fill_soa_chunk(
+            blobs,
+            &mut positions,
+            &mut forces,
+            &mut velocities,
+            &mut metas,
+            stride,
+            has_f,
+            has_v,
+        );
+    } else {
+        let chunk = n.div_ceil(threads);
+        std::thread::scope(|scope| {
+            let mut pos_rest = &mut positions[..];
+            let mut force_rest = &mut forces[..];
+            let mut vel_rest = &mut velocities[..];
+            let mut meta_rest = &mut metas[..];
+            let mut blob_rest = blobs;
+            while !blob_rest.is_empty() {
+                let take = chunk.min(blob_rest.len());
+                let (blob_chunk, blob_tail) = blob_rest.split_at(take);
+                blob_rest = blob_tail;
+                let (pos_chunk, pos_tail) = pos_rest.split_at_mut(take * stride);
+                pos_rest = pos_tail;
+                let (force_chunk, force_tail) =
+                    force_rest.split_at_mut(if has_f { take * stride } else { 0 });
+                force_rest = force_tail;
+                let (vel_chunk, vel_tail) =
+                    vel_rest.split_at_mut(if has_v { take * stride } else { 0 });
+                vel_rest = vel_tail;
+                let (meta_chunk, meta_tail) = meta_rest.split_at_mut(take);
+                meta_rest = meta_tail;
+                scope.spawn(move || {
+                    fill_soa_chunk(
+                        blob_chunk,
+                        pos_chunk,
+                        force_chunk,
+                        vel_chunk,
+                        meta_chunk,
+                        stride,
+                        has_f,
+                        has_v,
+                    );
+                });
+            }
+        });
+    }
+    let mut out = MaterializedRead {
+        n_frames: n as u32,
+        n_atoms: natoms,
+        positions,
+        forces,
+        forces_set: has_f,
+        velocities,
+        velocities_set: has_v,
+        ..MaterializedRead::default()
+    };
+    for slot in metas {
+        let cooked = slot.unwrap()?;
+        out.masses.extend(cooked.masses);
+        out.numbers.extend(cooked.numbers);
+        out.constraints.extend(cooked.constraints);
+        out.cells.extend_from_slice(&cooked.cell);
+        out.energy.push(cooked.energy);
+        out.energy_set.push(cooked.energy_set);
+        out.frame_index.push(cooked.frame_index);
+        out.frame_index_set.push(cooked.frame_index_set);
+        out.pbc.extend_from_slice(&cooked.pbc);
+        out.pbc_set.push(cooked.pbc_set);
+        out.symbol_runs.push(cooked.symbol_runs);
+    }
+    Ok(out)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fill_soa_chunk(
+    blobs: &[Vec<u8>],
+    positions: &mut [f64],
+    forces: &mut [f64],
+    velocities: &mut [f64],
+    metas: &mut [Option<Result<crate::cooked_soa::MaterializedFrame>>],
+    stride: usize,
+    has_f: bool,
+    has_v: bool,
+) {
+    for (i, blob) in blobs.iter().enumerate() {
+        let pos = &mut positions[i * stride..(i + 1) * stride];
+        let mut bare_f = [];
+        let mut bare_v = [];
+        let fr: &mut [f64] = if has_f {
+            &mut forces[i * stride..(i + 1) * stride]
+        } else {
+            &mut bare_f
+        };
+        let vel: &mut [f64] = if has_v {
+            &mut velocities[i * stride..(i + 1) * stride]
+        } else {
+            &mut bare_v
+        };
+        metas[i] = Some(crate::cooked_soa::decompress_shuffled_into(
+            blob, pos, fr, vel,
+        ));
+    }
+}
+
+fn frame_to_read(cooked: crate::cooked_soa::MaterializedFrame) -> MaterializedRead {
+    let forces_set = !cooked.forces.is_empty();
+    let velocities_set = cooked.velocities_set;
+    MaterializedRead {
+        n_frames: 1,
+        n_atoms: cooked.n_atoms,
+        positions: cooked.positions,
+        forces: if forces_set {
+            cooked.forces
+        } else {
+            Vec::new()
+        },
+        forces_set,
+        velocities: cooked.velocities,
+        velocities_set,
+        masses: cooked.masses,
+        numbers: cooked.numbers,
+        constraints: cooked.constraints,
+        cells: cooked.cell.to_vec(),
+        energy: vec![cooked.energy],
+        energy_set: vec![cooked.energy_set],
+        frame_index: vec![cooked.frame_index],
+        frame_index_set: vec![cooked.frame_index_set],
+        pbc: cooked.pbc.to_vec(),
+        pbc_set: vec![cooked.pbc_set],
+        symbol_runs: vec![cooked.symbol_runs],
+    }
+}
+
 fn assemble_frames(frames: Vec<crate::cooked_soa::MaterializedFrame>) -> Result<MaterializedRead> {
     let mut out = MaterializedRead::default();
     let mut n_atoms: Option<u32> = None;
@@ -400,11 +575,13 @@ fn ingest_chunk_bounds(n: usize) -> Vec<(usize, usize)> {
     bounds
 }
 
-/// Large cooked frames stay raw RCSO unless the caller opts in.
+/// Large cooked frames stay raw unless the caller opts in.
 ///
 /// `READCON_DB_COOKED_CODEC=shuffle-zstd` byte-shuffles a frame of at least
 /// 64 KiB when the compressed bytes are smaller. Unset and `raw` store
-/// RCSO. Cooked groups are never rewritten.
+/// RCSO. Cooked groups are never rewritten. The fair warm selected row,
+/// a different frame each iteration, is outside the noise of raw, so this
+/// stays opt-in.
 fn wants_shuffle(cooked: &[u8]) -> bool {
     if cooked.len() < 64 * 1024 || crate::cooked_soa::is_cooked_group(cooked) {
         return false;
@@ -3414,11 +3591,14 @@ impl ConCorpus {
 
     /// Copy the compressed bytes out of the read transaction, then decode
     /// them on `RAYON_NUM_THREADS` workers. `None` when any frame is raw.
+    ///
+    /// Component-major frames are unshuffled straight into the returned
+    /// column buffers. There is no second copy of the coordinates.
     fn decode_shuffled_parallel(
         &self,
         rtxn: &heed::RoTxn<'_>,
         keys: &[FrameKey],
-    ) -> Result<Option<Vec<crate::cooked_soa::MaterializedFrame>>> {
+    ) -> Result<Option<MaterializedRead>> {
         let mut blobs = Vec::with_capacity(keys.len());
         for key in keys {
             let fk_b = key.to_bytes();
@@ -3429,6 +3609,12 @@ impl ConCorpus {
                 return Ok(None);
             }
             blobs.push(blob.to_vec());
+        }
+        let soa = blobs
+            .iter()
+            .all(|blob| blob.len() >= 2 && blob[0] == 0xFB && blob[1] == 0x04);
+        if soa {
+            return Ok(Some(decode_soa_columns(&blobs)?));
         }
         let n = blobs.len();
         let threads = ingest_thread_count().min(n).max(1);
@@ -3454,7 +3640,7 @@ impl ConCorpus {
         for slot in frames {
             out.push(slot.unwrap()?);
         }
-        Ok(Some(out))
+        Ok(Some(assemble_frames(out)?))
     }
 
     /// Positions, velocities, masses, atomic numbers, constraints, and the cell.
@@ -3516,12 +3702,15 @@ impl ConCorpus {
         let mut velocities_set = true;
         let mut cooked_cache = None;
         if keys.len() > 1 {
-            if let Some(frames) = self.decode_shuffled_parallel(&rtxn, &keys)? {
-                return assemble_frames(frames);
+            if let Some(read) = self.decode_shuffled_parallel(&rtxn, &keys)? {
+                return Ok(read);
             }
         }
         for key in &keys {
             let cooked = if let Some(frame) = self.shuffled_frame(&rtxn, *key)? {
+                if keys.len() == 1 {
+                    return Ok(frame_to_read(frame));
+                }
                 Some(frame)
             } else {
                 self.with_frame_cooked(&rtxn, *key, &mut cooked_cache, |blob| {
@@ -7673,6 +7862,11 @@ x
         let db = reopen(dir.path());
         assert_eq!(frame_positions(&db, 1, 0)[2].to_bits(), 1.0f64.to_bits());
         assert_eq!(frame_positions(&db, 1, 1)[2].to_bits(), 2.0f64.to_bits());
+        let all = db.read_materialized(1, None).unwrap();
+        assert_eq!(all.n_frames, 2);
+        assert_eq!(all.positions[2].to_bits(), 1.0f64.to_bits());
+        assert_eq!(all.positions[4096 * 3 + 2].to_bits(), 2.0f64.to_bits());
+        assert_eq!(all.forces[2].to_bits(), 0.5f64.to_bits());
         assert_eq!(
             db.traj_meta(1).unwrap().unwrap().cooked_codec.as_deref(),
             Some("shuffle-zstd")

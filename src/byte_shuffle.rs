@@ -4,9 +4,10 @@
 //! so on. That is the blosc byte shuffle. The inverse writes each `f64`
 //! straight into the caller's column buffer.
 //!
-//! The fast path transposes 32 elements with AVX2. A scalar tail covers the
-//! rest and machines without AVX2.
+//! The fast path transposes 32 elements with AVX2, or 8 with NEON. A scalar
+//! tail covers the rest and machines without those instructions.
 
+#[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
 /// Group bytes of `src` by significance. Both slices are `n * 8` bytes.
@@ -14,11 +15,12 @@ pub fn shuffle_bytes(src: &[u8], dst: &mut [u8]) {
     assert_eq!(src.len() % 8, 0);
     assert_eq!(dst.len(), src.len());
     let n = src.len() / 8;
+    #[cfg(target_arch = "x86_64")]
     if n >= 32 && is_x86_feature_detected!("avx2") {
         unsafe { shuffle8_avx2(src, n, dst) };
-    } else {
-        shuffle8_scalar(src, n, dst);
+        return;
     }
+    shuffle8_scalar(src, n, dst);
 }
 
 /// Inverse of [`shuffle_bytes`]. `dst` receives the restored bytes.
@@ -26,11 +28,17 @@ pub fn unshuffle_bytes(src: &[u8], dst: &mut [u8]) {
     assert_eq!(dst.len() % 8, 0);
     assert_eq!(src.len(), dst.len());
     let n = dst.len() / 8;
+    #[cfg(target_arch = "x86_64")]
     if n >= 32 && is_x86_feature_detected!("avx2") {
         unsafe { unshuffle8_avx2(src, n, dst) };
-    } else {
-        unshuffle8_scalar(src, n, dst);
+        return;
     }
+    #[cfg(target_arch = "aarch64")]
+    if n >= 8 {
+        unsafe { unshuffle8_neon(src, n, dst) };
+        return;
+    }
+    unshuffle8_scalar(src, n, dst);
 }
 
 fn shuffle8_scalar(src: &[u8], n: usize, dst: &mut [u8]) {
@@ -49,6 +57,7 @@ fn unshuffle8_scalar(src: &[u8], n: usize, dst: &mut [u8]) {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn shuffle8_avx2(src: &[u8], n: usize, dst: &mut [u8]) {
     // Shuffle is the transpose the other way. Build it from the scalar
@@ -70,6 +79,7 @@ unsafe fn shuffle8_avx2(src: &[u8], n: usize, dst: &mut [u8]) {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn unshuffle8_avx2(src: &[u8], n: usize, dst: &mut [u8]) {
     let mut i = 0usize;
@@ -143,9 +153,81 @@ unsafe fn unshuffle8_avx2(src: &[u8], n: usize, dst: &mut [u8]) {
     }
 }
 
+/// 8-wide NEON unshuffle. NEON is baseline on aarch64.
+///
+/// The zip order is the same one [`neon_zip_model`] applies in the tests.
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn unshuffle8_neon(src: &[u8], n: usize, dst: &mut [u8]) {
+    use std::arch::aarch64::*;
+    let mut i = 0usize;
+    while i + 8 <= n {
+        let plane = |b: usize| vld1_u8(src.as_ptr().add(b * n + i));
+        let p0 = plane(0);
+        let p1 = plane(1);
+        let p2 = plane(2);
+        let p3 = plane(3);
+        let p4 = plane(4);
+        let p5 = plane(5);
+        let p6 = plane(6);
+        let p7 = plane(7);
+        let ab = vzip_u8(p0, p1);
+        let cd = vzip_u8(p2, p3);
+        let ef = vzip_u8(p4, p5);
+        let gh = vzip_u8(p6, p7);
+        let abcd_lo = vzip_u16(vreinterpret_u16_u8(ab.0), vreinterpret_u16_u8(cd.0));
+        let abcd_hi = vzip_u16(vreinterpret_u16_u8(ab.1), vreinterpret_u16_u8(cd.1));
+        let efgh_lo = vzip_u16(vreinterpret_u16_u8(ef.0), vreinterpret_u16_u8(gh.0));
+        let efgh_hi = vzip_u16(vreinterpret_u16_u8(ef.1), vreinterpret_u16_u8(gh.1));
+        let e0 = vzip_u32(
+            vreinterpret_u32_u16(abcd_lo.0),
+            vreinterpret_u32_u16(efgh_lo.0),
+        );
+        let e1 = vzip_u32(
+            vreinterpret_u32_u16(abcd_lo.1),
+            vreinterpret_u32_u16(efgh_lo.1),
+        );
+        let e2 = vzip_u32(
+            vreinterpret_u32_u16(abcd_hi.0),
+            vreinterpret_u32_u16(efgh_hi.0),
+        );
+        let e3 = vzip_u32(
+            vreinterpret_u32_u16(abcd_hi.1),
+            vreinterpret_u32_u16(efgh_hi.1),
+        );
+        let out = dst.as_mut_ptr().add(i * 8);
+        vst1_u8(out, vreinterpret_u8_u32(e0.0));
+        vst1_u8(out.add(8), vreinterpret_u8_u32(e0.1));
+        vst1_u8(out.add(16), vreinterpret_u8_u32(e1.0));
+        vst1_u8(out.add(24), vreinterpret_u8_u32(e1.1));
+        vst1_u8(out.add(32), vreinterpret_u8_u32(e2.0));
+        vst1_u8(out.add(40), vreinterpret_u8_u32(e2.1));
+        vst1_u8(out.add(48), vreinterpret_u8_u32(e3.0));
+        vst1_u8(out.add(56), vreinterpret_u8_u32(e3.1));
+        i += 8;
+    }
+    for j in i..n {
+        for b in 0..8 {
+            dst[j * 8 + b] = src[b * n + j];
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scalar_unshuffle_matches_the_bytes() {
+        for n in [1usize, 7, 8, 15, 31, 32, 1000] {
+            let src: Vec<u8> = (0..n * 8).map(|i| (i * 17 + 3) as u8).collect();
+            let mut shuffled = vec![0u8; n * 8];
+            shuffle8_scalar(&src, n, &mut shuffled);
+            let mut out = vec![0u8; n * 8];
+            unshuffle8_scalar(&shuffled, n, &mut out);
+            assert_eq!(out, src, "n={n}");
+        }
+    }
 
     #[test]
     fn avx2_unshuffle_matches_the_bytes() {
