@@ -39,6 +39,7 @@ def env_base() -> dict:
     home = str(Path.home() / ".local" / "bin")
     env["PATH"] = home + os.pathsep + env.get("PATH", "")
     env["TMPDIR"] = str(REPO / "build" / "tmp")
+    Path(env["TMPDIR"]).mkdir(parents=True, exist_ok=True)
     env["RUSTUP_TOOLCHAIN"] = "1.88.0"
     env.pop("RAYON_NUM_THREADS", None)
     return env
@@ -48,10 +49,28 @@ def site_packages(prefix: Path) -> Path:
     return fair.site_packages(prefix)
 
 
+def worktree_head(src: Path) -> str:
+    if not (src / "python" / "pyproject.toml").is_file():
+        return ""
+    return subprocess.check_output(
+        ["git", "-C", str(src), "rev-parse", "HEAD"], text=True
+    ).strip()
+
+
 def ensure_tree_prefix(kind: str, commit: str) -> str:
-    """Install ``commit`` from a detached worktree. The tip uses the checkout."""
+    """Install ``commit`` from a detached worktree. The tip uses the checkout.
+
+    ``.source`` names the tree the prefix was built from. A prefix without
+    it predates per-commit worktrees and may hold another commit's build.
+    """
     prefix = REPO / "build" / "wheels" / kind
-    if fair.prefix_ready(prefix, commit):
+    source = "tip" if kind == "tip" else f"src-{commit[:12]}"
+    stamp = prefix / ".source"
+    if (
+        fair.prefix_ready(prefix, commit)
+        and stamp.is_file()
+        and stamp.read_text().strip() == source
+    ):
         return str(site_packages(prefix))
     if prefix.exists():
         shutil.rmtree(prefix)
@@ -60,9 +79,9 @@ def ensure_tree_prefix(kind: str, commit: str) -> str:
     if kind == "tip":
         fair.pip_install(prefix, REPO / "python", env)
     else:
-        src = REPO / "build" / f"src-{commit[:12]}"
+        src = REPO / "build" / source
         env["CARGO_TARGET_DIR"] = str(REPO / "build" / f"target-{commit[:12]}")
-        if not (src / "python" / "pyproject.toml").is_file():
+        if worktree_head(src) != commit:
             if src.exists():
                 subprocess.check_call(
                     ["git", "worktree", "remove", "--force", str(src)], cwd=REPO
@@ -72,6 +91,7 @@ def ensure_tree_prefix(kind: str, commit: str) -> str:
             )
         fair.pip_install(prefix, src / "python", env)
     (prefix / ".commit").write_text(commit + "\n")
+    stamp.write_text(source + "\n")
     return str(site_packages(prefix))
 
 
