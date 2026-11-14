@@ -625,6 +625,7 @@ def header_lines() -> list[str]:
         "quantile type-7 (numpy percentile method=linear)",
         "order serial, tools alternate each sample index, no parallel samples",
         "timer: directory fsync, fadvise, mincore, the element-wise check, and the collector stay outside; the clock covers the commit, or the query; cold-open also times the open",
+        "gc: automatic collection is off for every read row, for both tools, and restored when the row returns",
         "timer_short: a read shorter than 50 ms is repeated until the timed spans add to 50 ms; the sample is that mean",
         "timer_insert: a commit shorter than 2 s is repeated until the timed spans add to 2 s, because commit fsyncs stay correlated past 250 ms",
         "page_cache insert: unlink and create the database file outside the timer, one commit fsync inside",
@@ -1447,6 +1448,23 @@ def execute_insert_row(request: dict) -> dict:
 
 
 def execute_read_row(request: dict) -> dict:
+    """One read row. Automatic collection is off for both tools.
+
+    A collection between iterations returns heap pages, and the next cold
+    open faults them. The pause is the same for readcon-db and ASE. It is
+    restored when the row returns, including when the row raises.
+    """
+    pause_gc = gc.isenabled()
+    if pause_gc:
+        gc.disable()
+    try:
+        return _execute_read_row(request)
+    finally:
+        if pause_gc:
+            gc.enable()
+
+
+def _execute_read_row(request: dict) -> dict:
     kind = request["kind"]
     op = request["op"]
     cache = request["cache"]
@@ -1487,8 +1505,6 @@ def execute_read_row(request: dict) -> dict:
         finally:
             close_reader(kind, db)
             db = None
-            if kind == "readcon-db":
-                gc.collect()
         lines.append(
             f"warmup protocol=fair workload={name} op={op} tool={kind} cache={cache}"
         )
@@ -1515,8 +1531,6 @@ def execute_read_row(request: dict) -> dict:
             close_reader(kind, state["db"])
             state["db"] = None
             state["got"] = None
-            if kind == "readcon-db":
-                gc.collect()
 
         def run_timed(state=state) -> None:
             state["got"] = fetch_materialized(kind, state["db"], op, mid)

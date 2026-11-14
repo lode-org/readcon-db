@@ -55,6 +55,11 @@ query. No harness pre-read. The open stays outside the clock.
 `cold-open`: the drop is outside the clock. The clock is only the
 library open plus the query. readcon-db's open includes the `pread`.
 ASE's open is sqlite's open. The harness does not read the file.
+Automatic collection is off for every read row, for both tools, and
+restored when the row returns. A collection between iterations is
+outside the clock, but it returns heap pages and the next open faults
+them. On the full-read cold-open row that fault stepped the means
+from about 0.33 ms to 0.43 ms halfway through the twelve.
 
 `warm`: one warmup read on the already open store, then the query.
 Both tools.
