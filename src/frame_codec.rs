@@ -224,6 +224,11 @@ pub(crate) fn group_plain(stored: &[u8]) -> Result<GroupPlain> {
     }
     let plain = zstd::stream::decode_all(&stored[6..])
         .map_err(|e| Error::Message(format!("corrupt frame value: {e}")))?;
+    // A length prefix is four bytes. A count past that cannot be a group,
+    // and reserving it aborts before the walk notices.
+    if n > plain.len() / 4 {
+        return Err(Error::Message("corrupt frame value".into()));
+    }
     let mut ranges = Vec::with_capacity(n);
     let mut i = 0;
     while i < plain.len() {
@@ -314,4 +319,34 @@ mod tests {
         let again = pack_aligned(&view).unwrap();
         assert_eq!(again, packed);
     }
+
+    #[test]
+    fn declared_group_count_does_not_allocate() {
+        let compressed = zstd::stream::encode_all(&b"abcd"[..], 1).unwrap();
+        let mut stored = Vec::new();
+        stored.extend_from_slice(&GROUP_TAG);
+        stored.extend_from_slice(&5_000_000u32.to_le_bytes());
+        stored.extend_from_slice(&compressed);
+        let before = resident_bytes();
+        let err = decode_group(&stored).unwrap_err();
+        let after = resident_bytes();
+        assert!(err.to_string().contains("corrupt frame value"), "{err}");
+        assert!(
+            after < before.saturating_add(8 << 20),
+            "resident {before} -> {after}"
+        );
+    }
+}
+
+#[cfg(test)]
+fn resident_bytes() -> usize {
+    let status = std::fs::read_to_string("/proc/self/status").expect("status");
+    for line in status.lines() {
+        let Some(rest) = line.strip_prefix("VmRSS:") else {
+            continue;
+        };
+        let kb: usize = rest.split_whitespace().next().unwrap().parse().unwrap();
+        return kb.saturating_mul(1024);
+    }
+    0
 }
