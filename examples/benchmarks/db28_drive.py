@@ -40,7 +40,7 @@ LEGACY_HOST_LOGS = (
 )
 
 
-def host_cursor_hits(root: Path) -> list[str]:
+def vm_host_hits(root: Path) -> list[str]:
     """Files under ``examples/benchmarks`` that still name that VM host.
 
     The only exemption is :data:`LEGACY_HOST_LOGS`.

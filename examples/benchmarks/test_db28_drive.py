@@ -37,7 +37,7 @@ def test_driver_writes_the_record_layout(tmp_path) -> None:
 
 
 def test_scanner_ignores_only_the_named_legacy_logs(tmp_path) -> None:
-    assert drv.host_cursor_hits(drv.REPO) == []
+    assert drv.vm_host_hits(drv.REPO) == []
     fair = tmp_path / "examples" / "benchmarks" / "results" / "fair"
     fair.mkdir(parents=True)
     for name in ("campaign.log", "insert-span.log", "insert-validate.log"):
@@ -45,7 +45,7 @@ def test_scanner_ignores_only_the_named_legacy_logs(tmp_path) -> None:
     (tmp_path / "examples" / "benchmarks" / "notes.md").write_text(
         "Host `" + "cursor" + "`\n"
     )
-    assert drv.host_cursor_hits(tmp_path) == ["examples/benchmarks/notes.md"]
+    assert drv.vm_host_hits(tmp_path) == ["examples/benchmarks/notes.md"]
     for rel in drv.LEGACY_HOST_LOGS:
         assert (drv.REPO / rel).read_text().splitlines()[2] == "host cursor"
 
