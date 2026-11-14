@@ -36,6 +36,19 @@ def test_driver_writes_the_record_layout(tmp_path) -> None:
     assert host["hostname"] == "host"
 
 
+def test_recorded_run_refuses_n_below_12(tmp_path) -> None:
+    assert drv.N >= 12
+    with pytest.raises(ValueError, match="n>=12"):
+        drv.require_recorded_n(6)
+    with pytest.raises(ValueError, match="n>=12"):
+        drv.require_recorded_n(11)
+    assert drv.require_recorded_n(12) == 12
+    record = drv.example_record()
+    record["n"] = 6
+    with pytest.raises(ValueError, match="n>=12"):
+        drv.write_outputs(tmp_path, record, "short\n")
+
+
 def test_host_label_rejects_cursor_and_any_other_hostname(tmp_path) -> None:
     assert drv.host_label("host") == "host"
     for name in ("cursor", "Cursor", "localhost", "ip-10-0-0-1", socket.gethostname()):

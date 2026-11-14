@@ -32,7 +32,16 @@ def host_label(name: str) -> str:
     return NEUTRAL_HOST
 
 
-N = 6
+N = 12
+
+
+def require_recorded_n(n: int) -> int:
+    """A saved record uses at least 12 paired samples."""
+    if n < 12:
+        raise ValueError(f"a recorded run needs n>=12, not {n}")
+    return n
+
+
 OPS = ("full_read", "selected", "range")
 CACHES = ("cold", "warm")
 ARMS = ("md", "thermal", "lattice")
@@ -293,6 +302,7 @@ def write_results(directory: Path, record: dict) -> None:
 
 def write_outputs(directory: Path, record: dict, log_text: str) -> None:
     """Write the four files a db28 record is made of."""
+    require_recorded_n(int(record["n"]))
     record["host"]["hostname"] = host_label(record["host"]["hostname"])
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "host.json").write_text(json.dumps(record["host"], indent=2) + "\n")
@@ -377,6 +387,7 @@ def example_record() -> dict:
 def main() -> None:
     os.environ.update(drv.env_base())
     os.environ.pop("READCON_DB_COOKED_CODEC", None)
+    require_recorded_n(N)
     drv.fair.require_pushed_commit()
     commit = drv.fair.git_out("rev-parse", "HEAD")
     contained = drv.fair.git_out("branch", "-r", "--contains", "HEAD")
