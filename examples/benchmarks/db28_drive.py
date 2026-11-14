@@ -32,25 +32,50 @@ def host_label(name: str) -> str:
     return NEUTRAL_HOST
 
 
+def _json_hostname(line: str) -> str | None:
+    key = '"hostname"'
+    if key not in line:
+        return None
+    after = line.split(key, 1)[1].lstrip()
+    if not after.startswith(":"):
+        return None
+    after = after[1:].lstrip()
+    if len(after) < 2 or after[0] != '"':
+        return None
+    end = after.find('"', 1)
+    if end < 0:
+        return None
+    return after[1:end]
+
+
 def vm_host_hits(root: Path) -> list[str]:
-    """Files under ``examples/benchmarks`` that name the VM host."""
-    base = root / "examples" / "benchmarks"
+    """Benchmark and bench files that name a VM host or a tmp path."""
     hits = []
     host_line = "host " + "cursor"
     marked = "`" + "cursor" + "`"
-    json_host = '"hostname": "' + "cursor" + '"'
-    for path in sorted(base.rglob("*")):
-        if not path.is_file() or path.suffix not in {".py", ".md", ".log", ".json"}:
+    tmp_path = "/" + "tmp" + "/"
+    for base in (root / "examples" / "benchmarks", root / "bench"):
+        if not base.is_dir():
             continue
-        if "__pycache__" in path.parts:
-            continue
-        text = path.read_text(encoding="utf-8", errors="replace")
-        named = any(
-            line.strip() == host_line or marked in line or json_host in line
-            for line in text.splitlines()
-        )
-        if named:
-            hits.append(path.relative_to(root).as_posix())
+        for path in sorted(base.rglob("*")):
+            if not path.is_file() or path.suffix not in {".py", ".md", ".log", ".json"}:
+                continue
+            if "__pycache__" in path.parts or path.name.startswith("test_"):
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            named = False
+            for line in text.splitlines():
+                host = _json_hostname(line)
+                if (
+                    line.strip() == host_line
+                    or marked in line
+                    or tmp_path in line
+                    or (host is not None and host != NEUTRAL_HOST)
+                ):
+                    named = True
+                    break
+            if named:
+                hits.append(path.relative_to(root).as_posix())
     return hits
 
 
