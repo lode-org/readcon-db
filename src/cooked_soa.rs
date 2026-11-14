@@ -1725,4 +1725,134 @@ mod tests {
             decompress_shuffled_into(&corrupt, &mut positions, &mut forces, &mut vels).is_err()
         );
     }
+
+    #[test]
+    #[ignore]
+    fn record_db23_levers() {
+        let n = 100_000usize;
+        let raw = synthetic_rcso(n, false);
+        let (_ntot, _flags, npos, nfor, _nvel) = coord_layout(&raw).unwrap();
+        let coords = &raw[HEADER_LEN..HEADER_LEN + (npos + nfor) * 8];
+        let pos = le_f64s(&coords[..npos * 8]);
+        let frc = le_f64s(&coords[npos * 8..]);
+        let mut cols = Vec::new();
+        for src in [&pos, &frc] {
+            for lane in 0..3 {
+                let mut gather = vec![0f64; n];
+                for i in 0..n {
+                    gather[i] = src[i * 3 + lane];
+                }
+                let mut shuffled = vec![0u8; n * 8];
+                crate::byte_shuffle::shuffle_bytes(le_f64_bytes(&gather), &mut shuffled);
+                cols.push(shuffled);
+            }
+        }
+        let rounds = 20u32;
+        let time = |mut body: &mut dyn FnMut()| {
+            for _ in 0..3 {
+                body();
+            }
+            let t0 = std::time::Instant::now();
+            for _ in 0..rounds {
+                body();
+            }
+            t0.elapsed().as_micros() / u128::from(rounds)
+        };
+        let scope_us = time(&mut || {
+            std::thread::scope(|scope| {
+                scope.spawn(|| {});
+                scope.spawn(|| {});
+            });
+        });
+        let mut rows = Vec::new();
+        for (level, window) in [(3, 20u32), (3, 12), (1, 12), (-5, 12), (-1, 12)] {
+            let mut compressor = zstd::bulk::Compressor::new(level).unwrap();
+            compressor
+                .set_parameter(zstd::zstd_safe::CParameter::WindowLog(window))
+                .unwrap();
+            compressor
+                .set_parameter(zstd::zstd_safe::CParameter::EnableLongDistanceMatching(
+                    false,
+                ))
+                .unwrap();
+            let mut parts = Vec::new();
+            let mut bytes = 0usize;
+            for col in &cols {
+                let part = compressor.compress(col).unwrap();
+                bytes += part.len();
+                parts.push(part);
+            }
+            let mut decs: Vec<_> = (0..6)
+                .map(|_| zstd::bulk::Decompressor::new().unwrap())
+                .collect();
+            let mut bufs = vec![vec![0u8; n * 8]; 6];
+            let seq = time(&mut || {
+                for i in 0..6 {
+                    decs[i]
+                        .decompress_to_buffer(&parts[i], &mut bufs[i])
+                        .unwrap();
+                }
+                std::hint::black_box(bufs[0][0]);
+            });
+            let par = time(&mut || {
+                std::thread::scope(|scope| {
+                    let (left, right) = parts.split_at(3);
+                    let (buf_l, buf_r) = bufs.split_at_mut(3);
+                    let (dec_l, dec_r) = decs.split_at_mut(3);
+                    scope.spawn(move || {
+                        for i in 0..3 {
+                            dec_l[i]
+                                .decompress_to_buffer(&left[i], &mut buf_l[i])
+                                .unwrap();
+                        }
+                    });
+                    scope.spawn(move || {
+                        for i in 0..3 {
+                            dec_r[i]
+                                .decompress_to_buffer(&right[i], &mut buf_r[i])
+                                .unwrap();
+                        }
+                    });
+                });
+                std::hint::black_box(bufs[0][0]);
+            });
+            rows.push(format!(
+                "{{\"level\":{level},\"window\":{window},\"ldm\":false,\"bytes\":{bytes},\"seq_us\":{seq},\"two_thread_us\":{par}}}"
+            ));
+        }
+        let mut compressor = zstd::bulk::Compressor::new(3).unwrap();
+        compressor
+            .set_parameter(zstd::zstd_safe::CParameter::WindowLog(12))
+            .unwrap();
+        let mut high_bytes = 0usize;
+        let mut high_parts = Vec::new();
+        for col in &cols {
+            let mut high = vec![0u8; n * 4];
+            high[..n].copy_from_slice(&col[4 * n..5 * n]);
+            high[n..2 * n].copy_from_slice(&col[5 * n..6 * n]);
+            high[2 * n..3 * n].copy_from_slice(&col[6 * n..7 * n]);
+            high[3 * n..].copy_from_slice(&col[7 * n..]);
+            let part = compressor.compress(&high).unwrap();
+            high_bytes += part.len();
+            high_parts.push(part);
+        }
+        let mut dec = zstd::bulk::Decompressor::new().unwrap();
+        let mut hbuf = vec![0u8; n * 4];
+        let low = vec![0u8; n * 4];
+        let mut sink = vec![0u8; n * 8];
+        let high_us = time(&mut || {
+            for part in &high_parts {
+                dec.decompress_to_buffer(part, &mut hbuf).unwrap();
+                sink[..n * 4].copy_from_slice(&low);
+                sink[n * 4..].copy_from_slice(&hbuf);
+            }
+            std::hint::black_box(sink[0]);
+        });
+        println!(
+            "{{\"scope_two_threads_us\":{scope_us},\"raw_force_bytes\":{},\"high_byte_zstd_bytes\":{high_bytes},\"high_byte_raw_low_bytes\":{},\"high_byte_decode_copy_us\":{high_us},\"rows\":[{}]}}",
+            nfor * 8,
+            cols.len() * n * 4,
+            rows.join(",")
+        );
+    }
 }
