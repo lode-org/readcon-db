@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import os
 import platform
-import socket
 import sys
 import time
 from pathlib import Path
@@ -23,6 +22,16 @@ import fair_ase_protocol as fair
 REPO = Path(__file__).resolve().parents[2]
 BENCH = REPO / "bench" / "db28"
 OUTPUTS = ("RESULTS.md", "ab.json", "host.json", "campaign.log")
+NEUTRAL_HOST = "host"
+
+
+def host_label(name: str) -> str:
+    """Records use this label. A machine hostname, including ``cursor``, is refused."""
+    if name != NEUTRAL_HOST:
+        raise ValueError(f"refusing non-neutral host label {name!r}")
+    return NEUTRAL_HOST
+
+
 N = 6
 OPS = ("full_read", "selected", "range")
 CACHES = ("cold", "warm")
@@ -284,6 +293,7 @@ def write_results(directory: Path, record: dict) -> None:
 
 def write_outputs(directory: Path, record: dict, log_text: str) -> None:
     """Write the four files a db28 record is made of."""
+    record["host"]["hostname"] = host_label(record["host"]["hostname"])
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "host.json").write_text(json.dumps(record["host"], indent=2) + "\n")
     (directory / "ab.json").write_text(json.dumps(record, indent=2) + "\n")
@@ -396,7 +406,7 @@ def main() -> None:
     host = {
         "commit": commit,
         "tree": tree,
-        "hostname": socket.gethostname(),
+        "hostname": host_label(NEUTRAL_HOST),
         "system": platform.system(),
         "release": platform.release(),
         "machine": platform.machine(),

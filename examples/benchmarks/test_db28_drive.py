@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 
 import pytest
 
@@ -32,3 +33,17 @@ def test_driver_writes_the_record_layout(tmp_path) -> None:
     assert host["commit"] == record["commit"]
     assert "hostname" in host
     assert (tmp_path / "campaign.log").read_text() == "commit sample\n"
+    assert host["hostname"] == "host"
+
+
+def test_host_label_rejects_cursor_and_any_other_hostname(tmp_path) -> None:
+    assert drv.host_label("host") == "host"
+    for name in ("cursor", "Cursor", "localhost", "ip-10-0-0-1", socket.gethostname()):
+        if name == "host":
+            continue
+        with pytest.raises(ValueError):
+            drv.host_label(name)
+    record = drv.example_record()
+    record["host"]["hostname"] = "cursor"
+    with pytest.raises(ValueError):
+        drv.write_outputs(tmp_path, record, "nope\n")
