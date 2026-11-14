@@ -41,16 +41,19 @@ no frame from it is visible.
 Both tools get the same cache treatment on every row.
 
 `cold`: `posix_fadvise(DONTNEED)` until `mincore` is 0, then open,
-then the query. The open stays outside the clock. readcon-db's cold
-open sets `POSIX_FADV_RANDOM` and does not touch the map, so it does
-not readahead both ends of `data.mdb` and leave a hole. The query is
-the first read of its pages. ASE gets the same harness steps on its
+then the query. The open stays outside the clock. `POSIX_FADV_RANDOM`
+made LMDB fault leaf pages one at a time, and that fault was bimodal
+(about 0.12 ms against 0.25 ms) even when `mincore` was 0. A head-only
+read left the same hole. readcon-db's cold open therefore reads a
+corpus under 1 MiB in one sequential `pread` before it returns, so the
+query does not fault that hole. ASE gets the same harness steps on its
 sqlite file: drop, open, query, with no harness pre-read.
 
 `warm-after-open`: the same drop, then that tool's own open, then the
 query. There is no harness pre-read on either side. readcon-db's open
-faults a corpus under 1 MiB (`madvise(WILLNEED)` and a parallel touch).
-ASE's open is sqlite's open. The open stays outside the clock.
+issues `readahead(2)` for a corpus under 1 MiB. A parallel touch of
+every page was slower than the fault it hid. ASE's open is sqlite's
+open. The open stays outside the clock.
 
 `cold-open`: the drop is outside the clock. The clock is the open
 plus a read of every page of the database file, plus the query.

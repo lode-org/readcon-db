@@ -21,9 +21,9 @@ impl PyConCorpus {
     #[pyo3(signature = (path, readonly=false, warm=true))]
     /// Open `path`. `readonly=True` refuses writes.
     ///
-    /// `warm=True` faults a corpus under 1 MiB before returning, so the
-    /// readahead hole is closed inside `open`. `warm=False` with
-    /// `readonly=True` leaves the page cache cold for a timed query.
+    /// `warm=True` issues `readahead(2)` for a corpus under 1 MiB.
+    /// `warm=False` with `readonly=True` reads that file in one `pread`
+    /// before returning, so the query does not fault a readahead hole.
     fn new(path: &str, readonly: bool, warm: bool) -> PyResult<Self> {
         let inner = if readonly && !warm {
             ConCorpus::open_readonly_cold(path)

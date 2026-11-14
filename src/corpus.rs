@@ -579,70 +579,49 @@ fn project_spans(texts: &[&str]) -> Result<Vec<(crate::span_columns::SpanFacts, 
     Ok(all)
 }
 
-/// Fault a corpus under 1 MiB before `open` returns.
+/// Ask the kernel to fault a corpus under 1 MiB.
 ///
-/// Kernel readahead on the LMDB map fills both ends of `data.mdb` and
-/// leaves a hole in the middle. The first query then faults that hole,
-/// and the fault time swings. `MADV_WILLNEED` plus a parallel touch of
-/// every page closes the hole inside `open`, so a later query is a
-/// resident read. The cost is part of opening.
+/// A threaded touch of every page costs more than the read it saves.
+/// `readahead(2)` overlaps the fault with the rest of `open`. One
+/// sequential `pread` is the cold open: it has to finish before the
+/// query, or the query faults the hole.
 fn warm_small_map(path: &Path) {
+    let Some(len) = small_data_len(path) else {
+        return;
+    };
+    let Ok(file) = fs::File::open(path.join("data.mdb")) else {
+        return;
+    };
+    unsafe {
+        libc::readahead(file.as_raw_fd(), 0, len);
+    }
+}
+
+/// One sequential read of a corpus under 1 MiB, into a buffer that is dropped.
+///
+/// This finishes the fault before `open` returns, so the query that follows
+/// does not land on an unprefetched hole. A head-only read leaves that hole.
+fn pread_small_map(path: &Path) {
+    let Some(len) = small_data_len(path) else {
+        return;
+    };
+    let mut file = match fs::File::open(path.join("data.mdb")) {
+        Ok(file) => file,
+        Err(_) => return,
+    };
+    let mut buf = vec![0u8; len];
+    use std::io::Read;
+    let _ = file.read_exact(&mut buf);
+    std::hint::black_box(buf.len());
+}
+
+fn small_data_len(path: &Path) -> Option<usize> {
     const LIMIT: u64 = 1024 * 1024;
-    let data = path.join("data.mdb");
-    let Ok(file) = fs::File::open(&data) else {
-        return;
-    };
-    let Ok(meta) = file.metadata() else {
-        return;
-    };
+    let meta = fs::metadata(path.join("data.mdb")).ok()?;
     if meta.len() == 0 || meta.len() > LIMIT {
-        return;
-    }
-    let len = meta.len() as usize;
-    let page = 4096usize;
-    let addr = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            len,
-            libc::PROT_READ,
-            libc::MAP_SHARED,
-            file.as_raw_fd(),
-            0,
-        )
-    };
-    if addr.is_null() || addr == libc::MAP_FAILED {
-        return;
-    }
-    unsafe {
-        libc::madvise(addr, len, libc::MADV_WILLNEED);
-    }
-    let pages = len.div_ceil(page);
-    let threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        .clamp(1, 8)
-        .min(pages);
-    let chunk = pages.div_ceil(threads);
-    let base = addr as usize;
-    std::thread::scope(|scope| {
-        for t in 0..threads {
-            let start = t * chunk;
-            let end = (start + chunk).min(pages);
-            if start >= end {
-                break;
-            }
-            scope.spawn(move || {
-                let ptr = base as *const u8;
-                let mut acc = 0u8;
-                for i in start..end {
-                    acc ^= unsafe { ptr.add(i * page).read_volatile() };
-                }
-                std::hint::black_box(acc);
-            });
-        }
-    });
-    unsafe {
-        libc::munmap(addr, len);
+        None
+    } else {
+        Some(meta.len() as usize)
     }
 }
 
@@ -800,19 +779,21 @@ impl ConCorpus {
         Self::open_with(path, true, None, true)
     }
 
-    /// Readonly open that leaves the page cache cold.
+    /// Readonly open for a query that must not fault a readahead hole.
     ///
-    /// `POSIX_FADV_RANDOM` stops the kernel from readaheading both ends of
-    /// `data.mdb`, which is the hole a normal open used to leave. The small
-    /// map is not touched. A cold query then faults the pages it reads.
+    /// `POSIX_FADV_RANDOM` made LMDB fault leaf pages one at a time, and that
+    /// fault was bimodal. One sequential read of a corpus under 1 MiB brings
+    /// the meta pages, the B-tree, and the values in together. The read is
+    /// part of `open`, so a cold-row query (open outside the clock) sees a
+    /// warm path.
     pub fn open_readonly_cold(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         if let Ok(file) = fs::File::open(path.join("data.mdb")) {
             unsafe {
-                libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_RANDOM);
                 libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED);
             }
         }
+        pread_small_map(path);
         Self::open_with(path, true, None, false)
     }
 
@@ -4184,7 +4165,7 @@ mod tests {
     }
 
     #[test]
-    fn cold_open_does_not_fault_every_page() {
+    fn cold_open_reads_the_small_map() {
         use std::os::unix::io::AsRawFd;
         let dir = tempfile::tempdir().unwrap();
         let db = ConCorpus::open(dir.path()).unwrap();
@@ -4222,9 +4203,9 @@ mod tests {
             libc::munmap(addr, len);
         }
         let resident = vec.iter().filter(|b| *b & 1 == 1).count();
-        assert!(
-            resident < pages,
-            "cold open faulted every page ({resident}/{pages}): {vec:?}"
+        assert_eq!(
+            resident, pages,
+            "cold open left a hole ({resident}/{pages}): {vec:?}"
         );
         drop(db);
     }
