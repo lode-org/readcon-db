@@ -4,7 +4,7 @@ use std::fs;
 use std::io::Cursor;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use heed::types::{Bytes, Str, Unit};
@@ -602,6 +602,9 @@ pub struct ConCorpus {
     /// Written only from `finish_open`, before the value is shared. Later
     /// calls only read it, including from other threads.
     cooked_cache: UnsafeCell<CookedCache>,
+    /// 0 follows `READCON_DB_COOKED_CODEC`. 1 is warm-point (raw).
+    /// 2 is cold-bulk (shuffle when the frame is large enough).
+    cooked_access: AtomicU8,
     /// Optional topology HEX ‖ 0xff ‖ FrameKey. Missing on readonly of older corpora.
     idx_topo: Option<Database<Bytes, Unit>>,
     /// Optional FrameKey → HEX. Authority for a matching `reindex` rebuild.
@@ -762,12 +765,14 @@ impl Drop for ClearCodec {
     }
 }
 
-/// A cooked frame of at least 64 KiB is shuffled when the compressed bytes
-/// are smaller. Cooked groups are never rewritten.
+/// A cooked frame of at least 64 KiB is shuffled when the caller asked
+/// for it and the compressed bytes are smaller. Cooked groups are never
+/// rewritten.
 ///
-/// `READCON_DB_COOKED_CODEC` is case-sensitive. Unset uses this default.
+/// `READCON_DB_COOKED_CODEC` is case-sensitive. Unset stores raw.
 /// The only accepted values are exactly `raw` and `shuffle-zstd`.
-/// A write reads the variable once, before the first put.
+/// [`ConCorpus::set_cooked_access`] overrides the variable for that corpus.
+/// A write reads the choice once, before the first put.
 fn wants_shuffle(cooked: &[u8]) -> Result<bool> {
     let forced_raw = match CODEC_RAW.with(|slot| slot.get()) {
         Some(raw) => raw,
@@ -784,7 +789,7 @@ fn wants_shuffle(cooked: &[u8]) -> Result<bool> {
 
 fn cooked_codec_forces_raw() -> Result<bool> {
     match std::env::var("READCON_DB_COOKED_CODEC") {
-        Err(std::env::VarError::NotPresent) => Ok(false),
+        Err(std::env::VarError::NotPresent) => Ok(true),
         Err(std::env::VarError::NotUnicode(_)) => Err(Error::Message(
             "READCON_DB_COOKED_CODEC must be exactly \"raw\" or \"shuffle-zstd\"".into(),
         )),
@@ -1185,14 +1190,52 @@ impl ConCorpus {
         input_bytes: usize,
         body: impl FnMut(&mut RwTxn<'_>) -> Result<T>,
     ) -> Result<T> {
-        let _token = lock_codec();
-        let forced_raw = cooked_codec_forces_raw()?;
-        drop(_token);
+        let forced_raw = match self.cooked_access.load(Ordering::Relaxed) {
+            1 => true,
+            2 => false,
+            _ => {
+                let _token = lock_codec();
+                cooked_codec_forces_raw()?
+            }
+        };
         CODEC_RAW.with(|slot| slot.set(Some(forced_raw)));
         let _clear = ClearCodec;
         let result = self.write_txn(input_bytes, body);
         self.fresh_dir.note(&result);
         result
+    }
+
+    /// Choose the stored layout for later writes of this corpus.
+    ///
+    /// `warm-point` stores interleaved RCSO. Use it for a selected read and
+    /// for a warm single-thread scan. `cold-bulk` stores shuffle-zstd when
+    /// the frame is at least 64 KiB and the shuffled blob is smaller. Use
+    /// it for a cold full or range read. A later call replaces the choice.
+    /// Unset, the corpus follows `READCON_DB_COOKED_CODEC`, and an unset
+    /// variable stores raw.
+    ///
+    /// db28, n=6, shuffle/raw paired median. md warm selected was 1.377
+    /// [1.261, 1.390] with 0 of 6 faster (1.173 ms raw, 1.601 ms shuffle).
+    /// thermal warm selected was 1.129 and, at one thread, 1.176 with 0 of
+    /// 6 faster. At one thread, md warm full was 1.214 and md warm range
+    /// was 1.430. The stored column is 0.52 of the raw column for md and
+    /// 0.86 for thermal, so a cached decode does not beat the raw copy.
+    /// Warm-point is that raw copy: the selected read is the raw median
+    /// above, and the ratio against raw is 1. Cold full md was 0.509,
+    /// which is the cold-bulk case. The benchmark still sets one codec
+    /// on every arm.
+    pub fn set_cooked_access(&self, pattern: &str) -> Result<()> {
+        let code = match pattern {
+            "warm-point" => 1,
+            "cold-bulk" => 2,
+            _ => {
+                return Err(Error::Message(
+                    "cooked access must be \"warm-point\" or \"cold-bulk\"".into(),
+                ));
+            }
+        };
+        self.cooked_access.store(code, Ordering::Relaxed);
+        Ok(())
     }
 
     fn write_txn<T>(
@@ -1416,6 +1459,7 @@ impl ConCorpus {
                 idx_cols,
                 frames_soa,
                 cooked_cache: UnsafeCell::new(CookedCache::empty()),
+                cooked_access: AtomicU8::new(0),
                 idx_topo,
                 topo_by_frame,
                 idx_canon,
@@ -1476,6 +1520,7 @@ impl ConCorpus {
             idx_cols: Some(idx_cols),
             frames_soa,
             cooked_cache: UnsafeCell::new(CookedCache::empty()),
+            cooked_access: AtomicU8::new(0),
             idx_topo: Some(idx_topo),
             topo_by_frame: Some(topo_by_frame),
             idx_canon: Some(idx_canon),
@@ -8163,14 +8208,32 @@ x
         db.append_trajectory_str(1, &text, "plain").unwrap();
         let stored = raw_soa(&db, 0).unwrap();
         assert!(
-            crate::cooked_soa::is_shuffled_zstd(&stored),
-            "large frames shuffle by default"
+            !crate::cooked_soa::is_shuffled_zstd(&stored),
+            "unset stores raw"
         );
         assert_eq!(frame_positions(&db, 1, 0)[2].to_bits(), 1.0f64.to_bits());
         assert_eq!(
             db.traj_meta(1).unwrap().unwrap().cooked_codec.as_deref(),
-            Some("shuffle-zstd")
+            Some("raw")
         );
+        let cold = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(cold.path()).unwrap();
+        db.set_cooked_access("cold-bulk").unwrap();
+        db.append_trajectory_str(1, &text, "cold").unwrap();
+        assert!(crate::cooked_soa::is_shuffled_zstd(
+            &raw_soa(&db, 0).unwrap()
+        ));
+        assert_eq!(frame_positions(&db, 1, 0)[2].to_bits(), 1.0f64.to_bits());
+        let warm = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(warm.path()).unwrap();
+        std::env::set_var("READCON_DB_COOKED_CODEC", "shuffle-zstd");
+        db.set_cooked_access("warm-point").unwrap();
+        db.append_trajectory_str(1, &text, "warm").unwrap();
+        assert!(!crate::cooked_soa::is_shuffled_zstd(
+            &raw_soa(&db, 0).unwrap()
+        ));
+        std::env::remove_var("READCON_DB_COOKED_CODEC");
+        assert!(db.set_cooked_access("neither").is_err());
 
         std::env::set_var("READCON_DB_COOKED_CODEC", "shuffle-zstd");
         let dir = tempfile::tempdir().unwrap();

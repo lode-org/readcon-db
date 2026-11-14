@@ -69,6 +69,19 @@ impl PyConCorpus {
         Ok(meta.and_then(|row| row.cooked_codec))
     }
 
+    /// `warm-point` stores raw columns. `cold-bulk` stores shuffle-zstd
+    /// when the frame is at least 64 KiB and the shuffled blob is smaller.
+    ///
+    /// db28 n=6 shuffle/raw: md warm selected 1.377 (0/6 faster), thermal
+    /// warm selected 1.129 and 1.176, one-thread md warm full 1.214 and
+    /// warm range 1.430. Warm-point keeps the raw times (1.173 ms and
+    /// 1.235 ms). Cold full md was 0.509, which stays on cold-bulk.
+    fn set_cooked_access(&self, pattern: &str) -> PyResult<()> {
+        self.inner
+            .set_cooked_access(pattern)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
     /// RCSO bytes for a unidirectional broadcast on the *caller* communicator.
     /// Rank 0 packs; workers call :func:`unpack_positions` on the copy.
     fn pack_frame(&self, traj_id: u64, frame_idx: u32) -> PyResult<Vec<u8>> {

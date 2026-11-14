@@ -6,10 +6,9 @@ import shutil
 from collections import Counter
 from pathlib import Path
 
+import fair_ase_protocol as fair
 import numpy as np
 import pytest
-
-import fair_ase_protocol as fair
 from readcon_db import ConCorpus
 
 # Species counts of the pinned NhaA gro, in the order the arm writes.
@@ -105,6 +104,29 @@ def _write(monkeypatch, arm: str, codec: str, dest: Path, n_frames: int) -> dict
         got["atoms_per_frame"], has_forces=arm == "lattice"
     )
     return got
+
+
+def test_cooked_access_is_opt_in_per_pattern(monkeypatch) -> None:
+    """Warm-point stays raw even if the env asks for shuffle. Cold-bulk shuffles."""
+    monkeypatch.setenv("READCON_DB_COOKED_CODEC", "shuffle-zstd")
+    text, _records = fair.build_text_records(1, 3000)
+    root = Path(__file__).resolve().parents[2] / "build" / "db29-access"
+    warm = root / "warm"
+    cold = root / "cold"
+    for dest, pattern, codec in (
+        (warm, "warm-point", "raw"),
+        (cold, "cold-bulk", "shuffle-zstd"),
+    ):
+        if dest.exists():
+            shutil.rmtree(dest)
+        dest.mkdir(parents=True)
+        db = ConCorpus(str(dest))
+        db.set_cooked_access(pattern)
+        db.append_trajectory_str(1, text, source="traj.con")
+        assert db.cooked_codec(1) == codec
+        del db
+    with pytest.raises(RuntimeError):
+        ConCorpus(str(warm)).set_cooked_access("cursor")
 
 
 def test_cooked_codec_binding_returns_raw_and_shuffle(monkeypatch) -> None:
