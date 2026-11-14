@@ -575,20 +575,16 @@ fn ingest_chunk_bounds(n: usize) -> Vec<(usize, usize)> {
     bounds
 }
 
-/// Large cooked frames stay raw unless the caller opts in.
-///
-/// `READCON_DB_COOKED_CODEC=shuffle-zstd` byte-shuffles a frame of at least
-/// 64 KiB when the compressed bytes are smaller. Unset and `raw` store
-/// RCSO. Cooked groups are never rewritten. The fair warm selected row,
-/// a different frame each iteration, is outside the noise of raw, so this
-/// stays opt-in.
+/// A cooked frame of at least 64 KiB is shuffled when the compressed bytes
+/// are smaller. `READCON_DB_COOKED_CODEC=raw` keeps RCSO. Cooked groups
+/// are never rewritten.
 fn wants_shuffle(cooked: &[u8]) -> bool {
     if cooked.len() < 64 * 1024 || crate::cooked_soa::is_cooked_group(cooked) {
         return false;
     }
-    matches!(
+    !matches!(
         std::env::var("READCON_DB_COOKED_CODEC").as_deref(),
-        Ok("shuffle-zstd")
+        Ok("raw")
     )
 }
 
@@ -3572,6 +3568,23 @@ impl ConCorpus {
         unsafe {
             libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_WILLNEED);
         }
+    }
+
+    /// The cooked blob for one frame, copied out of the read transaction.
+    ///
+    /// Used so a caller can allocate the output array before the decode.
+    #[cfg(feature = "python")]
+    pub(crate) fn cooked_frame_bytes(
+        &self,
+        traj_id: TrajId,
+        frame_idx: u32,
+    ) -> Result<Option<Vec<u8>>> {
+        let rtxn = self.read_txn()?;
+        let fk = FrameKey { traj_id, frame_idx }.to_bytes();
+        Ok(self
+            .frames_soa
+            .get(&rtxn, &fk[..])?
+            .map(|blob| blob.to_vec()))
     }
 
     fn shuffled_frame(
@@ -7833,13 +7846,13 @@ x
         db.append_trajectory_str(1, &text, "plain").unwrap();
         let stored = raw_soa(&db, 0).unwrap();
         assert!(
-            !crate::cooked_soa::is_shuffled_zstd(&stored),
-            "shuffle stays opt-in"
+            crate::cooked_soa::is_shuffled_zstd(&stored),
+            "large frames shuffle by default"
         );
         assert_eq!(frame_positions(&db, 1, 0)[2].to_bits(), 1.0f64.to_bits());
         assert_eq!(
             db.traj_meta(1).unwrap().unwrap().cooked_codec.as_deref(),
-            Some("raw")
+            Some("shuffle-zstd")
         );
 
         std::env::set_var("READCON_DB_COOKED_CODEC", "shuffle-zstd");

@@ -593,6 +593,28 @@ pub fn is_shuffled_zstd(stored: &[u8]) -> bool {
     stored.len() >= 2 && stored[0] == 0xFB && (stored[1] == 0x03 || stored[1] == 0x04)
 }
 
+/// Atom count and which coordinate blocks a component-major frame carries.
+/// `None` for raw RCSO and for the older interleaved tag.
+#[cfg(feature = "python")]
+pub fn shuffled_column_layout(stored: &[u8]) -> Option<(u32, bool, bool)> {
+    if stored.len() < 14
+        || stored[0] != SHUFFLE_ZSTD_SOA_TAG[0]
+        || stored[1] != SHUFFLE_ZSTD_SOA_TAG[1]
+    {
+        return None;
+    }
+    let natoms = u32::from_le_bytes(stored.get(2..6)?.try_into().ok()?);
+    let flags = u32::from_le_bytes(stored.get(6..10)?.try_into().ok()?);
+    if natoms == 0 {
+        return None;
+    }
+    Some((
+        natoms,
+        flags & FLAG_FORCES != 0,
+        flags & FLAG_VELOCITIES != 0,
+    ))
+}
+
 struct ZstdScratch {
     dec: zstd::bulk::Decompressor<'static>,
     buf: Vec<u8>,
@@ -715,12 +737,19 @@ fn compress_components(raw: &[u8], tag: [u8; 2]) -> Result<Vec<u8>> {
     let coords = &raw[HEADER_LEN..HEADER_LEN + coord_bytes];
     let mut compressor = zstd::bulk::Compressor::new(SHUFFLE_LEVEL)
         .map_err(|e| Error::Message(format!("zstd encode: {e}")))?;
+    // A window of 4 KiB decodes a 100k-atom column faster than the
+    // default. Long-distance matching does not.
     let window = (atoms * 8)
         .next_power_of_two()
         .trailing_zeros()
-        .clamp(10, 22);
+        .clamp(10, 12);
     compressor
         .set_parameter(zstd::zstd_safe::CParameter::WindowLog(window))
+        .map_err(|e| Error::Message(format!("zstd encode: {e}")))?;
+    compressor
+        .set_parameter(zstd::zstd_safe::CParameter::EnableLongDistanceMatching(
+            false,
+        ))
         .map_err(|e| Error::Message(format!("zstd encode: {e}")))?;
     let mut columns = Vec::new();
     let mut gather = vec![0f64; atoms];
@@ -973,6 +1002,10 @@ pub(crate) fn decompress_shuffled_into(
     .ok_or_else(|| Error::Message("shuffled cooked frame metadata is corrupt".into()))
 }
 
+/// Two `thread::scope` workers cost about 70 µs. Below this atom count the
+/// columns are too small for that to pay.
+const PARALLEL_ATOMS: usize = 16_384;
+
 fn fill_component_columns(
     stored: &[u8],
     mut off: usize,
@@ -981,9 +1014,7 @@ fn fill_component_columns(
     forces: &mut [f64],
     velocities: &mut [f64],
 ) -> Result<usize> {
-    let targets: [&mut [f64]; 3] = [positions, forces, velocities];
-    let mut which = 0usize;
-    let mut lane = 0usize;
+    let mut parts = Vec::with_capacity(ncomp);
     for _ in 0..ncomp {
         if off + 4 > stored.len() {
             return Err(Error::Message("truncated shuffled cooked frame".into()));
@@ -993,18 +1024,53 @@ fn fill_component_columns(
         if off + clen > stored.len() {
             return Err(Error::Message("truncated shuffled cooked frame".into()));
         }
-        let comp = &stored[off..off + clen];
+        parts.push((off, clen));
         off += clen;
-        while which < 3 && targets[which].is_empty() {
-            which += 1;
-            lane = 0;
+    }
+    if stored.len() < off + HEADER_LEN || &stored[off..off + 4] != COOKED_MAGIC {
+        return Err(Error::Message(
+            "shuffled cooked frame is missing its header".into(),
+        ));
+    }
+    let atoms = positions.len() / 3;
+    if atoms >= PARALLEL_ATOMS && parts.len() >= 6 && !forces.is_empty() {
+        let (xyz, rest) = parts.split_at(3);
+        let (frc, vel) = rest.split_at(3.min(rest.len()));
+        std::thread::scope(|scope| {
+            let positions = scope.spawn(|| decode_lanes(stored, xyz, positions));
+            let forces = scope.spawn(|| {
+                decode_lanes(stored, frc, forces)?;
+                decode_lanes(stored, vel, velocities)
+            });
+            positions.join().unwrap()?;
+            forces.join().unwrap()?;
+            Ok::<(), Error>(())
+        })?;
+    } else {
+        let mut i = 0usize;
+        for dst in [positions, forces, velocities] {
+            if dst.is_empty() {
+                continue;
+            }
+            if i + 3 > parts.len() {
+                return Err(Error::Message(
+                    "shuffled cooked frame length mismatch".into(),
+                ));
+            }
+            decode_lanes(stored, &parts[i..i + 3], dst)?;
+            i += 3;
         }
-        if which >= 3 {
-            return Err(Error::Message(
-                "shuffled cooked frame length mismatch".into(),
-            ));
-        }
-        let dst_len = targets[which].len() / 3;
+    }
+    Ok(off)
+}
+
+fn decode_lanes(stored: &[u8], parts: &[(usize, usize)], dst: &mut [f64]) -> Result<()> {
+    if dst.is_empty() {
+        return Ok(());
+    }
+    let dst_len = dst.len() / 3;
+    for (lane, (start, clen)) in parts.iter().enumerate() {
+        let comp = &stored[*start..*start + *clen];
         with_zstd_scratch(|scratch| {
             scratch.buf.clear();
             scratch.buf.reserve(dst_len * 8);
@@ -1017,21 +1083,11 @@ fn fill_component_columns(
                     "shuffled cooked frame has the wrong length".into(),
                 ));
             }
-            scatter_unshuffled(&scratch.buf, targets[which], lane);
+            scatter_unshuffled(&scratch.buf, dst, lane);
             Ok(())
         })?;
-        lane += 1;
-        if lane == 3 {
-            lane = 0;
-            which += 1;
-        }
     }
-    if stored.len() < off + HEADER_LEN || &stored[off..off + 4] != COOKED_MAGIC {
-        return Err(Error::Message(
-            "shuffled cooked frame is missing its header".into(),
-        ));
-    }
-    Ok(off)
+    Ok(())
 }
 
 #[allow(clippy::uninit_vec)]
@@ -1501,5 +1557,30 @@ mod tests {
             after < before.saturating_add(8 << 20),
             "resident {before} -> {after}"
         );
+    }
+
+    #[test]
+    fn parallel_columns_round_trip_every_bit() {
+        let n = 16_384usize;
+        let mut builder =
+            readcon_core::types::ConFrameBuilder::new([10.5, 12.25, 8.0], [90.0, 90.0, 90.0]);
+        let mut forces = Vec::with_capacity(n * 3);
+        for i in 0..n {
+            let x = i as f64 * 0.125;
+            let y = 0.5;
+            let z = 1.0;
+            builder.add_atom("Cu", x, y, z, [false, false, false], i as u64, 63.546);
+            forces.extend_from_slice(&[x * 0.5, y * 0.5, z * 0.5]);
+        }
+        builder.set_forces_from_flat(&forces).unwrap();
+        let mut fr = builder.build().unwrap();
+        fr.header.set_energy(-42.5);
+        let raw = CookedSoa::encode_frame(&fr).unwrap();
+        let packed = compress_shuffled(&raw).unwrap();
+        let plain = MaterializedFrame::from_blob(&raw).unwrap();
+        let back = decompress_shuffled(&packed).unwrap();
+        assert_eq!(back.positions, plain.positions);
+        assert_eq!(back.forces, plain.forces);
+        assert_eq!(back.energy.to_bits(), plain.energy.to_bits());
     }
 }

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyIndexError, PyRuntimeError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
@@ -828,6 +829,11 @@ impl PyConCorpus {
                 "frame_idx and index_min/index_max are different reads",
             ));
         }
+        if let Some(frame_idx) = frame_idx {
+            if let Some(done) = self.read_shuffled_into_numpy(py, traj_id, frame_idx)? {
+                return Ok(done);
+            }
+        }
         let mut block = py
             .detach(|| {
                 let result = if let Some(frame_idx) = frame_idx {
@@ -919,6 +925,114 @@ impl PyConCorpus {
         }
         out.set_item("symbol_runs", runs)?;
         Ok(out.unbind())
+    }
+
+    /// One shuffled frame, unshuffled into NumPy arrays allocated up front.
+    ///
+    /// `None` when the frame is raw RCSO. The coordinate arrays are the
+    /// decode destination, so they are not copied again on the way out.
+    fn read_shuffled_into_numpy(
+        &self,
+        py: Python<'_>,
+        traj_id: u64,
+        frame_idx: u32,
+    ) -> PyResult<Option<Py<PyDict>>> {
+        let blob = py
+            .detach(|| self.inner.cooked_frame_bytes(traj_id, frame_idx))
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let Some(blob) = blob else {
+            return Ok(None);
+        };
+        let Some((natoms, has_f, has_v)) = crate::cooked_soa::shuffled_column_layout(&blob) else {
+            return Ok(None);
+        };
+        let n = natoms as usize;
+        let pos_arr = numpy_empty(py, &[1, n, 3])?;
+        let force_arr = if has_f {
+            Some(numpy_empty(py, &[1, n, 3])?)
+        } else {
+            None
+        };
+        let vel_arr = if has_v {
+            Some(numpy_empty(py, &[1, n, 3])?)
+        } else {
+            None
+        };
+        let pos_buf = PyBuffer::<f64>::get(&pos_arr)?;
+        let force_buf = match &force_arr {
+            Some(arr) => Some(PyBuffer::<f64>::get(arr)?),
+            None => None,
+        };
+        let vel_buf = match &vel_arr {
+            Some(arr) => Some(PyBuffer::<f64>::get(arr)?),
+            None => None,
+        };
+        let writable = |buf: &PyBuffer<f64>| -> PyResult<(*mut f64, usize)> {
+            let slice = buf.as_mut_slice(py).ok_or_else(|| {
+                PyRuntimeError::new_err("numpy array is not a writable float64 buffer")
+            })?;
+            Ok((slice.as_ptr() as *mut f64, slice.len()))
+        };
+        let (pos_ptr, pos_len) = writable(&pos_buf)?;
+        let force_ptr = force_buf.as_ref().map(writable).transpose()?;
+        let vel_ptr = vel_buf.as_ref().map(writable).transpose()?;
+        // The pointers address NumPy storage that outlives this decode.
+        // They are not shared. `detach` requires `Send`.
+        let pos_buf_ptr = (pos_ptr as usize, pos_len);
+        let force_buf_ptr = force_ptr.map(|(ptr, len)| (ptr as usize, len));
+        let vel_buf_ptr = vel_ptr.map(|(ptr, len)| (ptr as usize, len));
+        let meta = py
+            .detach(move || unsafe {
+                let pos = std::slice::from_raw_parts_mut(pos_buf_ptr.0 as *mut f64, pos_buf_ptr.1);
+                let mut bare_f = [];
+                let mut bare_v = [];
+                let forces = match force_buf_ptr {
+                    Some((addr, len)) => std::slice::from_raw_parts_mut(addr as *mut f64, len),
+                    None => &mut bare_f[..],
+                };
+                let velocities = match vel_buf_ptr {
+                    Some((addr, len)) => std::slice::from_raw_parts_mut(addr as *mut f64, len),
+                    None => &mut bare_v[..],
+                };
+                crate::cooked_soa::decompress_shuffled_into(&blob, pos, forces, velocities)
+            })
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        drop(pos_buf);
+        drop(force_buf);
+        drop(vel_buf);
+        let out = PyDict::new(py);
+        out.set_item("n_frames", 1)?;
+        out.set_item("n_atoms", n)?;
+        out.set_item("positions", pos_arr)?;
+        if let Some(forces) = force_arr {
+            out.set_item("forces", forces)?;
+        } else {
+            out.set_item("forces", py.None())?;
+        }
+        if let Some(velocities) = vel_arr {
+            out.set_item("velocities", velocities)?;
+        } else {
+            out.set_item("velocities", numpy_zeros(py, &[1, n, 3])?)?;
+        }
+        out.set_item("velocities_set", meta.velocities_set)?;
+        out.set_item("masses", f64_array(py, &meta.masses, &[1, n])?)?;
+        out.set_item("numbers", u32_array(py, &meta.numbers, &[1, n])?)?;
+        out.set_item("constraints", u8_array(py, &meta.constraints, &[1, n, 3])?)?;
+        out.set_item("cell", f64_array(py, &meta.cell, &[1, 3, 3])?)?;
+        out.set_item("energy", f64_array(py, &[meta.energy], &[1])?)?;
+        out.set_item("energy_set", PyList::new(py, [meta.energy_set])?)?;
+        out.set_item("frame_index", f64_array(py, &[meta.frame_index], &[1])?)?;
+        out.set_item("frame_index_set", PyList::new(py, [meta.frame_index_set])?)?;
+        out.set_item("pbc", PyList::new(py, [PyTuple::new(py, meta.pbc)?])?)?;
+        out.set_item("pbc_set", PyList::new(py, [meta.pbc_set])?)?;
+        let runs = PyList::empty(py);
+        let one = PyList::empty(py);
+        for (sym, count) in &meta.symbol_runs {
+            one.append((sym.as_str(), *count))?;
+        }
+        runs.append(one)?;
+        out.set_item("symbol_runs", runs)?;
+        Ok(Some(out.unbind()))
     }
 
     /// CON text of one stored frame.
@@ -1135,6 +1249,16 @@ fn buffer_array<'py>(
     let flat = np.call_method("frombuffer", (buf,), Some(&kwargs))?;
     let shape_t = PyTuple::new(py, shape.iter().copied())?;
     flat.call_method1("reshape", (shape_t,))
+}
+
+fn numpy_empty<'py>(py: Python<'py>, shape: &[usize]) -> PyResult<Bound<'py, PyAny>> {
+    let np = py
+        .import("numpy")
+        .map_err(|_| PyRuntimeError::new_err("read_arrays requires numpy"))?;
+    let shape_t = PyTuple::new(py, shape.iter().copied())?;
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("dtype", "float64")?;
+    np.call_method("empty", (shape_t,), Some(&kwargs))
 }
 
 fn numpy_zeros<'py>(py: Python<'py>, shape: &[usize]) -> PyResult<Bound<'py, PyAny>> {
