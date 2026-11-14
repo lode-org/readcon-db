@@ -92,7 +92,7 @@ impl CookedSoa {
             &mut out,
             frame.positions.f64_slice(),
             &frame.atom_data,
-            |a| crate::atom_coord::atom_xyz(a),
+            crate::atom_coord::atom_xyz,
         )?;
         if has_f {
             push_coord_block(&mut out, frame.forces.f64_slice(), &frame.atom_data, |a| {
@@ -207,6 +207,7 @@ impl CookedSoa {
     ///
     /// The column vectors are dropped as soon as their bytes are in `out`,
     /// so the scratch and the blob are not resident together.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn encode_columns(
         natoms: u32,
         positions: Vec<f64>,
@@ -527,7 +528,7 @@ impl MaterializedFrame {
             let sym = String::from_utf8(sym.to_vec()).ok()?;
             let z =
                 u32::try_from(readcon_core::helpers::symbol_to_atomic_number(&sym)).unwrap_or(0);
-            numbers.extend(std::iter::repeat(z).take(count as usize));
+            numbers.extend(std::iter::repeat_n(z, count as usize));
             symbol_runs.push((sym, count));
         }
         if numbers.len() != n {
@@ -690,18 +691,31 @@ fn read_vec3_block(bytes: &[u8], n: usize) -> Result<Vec<[f64; 3]>> {
     let mut i = 0;
     for _ in 0..n {
         let mut row = [0.0f64; 3];
-        for c in 0..3 {
+        for slot in &mut row {
             let start = i;
             let end = start + 8;
             if end > bytes.len() {
                 return Err(Error::Message("cooked SoA short block".into()));
             }
-            row[c] = f64::from_le_bytes(bytes[start..end].try_into().unwrap());
+            *slot = f64::from_le_bytes(bytes[start..end].try_into().unwrap());
             i = end;
         }
         out.push(row);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+fn resident_bytes() -> usize {
+    let status = std::fs::read_to_string("/proc/self/status").expect("status");
+    for line in status.lines() {
+        let Some(rest) = line.strip_prefix("VmRSS:") else {
+            continue;
+        };
+        let kb: usize = rest.split_whitespace().next().unwrap().parse().unwrap();
+        return kb.saturating_mul(1024);
+    }
+    0
 }
 
 #[cfg(test)]
@@ -814,17 +828,4 @@ mod tests {
             "resident {before} -> {after}"
         );
     }
-}
-
-#[cfg(test)]
-fn resident_bytes() -> usize {
-    let status = std::fs::read_to_string("/proc/self/status").expect("status");
-    for line in status.lines() {
-        let Some(rest) = line.strip_prefix("VmRSS:") else {
-            continue;
-        };
-        let kb: usize = rest.split_whitespace().next().unwrap().parse().unwrap();
-        return kb.saturating_mul(1024);
-    }
-    0
 }

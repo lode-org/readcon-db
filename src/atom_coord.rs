@@ -24,24 +24,14 @@ pub(crate) fn atom_xyz(atom: &AtomDatum) -> [f64; 3] {
     [atom_x(atom), atom_y(atom), atom_z(atom)]
 }
 
+#[cfg(test)]
 #[inline]
 pub(crate) fn set_atom_x(atom: &mut AtomDatum, value: f64) {
     atom.set_x(value);
 }
 
-#[inline]
-pub(crate) fn set_atom_y(atom: &mut AtomDatum, value: f64) {
-    atom.set_y(value);
-}
-
+#[cfg(test)]
 #[inline]
 pub(crate) fn set_atom_z(atom: &mut AtomDatum, value: f64) {
     atom.set_z(value);
-}
-
-#[inline]
-pub(crate) fn set_atom_xyz(atom: &mut AtomDatum, xyz: [f64; 3]) {
-    set_atom_x(atom, xyz[0]);
-    set_atom_y(atom, xyz[1]);
-    set_atom_z(atom, xyz[2]);
 }

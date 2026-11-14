@@ -262,6 +262,19 @@ pub(crate) fn is_single_zstd_frame(stored: &[u8]) -> bool {
 }
 
 #[cfg(test)]
+fn resident_bytes() -> usize {
+    let status = std::fs::read_to_string("/proc/self/status").expect("status");
+    for line in status.lines() {
+        let Some(rest) = line.strip_prefix("VmRSS:") else {
+            continue;
+        };
+        let kb: usize = rest.split_whitespace().next().unwrap().parse().unwrap();
+        return kb.saturating_mul(1024);
+    }
+    0
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -336,17 +349,4 @@ mod tests {
             "resident {before} -> {after}"
         );
     }
-}
-
-#[cfg(test)]
-fn resident_bytes() -> usize {
-    let status = std::fs::read_to_string("/proc/self/status").expect("status");
-    for line in status.lines() {
-        let Some(rest) = line.strip_prefix("VmRSS:") else {
-            continue;
-        };
-        let kb: usize = rest.split_whitespace().next().unwrap().parse().unwrap();
-        return kb.saturating_mul(1024);
-    }
-    0
 }

@@ -554,7 +554,7 @@ pub(crate) fn finish_cook(facts: &SpanFacts, mut acc: CookAcc) -> Result<Vec<u8>
     let expanded = if mass_uniform.is_none() {
         let mut out = Vec::with_capacity(n);
         for ((_, count), mass) in acc.runs.iter().zip(&acc.masses) {
-            out.extend(std::iter::repeat(*mass).take(*count as usize));
+            out.extend(std::iter::repeat_n(*mass, *count as usize));
         }
         out
     } else {
@@ -698,6 +698,7 @@ fn note_section(
 
 /// Short blocks are checked in place. A long block records line ranges and
 /// checks them on several threads.
+#[allow(clippy::too_many_arguments)]
 fn check_vector_block(
     cur: &mut Cur<'_>,
     n: usize,

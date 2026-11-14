@@ -166,7 +166,7 @@ fn cli_topo_key_and_find_by_topology_with_seams() {
         .args(["select", corpus.to_str().unwrap(), "--topo-key", &hex])
         .output()
         .unwrap();
-    assert!(out.status.success(), "{:?}", out);
+    assert!(out.status.success(), "{out:?}");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("traj=1"), "{stdout}");
 
@@ -181,7 +181,7 @@ fn cli_topo_key_and_find_by_topology_with_seams() {
         ])
         .output()
         .unwrap();
-    assert!(found.status.success(), "{:?}", found);
+    assert!(found.status.success(), "{found:?}");
     let fo = String::from_utf8_lossy(&found.stdout);
     assert!(fo.contains("traj=1"), "{fo}");
 }

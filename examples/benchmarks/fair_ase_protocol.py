@@ -226,36 +226,20 @@ def drop_page_cache(path: Path) -> None:
     advise_dontneed(path)
 
 
-def fault_missing_pages(path: Path) -> int:
-    """Read every non-resident page of ``path`` into the cache.
+def fault_all_pages(path: Path) -> None:
+    """Read every page of ``path`` into the cache.
 
-    A readonly open readaheads both ends of a small ``data.mdb`` and leaves
-    a hole in the middle. ``mincore`` after that open is the same pattern
-    every time, and the timed query was the first touch of the hole. That
-    fault is heavy-tailed (about 0.1 ms to 0.5 ms here) even though the
-    resident set does not change. Filling the hole after the open, and
-    before the clock, makes the query a resident read.
+    Used only for the ``warm-after-open`` row, and for both tools, so ASE's
+    file is resident on the same terms as readcon-db's warming open.
     """
     size = path.stat().st_size
     if size <= 0:
-        return 0
+        return
     pages = (size + _PAGE - 1) // _PAGE
     fd = os.open(path, os.O_RDONLY)
     try:
-        addr = _LIBC.mmap(None, size, _PROT_READ, _MAP_PRIVATE, fd, 0)
-        if _map_failed(addr):
-            return 0
-        try:
-            vec = (ctypes.c_ubyte * pages)()
-            rc = _LIBC.mincore(ctypes.c_void_p(addr), ctypes.c_size_t(size), vec)
-            if rc != 0:
-                return 0
-            missing = [i for i, byte in enumerate(vec) if not (byte & 1)]
-            for i in missing:
-                os.pread(fd, 1, i * _PAGE)
-            return len(missing)
-        finally:
-            _LIBC.munmap(ctypes.c_void_p(addr), ctypes.c_size_t(size))
+        for i in range(pages):
+            os.pread(fd, 1, i * _PAGE)
     finally:
         os.close(fd)
 
@@ -665,7 +649,8 @@ def header_lines() -> list[str]:
         "page_cache read_warm: one warmup read on the open store, then time the read",
         "lmdb MDB_NOSYNC unset, one write transaction and one commit fsync for the whole insert; a long trajectory puts one 64-frame group at a time and drops that group's cooked blob and decompressed text after the put",
         "ase one write transaction, journal_mode=DELETE, synchronous=FULL, one commit fsync; ASE's 5000-row commit is disabled",
-        "cold: page cache dropped and mincore 0 outside the clock, then open outside the clock, then the open's unprefetched hole is read into the cache, then the query",
+        "cold: page cache dropped and mincore 0, then open outside the clock without touching the map, then the query",
+        "warm-after-open: page cache dropped, then open outside the clock (open faults a corpus under 1 MiB), then the query",
         "cold-open: page cache dropped outside the clock, then open and the query inside the clock, both tools",
         "validation element-wise outside the timer; a mismatch aborts the run",
     ]
@@ -964,9 +949,13 @@ def stamp_frame_index(atoms_list: list[Atoms]) -> None:
         atoms.info["frame_index"] = i
 
 
-def open_readcon(path: Path):
-    """Read-only open. A writable open commits, and a read must not fsync."""
-    return ConCorpus(str(path), readonly=True)
+def open_readcon(path: Path, *, warm: bool = True):
+    """Read-only open. A writable open commits, and a read must not fsync.
+
+    ``warm=False`` is the cold row: no touch of the map, and readahead is
+    turned off so the query starts cold.
+    """
+    return ConCorpus(str(path), readonly=True, warm=warm)
 
 
 def measure_read(
@@ -1488,7 +1477,8 @@ def execute_read_row(request: dict) -> dict:
 
     def open_kind():
         if kind == "readcon-db":
-            return open_readcon(dest / "corpus")
+            # Cold must not use the warming open. Every other row does.
+            return open_readcon(dest / "corpus", warm=cache != "cold")
         return open_ase_reader(dest / "atoms.db")
 
     def prepare():
@@ -1524,16 +1514,19 @@ def execute_read_row(request: dict) -> dict:
         labels: list[tuple[float, str]] = []
 
         def setup(labels=labels, state=state) -> None:
-            frac, label = prepare()
-            labels.append((frac, label))
             # cold-open times the open. Opening here would fault pages
             # before the clock and then open a second handle inside it.
-            if cache != "cold-open":
-                state["db"] = open_kind()
-                # The open's readahead leaves a hole. Fill it before the clock.
-                if cache == "cold":
-                    for path in cold_data_files(kind, dest):
-                        fault_missing_pages(path)
+            frac, label = prepare()
+            if cache == "cold-open":
+                labels.append((frac, label))
+                return
+            state["db"] = open_kind()
+            if cache == "warm-after-open":
+                for path in cold_data_files(kind, dest):
+                    fault_all_pages(path)
+            # cold keeps the pre-open mincore 0 label. The open does not
+            # touch the map, so the query is the first read of its pages.
+            labels.append((frac, label))
 
         def teardown(state=state) -> None:
             assert_digests(state["got"], expected)
@@ -1551,6 +1544,10 @@ def execute_read_row(request: dict) -> dict:
             # from an open that ran before the timer.
             def run_open(state=state) -> None:
                 state["db"] = open_kind()
+                # readcon-db's open already faulted a small map. Do the same
+                # read for both tools, inside the clock, so ASE pays it too.
+                for path in cold_data_files(kind, dest):
+                    fault_all_pages(path)
                 state["got"] = fetch_materialized(kind, state["db"], op, mid)
 
             stat = sample_operation(run_open, setup, teardown)
@@ -1571,6 +1568,10 @@ def execute_read_row(request: dict) -> dict:
             if cold_label == "verified":
                 samples.append(stat["seconds"])
             extra = f" resident_fraction={resident:.6f} cold_label={cold_label}"
+        elif cache == "warm-after-open":
+            stat = sample_operation(run_timed, setup, teardown)
+            samples.append(stat["seconds"])
+            extra = ""
         elif cache == "cold":
             stat = sample_operation(run_timed, setup, teardown)
             resident = max(frac for frac, _label in labels)
@@ -1778,7 +1779,7 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
         ops = ("full_read", "selected")
         caches = ("cold", "warm")
         if spec["name"] == "frames-100":
-            caches = ("cold", "cold-open", "warm")
+            caches = ("cold", "warm-after-open", "cold-open", "warm")
         for cache in caches:
             for op in ops:
                 used = (
@@ -1931,7 +1932,7 @@ def workloads_for(mode: str) -> list[dict]:
             {"name": "frames-10000", "n_frames": 10_000, "n_atoms": 8},
             {"name": "frames-100", "n_frames": 100, "n_atoms": 8},
         ]
-    if mode in ("db10", "db11"):
+    if mode in ("db10", "db11", "db12"):
         return [{"name": "frames-100", "n_frames": 100, "n_atoms": 8}]
     if mode == "smoke":
         return [
@@ -1959,6 +1960,7 @@ def main() -> None:
             "db9",
             "db10",
             "db11",
+            "db12",
         ),
         default="all",
     )

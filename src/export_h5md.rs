@@ -335,14 +335,11 @@ impl ConCorpus {
                     p[2] * len_scale,
                 ]);
             }
-            vel_rows.push(match vel_src {
-                Some(rows) => Some(
-                    rows.into_iter()
-                        .map(|r| [r[0] * vel_scale, r[1] * vel_scale, r[2] * vel_scale])
-                        .collect(),
-                ),
-                None => None,
-            });
+            vel_rows.push(vel_src.map(|rows| {
+                rows.into_iter()
+                    .map(|r| [r[0] * vel_scale, r[1] * vel_scale, r[2] * vel_scale])
+                    .collect()
+            }));
             force_rows.push(match frc_src {
                 Some(rows) => {
                     let fscale = force_scale_to_engine(&energy_u, &length_u)?;
@@ -1053,8 +1050,8 @@ mod tests {
         db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
             .unwrap();
         let a = db.collect_h5md(1).unwrap();
-        assert!(a.species_z.iter().any(|&z| z == 29), "{:?}", a.species_z);
-        assert!(a.species_z.iter().any(|&z| z == 1), "{:?}", a.species_z);
+        assert!(a.species_z.contains(&29), "{:?}", a.species_z);
+        assert!(a.species_z.contains(&1), "{:?}", a.species_z);
     }
 
     #[test]

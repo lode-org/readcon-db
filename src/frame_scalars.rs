@@ -4,11 +4,7 @@
 use readcon_core::index_proj::{self, FrameIndexProjection};
 use readcon_core::types::ConFrame;
 
-pub use index_proj::{
-    finite_energy, frame_cell_volume, frame_composition_formula, frame_fmax, frame_total_mass,
-    sections_present_mask, FrameIndexProjection as CoreFrameIndexProjection,
-    SECTIONS_MASK_ENERGIES, SECTIONS_MASK_FORCES, SECTIONS_MASK_VELOCITIES,
-};
+pub use index_proj::{frame_cell_volume, frame_total_mass};
 
 /// Full index projection (preferred entry for prepare/reindex).
 pub fn project_frame(frame: &ConFrame) -> FrameIndexProjection {

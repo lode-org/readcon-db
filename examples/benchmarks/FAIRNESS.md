@@ -38,21 +38,33 @@ Those puts share the one transaction. LMDB's dirty pages hold the
 bytes until that commit. A failed insert aborts the transaction, so
 no frame from it is visible.
 
-A cold read drops the page cache with `posix_fadvise(DONTNEED)` and
-checks `mincore` is 0 before the open. That advice does clear the
-cache on this host. No cpufreq governor is exposed, and the TSC is
-constant, so the spread is not a frequency step we can pin. The open
-stays outside the clock. Its readahead is not the whole file: on
-frames-100 it leaves the same hole in the middle of `data.mdb` every
-time (`mincore` about 0.68, pages 12 through 25 cold). The timed query
-was the first touch of that hole, and the fault swings from about
-0.1 ms to about 0.5 ms. After the open, and still outside the clock,
-the harness reads those missing pages so the query itself is a
-resident read. `cold-open` still drops the cache outside the clock and
-times the open together with the query, hole included. For a corpus
-under 1 MiB the query also `posix_fadvise(WILLNEED)`s `data.mdb` and
-`madvise(WILLNEED)`s a cooked value of at least 4 KiB before copying
-it. The db8 frames-100 selected
+Both tools get the same cache treatment on every row.
+
+`cold`: `posix_fadvise(DONTNEED)` until `mincore` is 0, then open,
+then the query. The open stays outside the clock. readcon-db's cold
+open sets `POSIX_FADV_RANDOM` and does not touch the map, so it does
+not readahead both ends of `data.mdb` and leave a hole. The query is
+the first read of its pages. ASE gets the same harness steps on its
+sqlite file: drop, open, query, with no harness pre-read.
+
+`warm-after-open`: the same drop, then that tool's own open, then the
+query. There is no harness pre-read on either side. readcon-db's open
+faults a corpus under 1 MiB (`madvise(WILLNEED)` and a parallel touch).
+ASE's open is sqlite's open. The open stays outside the clock.
+
+`cold-open`: the drop is outside the clock. The clock is the open
+plus a read of every page of the database file, plus the query.
+readcon-db's open already does that read for a corpus under 1 MiB.
+The harness repeats it for both tools, so ASE's sqlite file is faulted
+inside the same clock.
+
+`warm`: one warmup read on the already open store, then the query.
+Both tools.
+
+No cpufreq governor is exposed here, and the TSC is constant. For a
+corpus under 1 MiB the query also `posix_fadvise(WILLNEED)`s the
+database file and `madvise(WILLNEED)`s a cooked value of at least
+4 KiB before copying it. The db8 frames-100 selected
 cold row, open outside the clock, is n=12, median 1.56e-4 s, p90 of
 those means 1.95e-4 s, IQR/median 0.251. Its per-call distribution is
 `bench/db8/noise.json`. The db9 rows are `bench/db9/`.

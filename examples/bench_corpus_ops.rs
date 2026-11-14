@@ -53,6 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 extract_sum += fr.atom_data.len() as f64; // touch
             }
         }
+        std::hint::black_box(extract_sum);
         let extract_s = t1.elapsed().as_secs_f64() / rounds as f64;
 
         let t2 = Instant::now();
@@ -68,7 +69,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::thread::scope(|s| {
             for _ in 0..readers {
                 let db = &db;
-                let nf = nf;
                 s.spawn(move || {
                     for i in 0..nf {
                         let _ = db.get_frame(FrameKey {

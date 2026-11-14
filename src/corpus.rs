@@ -579,10 +579,84 @@ fn project_spans(texts: &[&str]) -> Result<Vec<(crate::span_columns::SpanFacts, 
     Ok(all)
 }
 
+/// Fault a corpus under 1 MiB before `open` returns.
+///
+/// Kernel readahead on the LMDB map fills both ends of `data.mdb` and
+/// leaves a hole in the middle. The first query then faults that hole,
+/// and the fault time swings. `MADV_WILLNEED` plus a parallel touch of
+/// every page closes the hole inside `open`, so a later query is a
+/// resident read. The cost is part of opening.
+fn warm_small_map(path: &Path) {
+    const LIMIT: u64 = 1024 * 1024;
+    let data = path.join("data.mdb");
+    let Ok(file) = fs::File::open(&data) else {
+        return;
+    };
+    let Ok(meta) = file.metadata() else {
+        return;
+    };
+    if meta.len() == 0 || meta.len() > LIMIT {
+        return;
+    }
+    let len = meta.len() as usize;
+    let page = 4096usize;
+    let addr = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            len,
+            libc::PROT_READ,
+            libc::MAP_SHARED,
+            file.as_raw_fd(),
+            0,
+        )
+    };
+    if addr.is_null() || addr == libc::MAP_FAILED {
+        return;
+    }
+    unsafe {
+        libc::madvise(addr, len, libc::MADV_WILLNEED);
+    }
+    let pages = len.div_ceil(page);
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .clamp(1, 8)
+        .min(pages);
+    let chunk = pages.div_ceil(threads);
+    let base = addr as usize;
+    std::thread::scope(|scope| {
+        for t in 0..threads {
+            let start = t * chunk;
+            let end = (start + chunk).min(pages);
+            if start >= end {
+                break;
+            }
+            scope.spawn(move || {
+                let ptr = base as *const u8;
+                let mut acc = 0u8;
+                for i in start..end {
+                    acc ^= unsafe { ptr.add(i * page).read_volatile() };
+                }
+                std::hint::black_box(acc);
+            });
+        }
+    });
+    unsafe {
+        libc::munmap(addr, len);
+    }
+}
+
+fn finish_open(corpus: ConCorpus, warm: bool) -> Result<ConCorpus> {
+    if warm {
+        warm_small_map(&corpus.path);
+    }
+    Ok(corpus)
+}
+
 impl ConCorpus {
     /// Create or open a corpus at `path` with the default map size.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        Self::open_with(path, false, None)
+        Self::open_with(path, false, None, true)
     }
 
     /// Write-open an existing corpus. Does not mkdir or mint `data.mdb`.
@@ -594,7 +668,7 @@ impl ConCorpus {
                 path.display()
             )));
         }
-        Self::open_with(path, false, None)
+        Self::open_with(path, false, None, true)
     }
 
     /// Open or create a writable corpus with an explicit LMDB map size in
@@ -602,7 +676,7 @@ impl ConCorpus {
     /// and the built-in default. The map is still at least twice an existing
     /// `data.mdb`.
     pub fn open_with_map_size(path: impl AsRef<Path>, map_size: usize) -> Result<Self> {
-        Self::open_with(path, false, Some(map_size))
+        Self::open_with(path, false, Some(map_size), true)
     }
 
     /// Current LMDB map size in bytes.
@@ -723,10 +797,31 @@ impl ConCorpus {
     /// on that same handle so other ranks never open LMDB. Never
     /// initialize MPI here; the host (LAMMPS, mpi4py) already did.
     pub fn open_readonly(path: impl AsRef<Path>) -> Result<Self> {
-        Self::open_with(path, true, None)
+        Self::open_with(path, true, None, true)
     }
 
-    fn open_with(path: impl AsRef<Path>, readonly: bool, map_size: Option<usize>) -> Result<Self> {
+    /// Readonly open that leaves the page cache cold.
+    ///
+    /// `POSIX_FADV_RANDOM` stops the kernel from readaheading both ends of
+    /// `data.mdb`, which is the hole a normal open used to leave. The small
+    /// map is not touched. A cold query then faults the pages it reads.
+    pub fn open_readonly_cold(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        if let Ok(file) = fs::File::open(path.join("data.mdb")) {
+            unsafe {
+                libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_RANDOM);
+                libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED);
+            }
+        }
+        Self::open_with(path, true, None, false)
+    }
+
+    fn open_with(
+        path: impl AsRef<Path>,
+        readonly: bool,
+        map_size: Option<usize>,
+        warm: bool,
+    ) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         if path.join("shards.json").is_file() {
             return Err(Error::Message(format!(
@@ -815,32 +910,35 @@ impl ConCorpus {
             let canon_by_frame = env.open_database(&rtxn, Some("canon_by_frame"))?;
             // heed: uncommitted open_database txn → EINVAL on the next RoTxn.
             rtxn.commit()?;
-            return Ok(Self {
-                path,
-                env,
-                txn_gate: RwLock::new(()),
-                frames,
-                compress_frames: AtomicBool::new(true),
-                traj_meta,
-                idx_natoms,
-                idx_symbol,
-                idx_energy,
-                idx_flags,
-                idx_elem_count,
-                idx_formula,
-                idx_fmax,
-                idx_mass,
-                idx_volume,
-                idx_pbc,
-                idx_meta,
-                frame_by_hash,
-                hash_by_frame,
-                frames_soa,
-                idx_topo,
-                topo_by_frame,
-                idx_canon,
-                canon_by_frame,
-            });
+            return finish_open(
+                Self {
+                    path,
+                    env,
+                    txn_gate: RwLock::new(()),
+                    frames,
+                    compress_frames: AtomicBool::new(true),
+                    traj_meta,
+                    idx_natoms,
+                    idx_symbol,
+                    idx_energy,
+                    idx_flags,
+                    idx_elem_count,
+                    idx_formula,
+                    idx_fmax,
+                    idx_mass,
+                    idx_volume,
+                    idx_pbc,
+                    idx_meta,
+                    frame_by_hash,
+                    hash_by_frame,
+                    frames_soa,
+                    idx_topo,
+                    topo_by_frame,
+                    idx_canon,
+                    canon_by_frame,
+                },
+                warm,
+            );
         }
 
         let mut wtxn = env.write_txn()?;
@@ -866,32 +964,35 @@ impl ConCorpus {
         let canon_by_frame = env.create_database(&mut wtxn, Some("canon_by_frame"))?;
         wtxn.commit()?;
 
-        Ok(Self {
-            path,
-            env,
-            txn_gate: RwLock::new(()),
-            frames,
-            compress_frames: AtomicBool::new(true),
-            traj_meta,
-            idx_natoms,
-            idx_symbol,
-            idx_energy,
-            idx_flags,
-            idx_elem_count,
-            idx_formula,
-            idx_fmax,
-            idx_mass,
-            idx_volume,
-            idx_pbc,
-            idx_meta,
-            frame_by_hash,
-            hash_by_frame,
-            frames_soa,
-            idx_topo: Some(idx_topo),
-            topo_by_frame: Some(topo_by_frame),
-            idx_canon: Some(idx_canon),
-            canon_by_frame: Some(canon_by_frame),
-        })
+        finish_open(
+            Self {
+                path,
+                env,
+                txn_gate: RwLock::new(()),
+                frames,
+                compress_frames: AtomicBool::new(true),
+                traj_meta,
+                idx_natoms,
+                idx_symbol,
+                idx_energy,
+                idx_flags,
+                idx_elem_count,
+                idx_formula,
+                idx_fmax,
+                idx_mass,
+                idx_volume,
+                idx_pbc,
+                idx_meta,
+                frame_by_hash,
+                hash_by_frame,
+                frames_soa,
+                idx_topo: Some(idx_topo),
+                topo_by_frame: Some(topo_by_frame),
+                idx_canon: Some(idx_canon),
+                canon_by_frame: Some(canon_by_frame),
+            },
+            warm,
+        )
     }
 
     /// RCSO bytes for a unidirectional broadcast on the caller communicator
@@ -1220,18 +1321,6 @@ impl ConCorpus {
         Ok(())
     }
 
-    /// Reindex path: build puts then put (derivation not under a multi-frame exclusive prepare loop).
-    fn index_frame(
-        &self,
-        wtxn: &mut RwTxn,
-        fk: FrameKey,
-        frame: &ConFrame,
-        blob: &str,
-    ) -> Result<()> {
-        let puts = Self::build_index_puts(fk, frame, blob.to_owned(), self.compress_on())?;
-        self.put_index_puts(wtxn, &puts)
-    }
-
     /// `readcon-core` 0.21 reserves `Vec` capacity from the species count
     /// before it counts the tokens on the next line. A count larger than
     /// that line allocates far past the file and aborts. Reject it here.
@@ -1518,10 +1607,9 @@ impl ConCorpus {
             tables.push(("canon_by_frame", d));
         }
         for (name, db) in tables {
-            for part in [name.as_bytes()] {
-                out.extend_from_slice(&(part.len() as u64).to_le_bytes());
-                out.extend_from_slice(part);
-            }
+            let part = name.as_bytes();
+            out.extend_from_slice(&(part.len() as u64).to_le_bytes());
+            out.extend_from_slice(part);
             for kv in db.iter(&rtxn)? {
                 let (k, v) = kv?;
                 for part in [k, v] {
@@ -1773,6 +1861,7 @@ impl ConCorpus {
     }
 
     /// Cook and put one CON document at `start_idx`, then drop that scratch.
+    #[cfg(feature = "python")]
     ///
     /// The caller keeps the write transaction open across groups. Dropping
     /// `prepared` frees this group's cooked blob and its decompressed text.
@@ -1802,6 +1891,7 @@ impl ConCorpus {
     }
 
     /// Record a new trajectory's metadata. Fails if `traj_id` is already stored.
+    #[cfg(feature = "python")]
     pub(crate) fn store_new_traj_meta(
         &self,
         wtxn: &mut RwTxn<'_>,
@@ -1844,9 +1934,9 @@ impl ConCorpus {
 
     /// Ingest already-parsed frames in one commit.
     ///
-    /// Serialization happens before the write transaction. The Python
-    /// binding does not call this with the whole trajectory: it commits
-    /// groups of 64 frames so a long append does not hold every blob.
+    /// Serialization happens before the write transaction. Python
+    /// `append_trajectory_frames` uses the same rule: one transaction for
+    /// the whole call, with each group of 64 frames put and then dropped.
     pub fn append_trajectory_frames(
         &self,
         traj_id: TrajId,
@@ -2614,7 +2704,7 @@ impl ConCorpus {
         let prefix = traj_id.to_be_bytes();
         let mut keys = Vec::new();
         let mut iter = self.frames.prefix_iter(&rtxn, &prefix[..])?;
-        while let Some(item) = iter.next() {
+        for item in iter.by_ref() {
             let (k, _) = item?;
             if let Some(fk) = FrameKey::from_bytes(k) {
                 if fk.traj_id == traj_id {
@@ -2724,7 +2814,7 @@ impl ConCorpus {
             let prefix = traj_id.to_be_bytes();
             let mut keys = Vec::new();
             let mut iter = self.frames.prefix_iter(&rtxn, &prefix[..])?;
-            while let Some(item) = iter.next() {
+            for item in iter.by_ref() {
                 let (k, _) = item?;
                 if let Some(fk) = FrameKey::from_bytes(k) {
                     if fk.traj_id == traj_id {
@@ -4055,6 +4145,90 @@ mod tests {
         assert_eq!(db.list_frame_keys().unwrap().len(), spans.len());
     }
 
+    #[test]
+    fn small_open_faults_every_page() {
+        use std::os::unix::io::AsRawFd;
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
+            .unwrap();
+        drop(db);
+        let db = ConCorpus::open_readonly(dir.path()).unwrap();
+        let data = dir.path().join("data.mdb");
+        let file = std::fs::File::open(&data).unwrap();
+        let len = file.metadata().unwrap().len() as usize;
+        let addr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                file.as_raw_fd(),
+                0,
+            )
+        };
+        assert!(!addr.is_null() && addr != libc::MAP_FAILED);
+        let pages = len.div_ceil(4096);
+        let mut vec = vec![0u8; pages];
+        unsafe {
+            libc::mincore(addr, len, vec.as_mut_ptr());
+        }
+        assert!(
+            vec.iter().all(|b| b & 1 == 1),
+            "open left a cold page: {vec:?}"
+        );
+        unsafe {
+            libc::munmap(addr, len);
+        }
+        drop(db);
+    }
+
+    #[test]
+    fn cold_open_does_not_fault_every_page() {
+        use std::os::unix::io::AsRawFd;
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let one = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let mut text = String::new();
+        for _ in 0..200 {
+            text.push_str(&one);
+        }
+        db.append_trajectory_str(1, &text, "cold").unwrap();
+        drop(db);
+        let data = dir.path().join("data.mdb");
+        let file = std::fs::File::open(&data).unwrap();
+        unsafe {
+            libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED);
+        }
+        drop(file);
+        let db = ConCorpus::open_readonly_cold(dir.path()).unwrap();
+        let file = std::fs::File::open(&data).unwrap();
+        let len = file.metadata().unwrap().len() as usize;
+        let addr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                file.as_raw_fd(),
+                0,
+            )
+        };
+        assert!(!addr.is_null() && addr != libc::MAP_FAILED);
+        let pages = len.div_ceil(4096);
+        let mut vec = vec![0u8; pages];
+        unsafe {
+            libc::mincore(addr, len, vec.as_mut_ptr());
+            libc::munmap(addr, len);
+        }
+        let resident = vec.iter().filter(|b| *b & 1 == 1).count();
+        assert!(
+            resident < pages,
+            "cold open faulted every page ({resident}/{pages}): {vec:?}"
+        );
+        drop(db);
+    }
+
     fn fixture(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("resources/test")
@@ -4255,12 +4429,12 @@ x
         );
         for i in 0..n {
             use std::fmt::Write as _;
-            let _ = write!(text, "{i}.125 0.5 1.0 0 {i}\n");
+            let _ = writeln!(text, "{i}.125 0.5 1.0 0 {i}");
         }
         text.push_str("\nCu\nForces of Component 1\n");
         for i in 0..n {
             use std::fmt::Write as _;
-            let _ = write!(text, "0.1 0.2 {i}.0 0 {i}\n");
+            let _ = writeln!(text, "0.1 0.2 {i}.0 0 {i}");
         }
         let t_parse = std::time::Instant::now();
         let parsed = ConFrameIterator::new(&text).count();

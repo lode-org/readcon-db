@@ -130,6 +130,11 @@ fn set_err(h: &mut Handle, e: impl ToString) {
 
 /// Open corpus directory. On success writes opaque handle id to `out_id` (>=0).
 /// Returns RKRDB_OK or error code.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_open(path: *const c_char, out_id: *mut usize) -> c_int {
     if path.is_null() || out_id.is_null() {
@@ -156,6 +161,11 @@ pub unsafe extern "C" fn rkrdb_open(path: *const c_char, out_id: *mut usize) -> 
 }
 
 /// Open an existing corpus `MDB_RDONLY`. No mkdir, no write txn.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_open_readonly(path: *const c_char, out_id: *mut usize) -> c_int {
     if path.is_null() || out_id.is_null() {
@@ -184,6 +194,11 @@ pub unsafe extern "C" fn rkrdb_open_readonly(path: *const c_char, out_id: *mut u
 /// Pack one frame as RCSO bytes for `MPI_Bcast` on the *caller* communicator.
 /// `buf == NULL` returns the required size. Rank 0 of that comm calls this;
 /// other ranks never open the env.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_pack_frame(
     id: usize,
@@ -217,6 +232,11 @@ pub unsafe extern "C" fn rkrdb_pack_frame(
 
 /// Pack many frames as one RCSB envelope. `buf == NULL` returns the required size.
 /// Rank 0 of the caller comm packs; others never open the env.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_pack_frames(
     id: usize,
@@ -260,6 +280,11 @@ pub unsafe extern "C" fn rkrdb_pack_frames(
 }
 
 /// Number of RCSO blobs in an RCSB envelope. No corpus handle.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_unpack_batch_nframes(
     buf: *const u8,
@@ -280,6 +305,11 @@ pub unsafe extern "C" fn rkrdb_unpack_batch_nframes(
 }
 
 /// Unpack one RCSO item from an RCSB envelope into xyz. No corpus handle.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_unpack_batch_item(
     buf: *const u8,
@@ -311,6 +341,11 @@ pub unsafe extern "C" fn rkrdb_unpack_batch_item(
 }
 
 /// Unpack RCSO positions (no corpus handle — MPI worker side).
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_unpack_positions(
     buf: *const u8,
@@ -343,6 +378,11 @@ pub unsafe extern "C" fn rkrdb_unpack_positions(
 
 #[no_mangle]
 /// Drop the corpus handle. The id must not be used again.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 pub unsafe extern "C" fn rkrdb_close(id: usize) -> c_int {
     let mut g = HANDLES.lock().unwrap();
     if let Some(slot) = g.get_mut(id) {
@@ -355,6 +395,11 @@ pub unsafe extern "C" fn rkrdb_close(id: usize) -> c_int {
 
 /// Last error message (thread-safe snapshot into caller buffer). Returns bytes written excluding NUL,
 /// or -1 if truncated / null.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_last_error(id: usize, buf: *mut c_char, buflen: usize) -> c_int {
     if buf.is_null() || buflen == 0 {
@@ -386,6 +431,11 @@ fn parse_units_json(p: *const c_char) -> Result<Option<serde_json::Value>, c_int
 }
 
 /// `units_json` is optional JSON (`{"length":"A","energy":"ev"}`). NULL stamps nothing.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_append_trajectory_units(
     id: usize,
@@ -426,6 +476,11 @@ pub unsafe extern "C" fn rkrdb_append_trajectory_units(
 
 #[no_mangle]
 /// Ingest a UTF-8 CON path as a new trajectory. Writes the committed frame count to `out_nframes`.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 pub unsafe extern "C" fn rkrdb_append_trajectory(
     id: usize,
     traj_id: u64,
@@ -436,6 +491,11 @@ pub unsafe extern "C" fn rkrdb_append_trajectory(
 }
 
 /// Ingest CON text. `source` may be NULL (`"memory"`).
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_append_trajectory_str(
     id: usize,
@@ -479,6 +539,11 @@ pub unsafe extern "C" fn rkrdb_append_trajectory_str(
 }
 
 /// Ingest one parsed `RKRConFrame*` from libreadcon_core. Caller keeps the handle.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_append_trajectory_frame(
     id: usize,
@@ -492,6 +557,11 @@ pub unsafe extern "C" fn rkrdb_append_trajectory_frame(
 
 /// Extend an existing trajectory with one parsed frame, or create it.
 /// Returns the total frame count. Caller retains ownership of the frame.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_extend_trajectory_frame(
     id: usize,
@@ -550,6 +620,11 @@ unsafe fn ingest_trajectory_frame(
 
 /// Create the trajectory or append frames after the live count.
 /// `units_json` is optional; NULL stamps nothing on the new frames.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_extend_trajectory_units(
     id: usize,
@@ -590,6 +665,11 @@ pub unsafe extern "C" fn rkrdb_extend_trajectory_units(
 
 #[no_mangle]
 /// Append a UTF-8 CON path to an existing trajectory, or create it when it is absent.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 pub unsafe extern "C" fn rkrdb_extend_trajectory(
     id: usize,
     traj_id: u64,
@@ -600,6 +680,11 @@ pub unsafe extern "C" fn rkrdb_extend_trajectory(
 }
 
 /// Convert stored numbers and rewrite CON `units` for every frame of `traj_id`.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_set_units(
     id: usize,
@@ -634,6 +719,11 @@ pub unsafe extern "C" fn rkrdb_set_units(
 }
 
 /// Write the frame `units` object as JSON into `buf` (NUL-terminated).
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_frame_units(
     id: usize,
@@ -672,6 +762,11 @@ pub unsafe extern "C" fn rkrdb_frame_units(
 
 /// Select by required symbol (optional) and natoms range (use 0, UINT32_MAX for any).
 /// Results stored internally; use rkrdb_result_count / rkrdb_result_key.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_select_basic(
     id: usize,
@@ -712,6 +807,11 @@ pub unsafe extern "C" fn rkrdb_select_basic(
 }
 
 /// Select by exact xxHash3-128 (16 bytes LE).
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_select_hash(id: usize, hash16: *const u8) -> c_int {
     if hash16.is_null() {
@@ -737,6 +837,11 @@ pub unsafe extern "C" fn rkrdb_select_hash(id: usize, hash16: *const u8) -> c_in
 
 /// Metadata / section filters. Pass `use_energy_range=0` to ignore energy bounds.
 /// Flags: bit0=require_forces, bit1=require_velocities, bit2=require_energy.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_select_meta(
     id: usize,
@@ -793,6 +898,11 @@ pub unsafe extern "C" fn rkrdb_select_meta(
 }
 
 /// Rebuild secondary indexes from authoritative frame blobs.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_reindex(id: usize) -> c_int {
     with_handle(id, |h| match h.corpus.reindex() {
@@ -806,6 +916,11 @@ pub unsafe extern "C" fn rkrdb_reindex(id: usize) -> c_int {
 }
 
 /// Opt-in cook: derive RCSO into `frames_soa` from CON text in `frames` (CON remains authority).
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_cook_frame(id: usize, traj_id: u64, frame_idx: u32) -> c_int {
     with_handle(id, |h| {
@@ -824,6 +939,11 @@ pub unsafe extern "C" fn rkrdb_cook_frame(id: usize, traj_id: u64, frame_idx: u3
 }
 
 /// Drop cooked tier only; CON text and indexes unchanged.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_delete_cooked(id: usize, traj_id: u64, frame_idx: u32) -> c_int {
     with_handle(id, |h| {
@@ -842,6 +962,11 @@ pub unsafe extern "C" fn rkrdb_delete_cooked(id: usize, traj_id: u64, frame_idx:
 }
 
 /// Returns 1 if valid RCSO present, 0 if missing/corrupt, negative on error.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_has_valid_cooked(id: usize, traj_id: u64, frame_idx: u32) -> c_int {
     with_handle(id, |h| {
@@ -862,6 +987,11 @@ pub unsafe extern "C" fn rkrdb_has_valid_cooked(id: usize, traj_id: u64, frame_i
 
 /// Prefer cooked positions (no CON parse on hit); else parse CON.
 /// Writes `*out_natoms * 3` doubles into `out_xyz` (row-major N×3). `capacity_atoms` is max N.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_get_positions(
     id: usize,
@@ -908,6 +1038,11 @@ pub unsafe extern "C" fn rkrdb_get_positions(
 }
 
 /// Prefer cooked forces when present; writes N×3 doubles. Sets *out_has_forces 0/1.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_get_forces(
     id: usize,
@@ -963,6 +1098,11 @@ pub unsafe extern "C" fn rkrdb_get_forces(
 }
 
 /// Cook every frame that has CON text (`recook_all`).
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_recook_all(id: usize) -> c_int {
     with_handle(id, |h| match h.corpus.recook_all() {
@@ -978,6 +1118,11 @@ pub unsafe extern "C" fn rkrdb_recook_all(id: usize) -> c_int {
 /// Canonical composition formula for a stored frame (same as core `index_proj`).
 /// Writes into `buf` (NUL-terminated). Returns RKRDB_OK, RKRDB_NOT_FOUND, RKRDB_ERR, or buffer size need as positive?
 /// On success returns RKRDB_OK; if buflen too small returns RKRDB_ERR and sets last_error.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_frame_formula(
     id: usize,
@@ -1018,6 +1163,11 @@ pub unsafe extern "C" fn rkrdb_frame_formula(
 /// Campaign select: composition formula (NUL-terminated, may be null), optional fmax window.
 /// `use_fmax_range` non-zero applies fmax_min/max. Flags: bit0 forces, bit1 velocities, bit2 energy.
 /// Element constraints: pass `elem_sym` + `elem_count` + `elem_exact` (1=exact, 0=min) for one pair (null skips).
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_select_campaign(
     id: usize,
@@ -1105,11 +1255,21 @@ pub unsafe extern "C" fn rkrdb_select_campaign(
 
 #[no_mangle]
 /// Number of keys from the last select on this handle, or `RKRDB_NULL` when the handle is closed.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 pub unsafe extern "C" fn rkrdb_result_count(id: usize) -> c_int {
     with_handle(id, |h| Ok(h.last_keys.len() as c_int)).unwrap_or(RKRDB_NULL)
 }
 
 /// Write traj_id and frame_idx for result index `i` (0-based).
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_result_key(
     id: usize,
@@ -1135,6 +1295,11 @@ pub unsafe extern "C" fn rkrdb_result_key(
 }
 
 /// Hash frame blob at key; writes 16 LE bytes to out_hash16.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_frame_hash(
     id: usize,
@@ -1161,6 +1326,11 @@ pub unsafe extern "C" fn rkrdb_frame_hash(
 }
 
 /// Copy frame CON text into buf (NUL-terminated). Returns length excluding NUL, or error code.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_get_frame_text(
     id: usize,
@@ -1196,6 +1366,11 @@ pub unsafe extern "C" fn rkrdb_get_frame_text(
 
 /// Parse stored CON text into a readcon-core `RKRConFrame`.
 /// Caller frees with `free_rkr_frame` from libreadcon_core. NULL on error.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_get_frame(
     id: usize,
@@ -1272,6 +1447,11 @@ pub unsafe extern "C" fn rkrdb_set_velocity_time_unit(id: usize, unit: *const c_
 }
 
 /// `nframes` and `natoms` for one trajectory's H5MD arrays.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_h5md_shape(
     id: usize,
@@ -1295,6 +1475,11 @@ pub unsafe extern "C" fn rkrdb_h5md_shape(
 }
 
 /// Row-major `[T][N][3]` dest-Å positions from `collect_h5md`.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_h5md_positions(
     id: usize,
@@ -1356,6 +1541,11 @@ unsafe fn h5md_copy_slice(
 
 #[no_mangle]
 /// Copy H5MD box edges for one trajectory. `cap` is the number of `f64` slots in `out`.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 pub unsafe extern "C" fn rkrdb_h5md_edges(
     id: usize,
     traj_id: u64,
@@ -1367,6 +1557,11 @@ pub unsafe extern "C" fn rkrdb_h5md_edges(
 
 #[no_mangle]
 /// Copy H5MD forces for one trajectory. Returns an error when the trajectory has no forces.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 pub unsafe extern "C" fn rkrdb_h5md_forces(
     id: usize,
     traj_id: u64,
@@ -1378,6 +1573,11 @@ pub unsafe extern "C" fn rkrdb_h5md_forces(
 
 #[no_mangle]
 /// Copy H5MD velocities for one trajectory. Returns an error when the trajectory has no velocities.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 pub unsafe extern "C" fn rkrdb_h5md_velocities(
     id: usize,
     traj_id: u64,
@@ -1395,6 +1595,11 @@ pub unsafe extern "C" fn rkrdb_h5md_velocities(
 }
 
 /// Integer Z, length `N` (`collect_h5md` species_z).
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_h5md_species(
     id: usize,
@@ -1424,6 +1629,11 @@ pub unsafe extern "C" fn rkrdb_h5md_species(
 
 #[no_mangle]
 /// Copy one frame's velocities. `out_has_velocities` is 1 when the frame stored them.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 pub unsafe extern "C" fn rkrdb_get_velocities(
     id: usize,
     traj_id: u64,
@@ -1472,6 +1682,11 @@ pub unsafe extern "C" fn rkrdb_get_velocities(
 }
 
 /// Dest-`ps` times from `collect_h5md` (CON time or `i * timestep`, else index).
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_h5md_times(
     id: usize,
@@ -1500,6 +1715,11 @@ pub unsafe extern "C" fn rkrdb_h5md_times(
 }
 
 /// xxHash3-128 of arbitrary bytes (LE 16 bytes) — for clients hashing off-line blobs.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_xxh3_128(data: *const u8, len: usize, out_hash16: *mut u8) -> c_int {
     if data.is_null() || out_hash16.is_null() {
@@ -1529,8 +1749,7 @@ mod tests {
         assert_eq!(
             stamp,
             format!(
-                "readcon-db/abi-{}.{}/layout-{}",
-                RKRDB_ABI_VERSION_MAJOR, RKRDB_ABI_VERSION_MINOR, RKRDB_ABI_LAYOUT_REVISION
+                "readcon-db/abi-{RKRDB_ABI_VERSION_MAJOR}.{RKRDB_ABI_VERSION_MINOR}/layout-{RKRDB_ABI_LAYOUT_REVISION}"
             )
         );
         assert_eq!(

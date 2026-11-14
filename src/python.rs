@@ -18,10 +18,16 @@ struct PyConCorpus {
 #[pymethods]
 impl PyConCorpus {
     #[new]
-    #[pyo3(signature = (path, readonly=false))]
+    #[pyo3(signature = (path, readonly=false, warm=true))]
     /// Open `path`. `readonly=True` refuses writes.
-    fn new(path: &str, readonly: bool) -> PyResult<Self> {
-        let inner = if readonly {
+    ///
+    /// `warm=True` faults a corpus under 1 MiB before returning, so the
+    /// readahead hole is closed inside `open`. `warm=False` with
+    /// `readonly=True` leaves the page cache cold for a timed query.
+    fn new(path: &str, readonly: bool, warm: bool) -> PyResult<Self> {
+        let inner = if readonly && !warm {
+            ConCorpus::open_readonly_cold(path)
+        } else if readonly {
             ConCorpus::open_readonly(path)
         } else {
             ConCorpus::open(path)

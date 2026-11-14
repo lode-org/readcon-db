@@ -298,6 +298,11 @@ where
 /// composition: `z` is the per-atom atomic-number list in caller
 /// order (`natoms` entries), `cell3` the three orthorhombic box
 /// lengths. Writes the opaque handle to `out_id`.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_archive_open(
     dir: *const c_char,
@@ -327,6 +332,11 @@ pub unsafe extern "C" fn rkrdb_archive_open(
 /// Enqueue one evaluation: flat `3 * natoms` position and force
 /// buffers in caller order plus the total energy. Non-blocking; disk
 /// failures are counted via `rkrdb_archive_dropped`.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_archive_append(
     id: usize,
@@ -351,6 +361,11 @@ pub unsafe extern "C" fn rkrdb_archive_append(
 }
 
 /// Block until every enqueued row is committed or counted dropped.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_archive_flush(id: usize) -> c_int {
     with_archive(id, |a| {
@@ -361,6 +376,11 @@ pub unsafe extern "C" fn rkrdb_archive_flush(id: usize) -> c_int {
 }
 
 /// Rows committed to the corpus (including prior runs).
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_archive_count(id: usize, out_count: *mut u64) -> c_int {
     if out_count.is_null() {
@@ -376,6 +396,11 @@ pub unsafe extern "C" fn rkrdb_archive_count(id: usize, out_count: *mut u64) -> 
 /// Rows accepted by append, including any still queued (prior runs
 /// included). Key cache refreshes on this; fetch bounds on
 /// rkrdb_archive_count after a flush.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_archive_appended(id: usize, out_count: *mut u64) -> c_int {
     if out_count.is_null() {
@@ -389,6 +414,11 @@ pub unsafe extern "C" fn rkrdb_archive_appended(id: usize, out_count: *mut u64) 
 }
 
 /// Rows the writer thread could not persist.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_archive_dropped(id: usize, out_count: *mut u64) -> c_int {
     if out_count.is_null() {
@@ -404,6 +434,11 @@ pub unsafe extern "C" fn rkrdb_archive_dropped(id: usize, out_count: *mut u64) -
 /// Fetch committed row `index` in the caller's original atom order.
 /// `positions` and `forces` receive `3 * natoms` doubles; `out_energy`
 /// the total energy. Flush first for a complete snapshot.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_archive_fetch(
     id: usize,
@@ -437,6 +472,11 @@ pub unsafe extern "C" fn rkrdb_archive_fetch(
 }
 
 /// Drain the writer, close the corpus, release the handle.
+/// # Safety
+///
+/// Every pointer must be valid for the access described above, or null.
+/// A null pointer is not dereferenced; the call returns `RKRDB_NULL`.
+/// A handle id must be one this process opened and has not closed.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_archive_close(id: usize) -> c_int {
     let mut g = ARCHIVES.lock().unwrap();
