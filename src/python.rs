@@ -731,7 +731,7 @@ impl PyConCorpus {
         traj_id: u64,
         frame_idx: Option<u32>,
     ) -> PyResult<Py<PyDict>> {
-        let block = py
+        let mut block = py
             .detach(|| {
                 self.inner
                     .read_materialized(traj_id, frame_idx)
@@ -740,38 +740,49 @@ impl PyConCorpus {
             .map_err(PyRuntimeError::new_err)?;
         let n_frames = block.n_frames as usize;
         let n_atoms = block.n_atoms as usize;
+        let velocities_set = block.velocities_set;
+        let forces_set = block.forces_set;
         let out = PyDict::new(py);
         out.set_item("n_frames", block.n_frames)?;
         out.set_item("n_atoms", n_atoms)?;
+        // Copy one column and drop the Rust buffer before the next, so the
+        // cooked columns and every NumPy array are not resident together.
+        let positions = std::mem::take(&mut block.positions);
         out.set_item(
             "positions",
-            f64_array(py, &block.positions, &[n_frames, n_atoms, 3])?,
+            f64_array(py, &positions, &[n_frames, n_atoms, 3])?,
         )?;
-        if block.forces_set {
-            out.set_item(
-                "forces",
-                f64_array(py, &block.forces, &[n_frames, n_atoms, 3])?,
-            )?;
+        drop(positions);
+        let forces = std::mem::take(&mut block.forces);
+        if forces_set {
+            out.set_item("forces", f64_array(py, &forces, &[n_frames, n_atoms, 3])?)?;
         } else {
             out.set_item("forces", py.None())?;
         }
-        out.set_item(
-            "velocities",
-            f64_array(py, &block.velocities, &[n_frames, n_atoms, 3])?,
-        )?;
-        out.set_item("velocities_set", block.velocities_set)?;
-        out.set_item(
-            "masses",
-            f64_array(py, &block.masses, &[n_frames, n_atoms])?,
-        )?;
-        out.set_item(
-            "numbers",
-            u32_array(py, &block.numbers, &[n_frames, n_atoms])?,
-        )?;
+        drop(forces);
+        let velocities = std::mem::take(&mut block.velocities);
+        if velocities_set {
+            out.set_item(
+                "velocities",
+                f64_array(py, &velocities, &[n_frames, n_atoms, 3])?,
+            )?;
+        } else {
+            out.set_item("velocities", numpy_zeros(py, &[n_frames, n_atoms, 3])?)?;
+        }
+        drop(velocities);
+        out.set_item("velocities_set", velocities_set)?;
+        let masses = std::mem::take(&mut block.masses);
+        out.set_item("masses", f64_array(py, &masses, &[n_frames, n_atoms])?)?;
+        drop(masses);
+        let numbers = std::mem::take(&mut block.numbers);
+        out.set_item("numbers", u32_array(py, &numbers, &[n_frames, n_atoms])?)?;
+        drop(numbers);
+        let constraints = std::mem::take(&mut block.constraints);
         out.set_item(
             "constraints",
-            u8_array(py, &block.constraints, &[n_frames, n_atoms, 3])?,
+            u8_array(py, &constraints, &[n_frames, n_atoms, 3])?,
         )?;
+        drop(constraints);
         out.set_item("cell", f64_array(py, &block.cells, &[n_frames, 3, 3])?)?;
         out.set_item("energy", f64_array(py, &block.energy, &[n_frames])?)?;
         out.set_item(
@@ -1018,6 +1029,16 @@ fn buffer_array<'py>(
     let flat = np.call_method("frombuffer", (buf,), Some(&kwargs))?;
     let shape_t = PyTuple::new(py, shape.iter().copied())?;
     flat.call_method1("reshape", (shape_t,))
+}
+
+fn numpy_zeros<'py>(py: Python<'py>, shape: &[usize]) -> PyResult<Bound<'py, PyAny>> {
+    let np = py
+        .import("numpy")
+        .map_err(|_| PyRuntimeError::new_err("read_arrays requires numpy"))?;
+    let shape_t = PyTuple::new(py, shape.iter().copied())?;
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("dtype", "float64")?;
+    np.call_method("zeros", (shape_t,), Some(&kwargs))
 }
 
 fn f64_array<'py>(py: Python<'py>, data: &[f64], shape: &[usize]) -> PyResult<Bound<'py, PyAny>> {

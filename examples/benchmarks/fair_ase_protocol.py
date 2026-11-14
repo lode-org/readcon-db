@@ -31,6 +31,7 @@ import ctypes.util
 import gc
 import hashlib
 import json
+import math
 import os
 import platform
 import shutil
@@ -329,6 +330,114 @@ def close_lmdb(db) -> None:
     del db
 
 
+def float_token(value: float) -> str:
+    """Shortest round-trip spelling, including a signed zero."""
+    value = float(value)
+    if value == 0.0 and math.copysign(1.0, value) < 0.0:
+        return "-0.0"
+    return repr(value)
+
+
+def synthetic_arrays(frame_index: int, n_atoms: int):
+    """The shared geometry. Both tools' records come from this."""
+    pos = np.zeros((n_atoms, 3), dtype=np.float64)
+    pos[:, 0] = np.arange(n_atoms, dtype=np.float64) * np.float64(0.125)
+    pos[:, 1] = np.float64(0.5)
+    pos[:, 2] = np.float64(1.0 + frame_index)
+    pos[0, 1] = np.float64(np.pi)
+    if frame_index == 0:
+        pos[0, 0] = np.float64(-0.0)
+    if n_atoms > 1:
+        pos[1, 2] = np.nextafter(np.float64(1.0), np.float64(2.0))
+    forces = np.array(pos * np.float64(0.5), dtype=np.float64)
+    forces[0, 0] = np.float64(-0.0)
+    masses = np.full(n_atoms, np.float64(63.546), dtype=np.float64)
+    energy = np.float64(-42.5) + np.float64(frame_index)
+    cell = np.diag(np.array([10.5, 12.25, 8.0], dtype=np.float64))
+    return pos, forces, masses, energy, cell
+
+
+def record_from_arrays(pos, forces, masses, energy, cell, frame_index: int) -> dict:
+    n_atoms = int(pos.shape[0])
+    symbols = ["Cu"] * n_atoms
+    return {
+        "symbols": symbols,
+        "symbol_runs": _symbol_runs(symbols),
+        "positions": pos,
+        "cell": cell,
+        "pbc": (True, True, False),
+        "masses": masses,
+        "forces": forces,
+        "energy": energy,
+        "frame_index": frame_index,
+    }
+
+
+def _write_frame(buf: bytearray, frame_index: int, pos, forces, energy: float) -> None:
+    if frame_index:
+        buf.extend(b"\n")
+    n_atoms = int(pos.shape[0])
+    header = (
+        '{"con_spec_minor":1,"con_spec_version":3,"energy":'
+        + float_token(energy)
+        + ',"frame_index":'
+        + str(frame_index)
+        + ',"lattice_vectors":[[10.5,0.0,0.0],[0.0,12.25,0.0],[0.0,0.0,8.0]],'
+        + '"pbc":[true,true,false],"sections":["forces"],'
+        + '"units":{"energy":"eV","length":"angstrom","mass":"amu",'
+        + '"time":"(amu*angstrom^2/eV)^0.5"}}\n'
+        + "10.5 12.25 8.0\n90.0 90.0 90.0\n\n\n1\n"
+        + str(n_atoms)
+        + "\n63.546\nCu\nCoordinates of Component 1\n"
+    )
+    buf.extend(header.encode())
+    for i in range(n_atoms):
+        x, y, z = pos[i]
+        buf.extend(
+            f"{float_token(x)} {float_token(y)} {float_token(z)} 0 {i}\n".encode()
+        )
+    buf.extend(b"\nCu\nForces of Component 1\n")
+    for i in range(n_atoms):
+        x, y, z = forces[i]
+        buf.extend(
+            f"{float_token(x)} {float_token(y)} {float_token(z)} 0 {i}\n".encode()
+        )
+
+
+def build_text_records(n_frames: int, n_atoms: int) -> tuple[str, list[dict]]:
+    """CON text and the arrays it must round-trip to, without a ConFrame."""
+    buf = bytearray(b"\n")
+    records = []
+    for i in range(n_frames):
+        pos, forces, masses, energy, cell = synthetic_arrays(i, n_atoms)
+        _write_frame(buf, i, pos, forces, float(energy))
+        records.append(record_from_arrays(pos, forces, masses, energy, cell, i))
+    return buf.decode(), records
+
+
+def build_atom_records(n_frames: int, n_atoms: int) -> tuple[list[Atoms], list[dict]]:
+    """ASE rows only. The CON text is not built in this process."""
+    atoms_out: list[Atoms] = []
+    records = []
+    for i in range(n_frames):
+        pos, forces, masses, energy, cell = synthetic_arrays(i, n_atoms)
+        symbols = ["Cu"] * n_atoms
+        atoms = Atoms(
+            symbols,
+            positions=pos.copy(),
+            cell=cell.copy(),
+            pbc=(True, True, False),
+            masses=masses.copy(),
+        )
+        atoms.calc = SinglePointCalculator(
+            atoms, energy=float(energy), forces=forces.copy()
+        )
+        atoms.info["frame_index"] = i
+        atoms_out.append(atoms)
+        records.append(record_from_arrays(pos, forces, masses, energy, cell, i))
+    return atoms_out, records
+
+
 def build_records(n_frames: int, n_atoms: int) -> tuple[str, list[Atoms], list[dict]]:
     """Same rows for both stores: geometry, masses, forces, energy, frame index, pbc."""
     frames = []
@@ -515,7 +624,7 @@ def header_lines() -> list[str]:
         "page_cache read_cold_label: a sample that stays resident is labeled and omitted from the cold median",
         "page_cache drop_caches: /proc/sys/vm/drop_caches is not writable here, so it is not used",
         "page_cache read_warm: one warmup read on the open store, then time the read",
-        "lmdb MDB_NOSYNC unset, one write transaction, fsync on commit",
+        "lmdb MDB_NOSYNC unset, fsync on commit; a trajectory longer than 64 frames commits one group at a time",
         "ase backend sqlite journal_mode=DELETE synchronous=FULL, one commit fsync",
         "validation element-wise outside the timer; a mismatch aborts the run",
     ]
@@ -961,54 +1070,58 @@ def _as_u32(values) -> np.ndarray:
     return np.asarray(values, dtype=np.uint32)
 
 
+def _frame_at(values, index: int, n_frames: int):
+    """One frame as a view. A single stored frame may already be unbatched."""
+    arr = np.asarray(values)
+    if n_frames == 1 and arr.shape[:1] != (1,):
+        return arr
+    return arr[index]
+
+
 def check_materialized(got: dict, records: list[dict]) -> None:
-    """Both tools return this shape. A mismatch aborts the campaign."""
+    """Both tools return this shape. A mismatch aborts the campaign.
+
+    Frames are compared one at a time so a million-atom check does not
+    allocate a second copy of every column.
+    """
     from ase.data import atomic_numbers
 
-    pos = np.asarray(got["positions"], dtype=np.float64)
-    exp = np.stack([rec["positions"] for rec in records], axis=0)
-    if pos.shape != exp.shape or pos.tobytes() != exp.tobytes():
-        raise AssertionError(("positions", pos.shape, exp.shape))
-    masses = np.asarray(got["masses"], dtype=np.float64)
-    exp_m = np.stack([rec["masses"] for rec in records], axis=0)
-    if masses.shape != exp_m.shape or masses.tobytes() != exp_m.tobytes():
-        raise AssertionError("masses")
-    numbers = _as_u32(got["numbers"])
-    exp_z = np.stack(
-        [
-            np.array([atomic_numbers[sym] for sym in rec["symbols"]], dtype=np.uint32)
-            for rec in records
-        ],
-        axis=0,
-    )
-    if numbers.shape != exp_z.shape or numbers.tobytes() != exp_z.tobytes():
-        raise AssertionError(("numbers", numbers.shape, exp_z.shape))
-    constraints = np.asarray(got["constraints"], dtype=np.uint8)
-    exp_c = np.zeros(constraints.shape, dtype=np.uint8)
-    for i, rec in enumerate(records):
-        if rec.get("constraints") is not None:
-            exp_c[i] = np.asarray(rec["constraints"], dtype=np.uint8)
-    if constraints.shape != exp_c.shape or constraints.tobytes() != exp_c.tobytes():
-        raise AssertionError("constraints")
-    velocities = np.asarray(got["velocities"], dtype=np.float64)
-    exp_v = np.zeros(velocities.shape, dtype=np.float64)
-    for i, rec in enumerate(records):
-        if rec.get("velocities") is not None:
-            exp_v[i] = np.asarray(rec["velocities"], dtype=np.float64)
-    if velocities.shape != exp_v.shape or velocities.tobytes() != exp_v.tobytes():
-        raise AssertionError("velocities")
-    cell = np.asarray(got["cell"], dtype=np.float64)
-    exp_cell = np.stack([rec["cell"] for rec in records], axis=0)
-    if cell.shape != exp_cell.shape or cell.tobytes() != exp_cell.tobytes():
-        raise AssertionError(("cell", cell.shape, exp_cell.shape))
+    n_frames = len(records)
+    pos = got["positions"]
+    masses = got["masses"]
+    numbers = got["numbers"]
+    constraints = got["constraints"]
+    velocities = got["velocities"]
+    cell = got["cell"]
     forces = got.get("forces")
-    if records[0].get("forces") is not None:
-        if forces is None:
-            raise AssertionError("forces missing")
-        got_f = np.asarray(forces, dtype=np.float64)
-        exp_f = np.stack([rec["forces"] for rec in records], axis=0)
-        if got_f.shape != exp_f.shape or got_f.tobytes() != exp_f.tobytes():
-            raise AssertionError("forces")
+    for i, rec in enumerate(records):
+        if _frame_at(pos, i, n_frames).tobytes() != np.asarray(rec["positions"]).tobytes():
+            raise AssertionError("positions")
+        if _frame_at(masses, i, n_frames).tobytes() != np.asarray(rec["masses"]).tobytes():
+            raise AssertionError("masses")
+        got_z = _frame_at(numbers, i, n_frames).astype(np.uint32, copy=False)
+        exp_z = np.array([atomic_numbers[sym] for sym in rec["symbols"]], dtype=np.uint32)
+        if got_z.tobytes() != exp_z.tobytes():
+            raise AssertionError("numbers")
+        got_c = _frame_at(constraints, i, n_frames)
+        if rec.get("constraints") is None:
+            if np.any(got_c):
+                raise AssertionError("constraints")
+        elif got_c.tobytes() != np.asarray(rec["constraints"], dtype=np.uint8).tobytes():
+            raise AssertionError("constraints")
+        got_v = _frame_at(velocities, i, n_frames)
+        if rec.get("velocities") is None:
+            if np.any(got_v):
+                raise AssertionError("velocities")
+        elif got_v.tobytes() != np.asarray(rec["velocities"]).tobytes():
+            raise AssertionError("velocities")
+        if _frame_at(cell, i, n_frames).tobytes() != np.asarray(rec["cell"]).tobytes():
+            raise AssertionError("cell")
+        if rec.get("forces") is not None:
+            if forces is None:
+                raise AssertionError("forces missing")
+            if _frame_at(forces, i, n_frames).tobytes() != np.asarray(rec["forces"]).tobytes():
+                raise AssertionError("forces")
     energy = np.asarray(got["energy"], dtype=np.float64)
     for i, rec in enumerate(records):
         if rec.get("energy") is None:
@@ -1247,11 +1360,21 @@ def execute_insert_row(request: dict) -> dict:
             "n_frames": spec["n_frames"],
             "geometry_only": True,
         }
-    else:
-        text, atoms_list, records = build_records(spec["n_frames"], spec["n_atoms"])
-        stamp_frame_index(atoms_list)
+    elif kind == "readcon-db":
+        # The CON text is streamed from the column arrays. A ConFrame of
+        # 10^6 atoms, next to those arrays, was the 1.6 GB peak.
+        text, records = build_text_records(spec["n_frames"], spec["n_atoms"])
         payload = {
             "text": text,
+            "atoms": [],
+            "records": records,
+            "n_frames": spec["n_frames"],
+            "geometry_only": False,
+        }
+    else:
+        atoms_list, records = build_atom_records(spec["n_frames"], spec["n_atoms"])
+        payload = {
+            "text": "",
             "atoms": atoms_list,
             "records": records,
             "n_frames": spec["n_frames"],
@@ -1696,6 +1819,13 @@ def workloads_for(mode: str) -> list[dict]:
         for row in rows:
             row["insert_only"] = True
         return rows
+    if mode == "db8":
+        return [
+            {"name": "atoms-100000", "n_frames": 1, "n_atoms": 100_000},
+            {"name": "atoms-1000000", "n_frames": 1, "n_atoms": 1_000_000},
+            {"name": "frames-100", "n_frames": 100, "n_atoms": 8},
+            {"name": "frames-10000", "n_frames": 10_000, "n_atoms": 8},
+        ]
     if mode == "smoke":
         return [
             paper,
@@ -1712,7 +1842,7 @@ def main() -> None:
     )
     ap.add_argument(
         "--mode",
-        choices=("all", "paper", "ladder", "smoke", "inserts"),
+        choices=("all", "paper", "ladder", "smoke", "inserts", "db8"),
         default="all",
     )
     ap.add_argument("--self-check", action="store_true")

@@ -38,6 +38,7 @@ serde_json = "1"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 zstd = { version = "0.13", default-features = false }
 fast-float2 = "0.2"
+libc = "0.2"
 
 pyo3 = { version = "0.28", features = ["extension-module"], optional = true }
 mpi = { version = "0.8", optional = true, default-features = false }
@@ -45,7 +46,6 @@ mpi = { version = "0.8", optional = true, default-features = false }
 [dev-dependencies]
 tempfile = "3"
 sha2 = "0.10"
-libc = "0.2"
 
 [package.metadata.docs.rs]
 all-features = false

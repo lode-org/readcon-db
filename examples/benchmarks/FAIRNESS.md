@@ -32,15 +32,14 @@ commit only: the CON text or the ASE atoms are built before it, and the
 check does not build a second per-atom frame.
 
 A cold read drops the page cache and checks `mincore` is 0 before the
-open. The open stays outside the clock. On a frames-100 selected cold
-read the calls are bimodal: the median call is about 0.10 ms, and a
-tail around 0.35–0.45 ms is a query that still faults pages the open
-readahead brought back after `mincore` had reported them gone. The
-share of that tail changes from sample to sample (p90 moved from
-0.12 ms to 0.32 ms across six 50 ms samples), so the means move and
-IQR/median stays near 0.17 even over a 4 s span of about 20,000 calls.
-The mixture weight is correlated inside a sample, so a longer span
-does not average it away.
+open. The open stays outside the clock. For a corpus under 1 MiB the
+query itself then `posix_fadvise(WILLNEED)`s `data.mdb` and
+`madvise(WILLNEED)`s the cooked value before copying it. That does not
+remove the per-call tail. On frames-100 selected cold the median call
+stays near 0.11 ms and p90 stays near 0.35 ms: the open's readahead
+still sometimes faults those pages before the clock. The db8 row is
+n=12, median 1.56e-4 s, p90 of those means 1.95e-4 s, IQR/median 0.251.
+The per-call distribution is `bench/db8/noise.json`.
 
 The CPC ingest is `db_v2.py` in readcon-core, recorded in
 `paper/cpc/logs/db.log` (2026-11-05, 40 frames of 8 Cu). readcon-db's

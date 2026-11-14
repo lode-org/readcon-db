@@ -477,7 +477,9 @@ impl MaterializedFrame {
         let (velocities, velocities_set) = if flags & FLAG_VELOCITIES != 0 {
             (take_f64(bytes, &mut off, n.checked_mul(3)?)?, true)
         } else {
-            (vec![0.0; n.checked_mul(3)?], false)
+            // Zeros are filled by the caller. A million-atom frame would
+            // otherwise keep 24 MiB of zeros beside the position columns.
+            (Vec::new(), false)
         };
         let mass_mode = *bytes.get(off)?;
         off += 1;

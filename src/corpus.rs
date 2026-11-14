@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Cursor;
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -1620,10 +1621,97 @@ impl ConCorpus {
         source: impl Into<String>,
     ) -> Result<u32> {
         let source = source.into();
+        Self::species_counts_fit(file_contents)?;
+        // A long trajectory is committed one zstd group at a time. Holding
+        // every frame's cooked blob and its decompressed text until a single
+        // commit made a 10^4-frame insert resident far past ASE.
+        if file_contents.len() > 512 * 1024 {
+            let spans = readcon_core::index_proj::frame_byte_spans_skip(file_contents)
+                .map_err(|e| Error::Parse(e.to_string()))?;
+            if spans.len() > crate::frame_codec::GROUP_LEN as usize {
+                return self.append_spans_batched(traj_id, file_contents, &spans, source);
+            }
+        }
         // Prepare outside exclusive write section (parallel writers can parse concurrently).
         let mut prepared =
             Self::prepare_trajectory_str(traj_id, file_contents, self.compress_on())?;
         self.commit_prepared(traj_id, &mut prepared, source, false, self.compress_on())
+    }
+
+    /// Cook, compress, and commit [`GROUP_LEN`] frames, then drop them.
+    fn append_spans_batched(
+        &self,
+        traj_id: TrajId,
+        file_contents: &str,
+        spans: &[readcon_core::index_proj::FrameByteSpan],
+        source: String,
+    ) -> Result<u32> {
+        let compress = self.compress_on();
+        let batch = crate::frame_codec::GROUP_LEN as usize;
+        let mut next = 0u32;
+        for chunk in spans.chunks(batch) {
+            let mut prepared = Vec::with_capacity(chunk.len());
+            for (offset, span) in chunk.iter().enumerate() {
+                let text = span
+                    .slice(file_contents)
+                    .ok_or_else(|| Error::Parse("frame span is not valid UTF-8".into()))?;
+                let frame_idx = next
+                    + u32::try_from(offset).map_err(|_| Error::Parse("too many frames".into()))?;
+                let (facts, cooked) = crate::span_columns::project_frame_cooked(text.as_bytes())?;
+                let fk = FrameKey { traj_id, frame_idx };
+                prepared.push(Self::build_index_from_facts(
+                    fk, &facts, text, compress, cooked, None,
+                )?);
+            }
+            if next == 0 {
+                self.commit_prepared(traj_id, &mut prepared, source.clone(), false, compress)?;
+            } else {
+                self.commit_extend_prepared(traj_id, &mut prepared, next)?;
+            }
+            next +=
+                u32::try_from(chunk.len()).map_err(|_| Error::Parse("too many frames".into()))?;
+        }
+        Ok(next)
+    }
+
+    /// Append an already-grouped batch onto a trajectory this process just created.
+    fn commit_extend_prepared(
+        &self,
+        traj_id: TrajId,
+        prepared: &mut [PreparedIndexPuts],
+        start_idx: u32,
+    ) -> Result<u32> {
+        if self.compress_on() {
+            Self::group_prepared(prepared)?;
+        }
+        let input_bytes = prepared_bytes(prepared);
+        self.with_write(input_bytes, |wtxn| {
+            let tid_key = traj_id.to_be_bytes();
+            let live: TrajMeta = self
+                .traj_meta
+                .get(wtxn, &tid_key[..])?
+                .map(serde_json::from_str)
+                .transpose()?
+                .ok_or_else(|| Error::Message(format!("trajectory {traj_id} is missing")))?;
+            if live.n_frames != start_idx {
+                return Err(Error::Message(format!(
+                    "concurrent extend race on traj {traj_id}: expected start {start_idx}, live {}",
+                    live.n_frames
+                )));
+            }
+            for p in prepared.iter() {
+                self.put_index_puts(wtxn, p)?;
+            }
+            let n_frames = prepared
+                .last()
+                .map(|p| p.fk.frame_idx + 1)
+                .unwrap_or(start_idx);
+            let mut meta = live;
+            meta.n_frames = n_frames;
+            self.traj_meta
+                .put(wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
+            Ok(n_frames)
+        })
     }
 
     /// Append CON text onto an existing trajectory, or create it when it is absent.
@@ -2471,6 +2559,43 @@ impl ConCorpus {
         })
     }
 
+    /// Sequential hint for one LMDB value before it is copied out.
+    fn willneed(bytes: &[u8]) {
+        if bytes.len() < 4096 {
+            return;
+        }
+        let page = 4096usize;
+        let addr = bytes.as_ptr() as usize;
+        let start = addr & !(page - 1);
+        let end = addr.saturating_add(bytes.len()).saturating_add(page - 1) & !(page - 1);
+        if end <= start {
+            return;
+        }
+        unsafe {
+            libc::madvise(start as *mut libc::c_void, end - start, libc::MADV_WILLNEED);
+        }
+    }
+
+    /// Ask the kernel to fault the pages a small corpus's query is about to
+    /// touch. This runs inside the query. A cold open's readahead otherwise
+    /// lands between `mincore` and the timed read, so some calls fault and
+    /// some do not.
+    fn prefetch_small_corpus(&self) {
+        let data = self.path.join("data.mdb");
+        let Ok(meta) = fs::metadata(&data) else {
+            return;
+        };
+        if meta.len() == 0 || meta.len() > 1024 * 1024 {
+            return;
+        }
+        let Ok(file) = fs::File::open(&data) else {
+            return;
+        };
+        unsafe {
+            libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_WILLNEED);
+        }
+    }
+
     /// Positions, velocities, masses, atomic numbers, constraints, and the cell.
     ///
     /// A current RCSO blob is copied out of the LMDB value. The CON text is
@@ -2481,6 +2606,7 @@ impl ConCorpus {
         traj_id: TrajId,
         frame: Option<u32>,
     ) -> Result<MaterializedRead> {
+        self.prefetch_small_corpus();
         let rtxn = self.read_txn()?;
         let keys = if let Some(frame_idx) = frame {
             vec![FrameKey { traj_id, frame_idx }]
@@ -2507,6 +2633,7 @@ impl ConCorpus {
         for key in &keys {
             let fk_b = key.to_bytes();
             let cooked = if let Some(blob) = self.frames_soa.get(&rtxn, &fk_b[..])? {
+                Self::willneed(blob);
                 crate::cooked_soa::MaterializedFrame::from_blob(blob)
             } else {
                 None
