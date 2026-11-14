@@ -385,24 +385,6 @@ fn fill_soa_chunk(
     has_f: bool,
     has_v: bool,
 ) {
-    crate::cooked_soa::without_column_split(|| {
-        fill_soa_chunk_inner(
-            blobs, positions, forces, velocities, metas, stride, has_f, has_v,
-        )
-    });
-}
-
-#[allow(clippy::too_many_arguments)]
-fn fill_soa_chunk_inner(
-    blobs: &[Vec<u8>],
-    positions: &mut [f64],
-    forces: &mut [f64],
-    velocities: &mut [f64],
-    metas: &mut [Option<Result<crate::cooked_soa::MaterializedFrame>>],
-    stride: usize,
-    has_f: bool,
-    has_v: bool,
-) {
     for (i, blob) in blobs.iter().enumerate() {
         let pos = &mut positions[i * stride..(i + 1) * stride];
         let mut bare_f = [];

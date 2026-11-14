@@ -470,23 +470,11 @@ impl MaterializedFrame {
         let n = natoms as usize;
         let mut off = HEADER_LEN;
         let npos = n.checked_mul(3)?;
-        let (positions, forces) = if flags & FLAG_FORCES != 0 && use_column_split(n) {
-            let force_at = off + npos * 8;
-            let copied = std::thread::scope(|scope| {
-                let positions = scope.spawn(|| copy_f64_block(bytes, off, npos));
-                let forces = scope.spawn(|| copy_f64_block(bytes, force_at, npos));
-                (positions.join().unwrap(), forces.join().unwrap())
-            });
-            off = force_at + npos * 8;
-            (copied.0?, copied.1?)
+        let positions = take_f64(bytes, &mut off, npos)?;
+        let forces = if flags & FLAG_FORCES != 0 {
+            take_f64(bytes, &mut off, npos)?
         } else {
-            let positions = take_f64(bytes, &mut off, npos)?;
-            let forces = if flags & FLAG_FORCES != 0 {
-                take_f64(bytes, &mut off, npos)?
-            } else {
-                Vec::new()
-            };
-            (positions, forces)
+            Vec::new()
         };
         let (velocities, velocities_set) = if flags & FLAG_VELOCITIES != 0 {
             (take_f64(bytes, &mut off, n.checked_mul(3)?)?, true)
@@ -1021,43 +1009,6 @@ pub(crate) fn decompress_shuffled_into(
     .ok_or_else(|| Error::Message("shuffled cooked frame metadata is corrupt".into()))
 }
 
-/// Two workers are only worth it once a column is large. Smaller frames,
-/// and `RAYON_NUM_THREADS=1`, stay on the calling thread.
-const PARALLEL_ATOMS: usize = 16_384;
-
-std::thread_local! {
-    static SUPPRESS_COLUMN_SPLIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-fn column_threads() -> usize {
-    match std::env::var("RAYON_NUM_THREADS") {
-        Ok(raw) => raw.parse::<usize>().unwrap_or(1).max(1),
-        Err(_) => std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(1),
-    }
-}
-
-fn use_column_split(atoms: usize) -> bool {
-    atoms >= PARALLEL_ATOMS
-        && column_threads() > 1
-        && !SUPPRESS_COLUMN_SPLIT.with(|flag| flag.get())
-}
-
-/// Run `body` without splitting one frame's columns across threads.
-///
-/// A range or full read already has one worker per frame. A second split
-/// inside that worker would nest.
-pub(crate) fn without_column_split<T>(body: impl FnOnce() -> T) -> T {
-    SUPPRESS_COLUMN_SPLIT.with(|flag| {
-        let prev = flag.get();
-        flag.set(true);
-        let out = body();
-        flag.set(prev);
-        out
-    })
-}
-
 fn fill_component_columns(
     stored: &[u8],
     mut off: usize,
@@ -1084,7 +1035,6 @@ fn fill_component_columns(
             "shuffled cooked frame is missing its header".into(),
         ));
     }
-    let atoms = positions.len() / 3;
     let declared =
         3 + usize::from(!forces.is_empty()) * 3 + usize::from(!velocities.is_empty()) * 3;
     if parts.len() != declared {
@@ -1092,38 +1042,18 @@ fn fill_component_columns(
             "shuffled cooked frame length mismatch".into(),
         ));
     }
-    if use_column_split(atoms) && parts.len() >= 6 {
-        let (xyz, rest) = parts.split_at(3);
-        std::thread::scope(|scope| {
-            let positions =
-                scope.spawn(|| without_column_split(|| decode_lanes(stored, xyz, positions)));
-            let forces = scope.spawn(|| {
-                without_column_split(|| {
-                    decode_lanes(stored, &rest[..3], forces)?;
-                    if !velocities.is_empty() {
-                        decode_lanes(stored, &rest[3..], velocities)?;
-                    }
-                    Ok::<(), Error>(())
-                })
-            });
-            positions.join().unwrap()?;
-            forces.join().unwrap()?;
-            Ok::<(), Error>(())
-        })?;
-    } else {
-        let mut i = 0usize;
-        for dst in [positions, forces, velocities] {
-            if dst.is_empty() {
-                continue;
-            }
-            if i + 3 > parts.len() {
-                return Err(Error::Message(
-                    "shuffled cooked frame length mismatch".into(),
-                ));
-            }
-            decode_lanes(stored, &parts[i..i + 3], dst)?;
-            i += 3;
+    let mut i = 0usize;
+    for dst in [positions, forces, velocities] {
+        if dst.is_empty() {
+            continue;
         }
+        if i + 3 > parts.len() {
+            return Err(Error::Message(
+                "shuffled cooked frame length mismatch".into(),
+            ));
+        }
+        decode_lanes(stored, &parts[i..i + 3], dst)?;
+        i += 3;
     }
     Ok(off)
 }
@@ -1748,7 +1678,7 @@ mod tests {
             }
         }
         let rounds = 20u32;
-        let time = |mut body: &mut dyn FnMut()| {
+        let time = |body: &mut dyn FnMut()| {
             for _ in 0..3 {
                 body();
             }
