@@ -18,6 +18,7 @@ from readcon_db import ConCorpus
 
 db = ConCorpus("/tmp/corpus")
 ro = ConCorpus("/tmp/corpus", readonly=True)
+# open reads a corpus under 1 MiB with one pread before it returns
 db.append_trajectory(1, "run.con")
 db.append_trajectory_str(2, Path("run.con").read_text(), source="run.con")
 db.append_trajectory_frames(3, readcon.read_con("run.con"))

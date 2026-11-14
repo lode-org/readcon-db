@@ -579,28 +579,14 @@ fn project_spans(texts: &[&str]) -> Result<Vec<(crate::span_columns::SpanFacts, 
     Ok(all)
 }
 
-/// Ask the kernel to fault a corpus under 1 MiB.
-///
-/// A threaded touch of every page costs more than the read it saves.
-/// `readahead(2)` overlaps the fault with the rest of `open`. One
-/// sequential `pread` is the cold open: it has to finish before the
-/// query, or the query faults the hole.
-fn warm_small_map(path: &Path) {
-    let Some(len) = small_data_len(path) else {
-        return;
-    };
-    let Ok(file) = fs::File::open(path.join("data.mdb")) else {
-        return;
-    };
-    unsafe {
-        libc::readahead(file.as_raw_fd(), 0, len);
-    }
-}
-
 /// One sequential read of a corpus under 1 MiB, into a buffer that is dropped.
 ///
-/// This finishes the fault before `open` returns, so the query that follows
-/// does not land on an unprefetched hole. A head-only read leaves that hole.
+/// This runs before `Env::open`. Opening the environment first faults the
+/// meta page and starts readahead; the named-database walks then sometimes
+/// wait on that readahead and sometimes do not. On a 180 KiB corpus that
+/// split the full-read cold-open means into about 0.50 ms and 0.76 ms.
+/// A finished `pread` makes every following fault a cache hit. A head-only
+/// read leaves the hole in the middle of the file.
 fn pread_small_map(path: &Path) {
     let Some(len) = small_data_len(path) else {
         return;
@@ -625,10 +611,7 @@ fn small_data_len(path: &Path) -> Option<usize> {
     }
 }
 
-fn finish_open(corpus: ConCorpus, warm: bool) -> Result<ConCorpus> {
-    if warm {
-        warm_small_map(&corpus.path);
-    }
+fn finish_open(corpus: ConCorpus) -> Result<ConCorpus> {
     Ok(corpus)
 }
 
@@ -781,11 +764,10 @@ impl ConCorpus {
 
     /// Readonly open for a query that must not fault a readahead hole.
     ///
-    /// `POSIX_FADV_RANDOM` made LMDB fault leaf pages one at a time, and that
-    /// fault was bimodal. One sequential read of a corpus under 1 MiB brings
-    /// the meta pages, the B-tree, and the values in together. The read is
-    /// part of `open`, so a cold-row query (open outside the clock) sees a
-    /// warm path.
+    /// Drops the page cache, then reads a corpus under 1 MiB with one
+    /// `pread` before the environment is mapped. The read is part of
+    /// `open`, so a cold-row query (open outside the clock) sees a warm
+    /// path, and a cold-open sample pays that read inside the clock.
     pub fn open_readonly_cold(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         if let Ok(file) = fs::File::open(path.join("data.mdb")) {
@@ -793,8 +775,7 @@ impl ConCorpus {
                 libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED);
             }
         }
-        pread_small_map(path);
-        Self::open_with(path, true, None, false)
+        Self::open_with(path, true, None, true)
     }
 
     fn open_with(
@@ -819,6 +800,12 @@ impl ConCorpus {
             }
         } else {
             fs::create_dir_all(&path)?;
+        }
+        if warm {
+            // Before the environment map. A pread after `Env::open` still
+            // leaves the meta-page fault and the named-database walks racing
+            // readahead.
+            pread_small_map(&path);
         }
         let mut opts = EnvOpenOptions::new();
         opts.map_size(initial_map_size(&path, map_size)?);
@@ -891,35 +878,32 @@ impl ConCorpus {
             let canon_by_frame = env.open_database(&rtxn, Some("canon_by_frame"))?;
             // heed: uncommitted open_database txn → EINVAL on the next RoTxn.
             rtxn.commit()?;
-            return finish_open(
-                Self {
-                    path,
-                    env,
-                    txn_gate: RwLock::new(()),
-                    frames,
-                    compress_frames: AtomicBool::new(true),
-                    traj_meta,
-                    idx_natoms,
-                    idx_symbol,
-                    idx_energy,
-                    idx_flags,
-                    idx_elem_count,
-                    idx_formula,
-                    idx_fmax,
-                    idx_mass,
-                    idx_volume,
-                    idx_pbc,
-                    idx_meta,
-                    frame_by_hash,
-                    hash_by_frame,
-                    frames_soa,
-                    idx_topo,
-                    topo_by_frame,
-                    idx_canon,
-                    canon_by_frame,
-                },
-                warm,
-            );
+            return finish_open(Self {
+                path,
+                env,
+                txn_gate: RwLock::new(()),
+                frames,
+                compress_frames: AtomicBool::new(true),
+                traj_meta,
+                idx_natoms,
+                idx_symbol,
+                idx_energy,
+                idx_flags,
+                idx_elem_count,
+                idx_formula,
+                idx_fmax,
+                idx_mass,
+                idx_volume,
+                idx_pbc,
+                idx_meta,
+                frame_by_hash,
+                hash_by_frame,
+                frames_soa,
+                idx_topo,
+                topo_by_frame,
+                idx_canon,
+                canon_by_frame,
+            });
         }
 
         let mut wtxn = env.write_txn()?;
@@ -945,35 +929,32 @@ impl ConCorpus {
         let canon_by_frame = env.create_database(&mut wtxn, Some("canon_by_frame"))?;
         wtxn.commit()?;
 
-        finish_open(
-            Self {
-                path,
-                env,
-                txn_gate: RwLock::new(()),
-                frames,
-                compress_frames: AtomicBool::new(true),
-                traj_meta,
-                idx_natoms,
-                idx_symbol,
-                idx_energy,
-                idx_flags,
-                idx_elem_count,
-                idx_formula,
-                idx_fmax,
-                idx_mass,
-                idx_volume,
-                idx_pbc,
-                idx_meta,
-                frame_by_hash,
-                hash_by_frame,
-                frames_soa,
-                idx_topo: Some(idx_topo),
-                topo_by_frame: Some(topo_by_frame),
-                idx_canon: Some(idx_canon),
-                canon_by_frame: Some(canon_by_frame),
-            },
-            warm,
-        )
+        finish_open(Self {
+            path,
+            env,
+            txn_gate: RwLock::new(()),
+            frames,
+            compress_frames: AtomicBool::new(true),
+            traj_meta,
+            idx_natoms,
+            idx_symbol,
+            idx_energy,
+            idx_flags,
+            idx_elem_count,
+            idx_formula,
+            idx_fmax,
+            idx_mass,
+            idx_volume,
+            idx_pbc,
+            idx_meta,
+            frame_by_hash,
+            hash_by_frame,
+            frames_soa,
+            idx_topo: Some(idx_topo),
+            topo_by_frame: Some(topo_by_frame),
+            idx_canon: Some(idx_canon),
+            canon_by_frame: Some(canon_by_frame),
+        })
     }
 
     /// RCSO bytes for a unidirectional broadcast on the caller communicator
@@ -2758,9 +2739,8 @@ impl ConCorpus {
     }
 
     /// Ask the kernel to fault the pages a small corpus's query is about to
-    /// touch. This runs inside the query. A cold open's readahead otherwise
-    /// lands between `mincore` and the timed read, so some calls fault and
-    /// some do not.
+    /// touch. `open` already read a file under 1 MiB, so this is a hit
+    /// there. A larger file still gets the hint from inside the query.
     fn prefetch_small_corpus(&self) {
         let data = self.path.join("data.mdb");
         let Ok(meta) = fs::metadata(&data) else {

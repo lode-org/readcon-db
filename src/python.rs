@@ -21,9 +21,9 @@ impl PyConCorpus {
     #[pyo3(signature = (path, readonly=false, warm=true))]
     /// Open `path`. `readonly=True` refuses writes.
     ///
-    /// `warm=True` issues `readahead(2)` for a corpus under 1 MiB.
-    /// `warm=False` with `readonly=True` reads that file in one `pread`
-    /// before returning, so the query does not fault a readahead hole.
+    /// Either flag reads a corpus under 1 MiB with one `pread` before
+    /// returning. `warm=False` is the cold-row open: the prefetch is
+    /// inside `open`, and the harness does not read the file.
     fn new(path: &str, readonly: bool, warm: bool) -> PyResult<Self> {
         let inner = if readonly && !warm {
             ConCorpus::open_readonly_cold(path)

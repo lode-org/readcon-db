@@ -127,9 +127,10 @@ sample. One warmup is discarded. Six serial samples alternate the two
 tools. The summary is the Hyndman–Fan type-7 median and IQR. Every
 stored field is checked by its float64 bytes; a mismatch aborts the run.
 
-A cold read drops the page cache and opens outside the clock, then
-times the query. `cold-open` drops the cache outside the clock and
-times the open together with the query, for both tools.
+`open` reads a corpus under 1 MiB with one `pread` before it returns.
+Selected cold is the query after that prefetching open. `cold-open`
+drops the cache outside the clock and times the open together with
+the query, for both tools. The harness does not read the file.
 `/proc/sys/vm/drop_caches` was not writable on the measurement host.
 A warm read is the next read on the already open store. The timed
 close does not call `gc.collect()`. Full reads and the selected frame

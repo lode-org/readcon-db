@@ -22,10 +22,13 @@ put. Those puts share the one transaction, so a failed insert leaves
 no frame visible. Reads are a cold series, and on frames-100 also a
 cold-open series, then a warm series. Cold advises ``DONTNEED`` and
 checks ``mincore`` is 0, then opens outside the clock and times the
-query. cold-open does the same advice outside the clock and times the
-open plus the query, for both tools. A sample that stays resident is
-labeled and left out of the cold median. n = 6, serial, type-7 median
-and IQR. Every stored field is checked; a mismatch aborts.
+query. readcon-db's open reads a corpus under 1 MiB with one ``pread``
+before it maps the environment, so selected cold is the query after
+that prefetch. cold-open does the same advice outside the clock and
+times the open plus the query, for both tools. The harness does not
+read the file. A sample that stays resident is labeled and left out of
+the cold median. n = 6, serial, type-7 median and IQR. Every stored
+field is checked; a mismatch aborts.
 """
 
 from __future__ import annotations
@@ -224,24 +227,6 @@ def advise_cold(path: Path) -> tuple[float, str]:
 
 def drop_page_cache(path: Path) -> None:
     advise_dontneed(path)
-
-
-def fault_all_pages(path: Path) -> None:
-    """Read every page of ``path`` into the cache.
-
-    Used only for the ``warm-after-open`` row, and for both tools, so ASE's
-    file is resident on the same terms as readcon-db's warming open.
-    """
-    size = path.stat().st_size
-    if size <= 0:
-        return
-    pages = (size + _PAGE - 1) // _PAGE
-    fd = os.open(path, os.O_RDONLY)
-    try:
-        for i in range(pages):
-            os.pread(fd, 1, i * _PAGE)
-    finally:
-        os.close(fd)
 
 
 def fsync_dir(path: Path) -> None:
@@ -649,8 +634,8 @@ def header_lines() -> list[str]:
         "page_cache read_warm: one warmup read on the open store, then time the read",
         "lmdb MDB_NOSYNC unset, one write transaction and one commit fsync for the whole insert; a long trajectory puts one 64-frame group at a time and drops that group's cooked blob and decompressed text after the put",
         "ase one write transaction, journal_mode=DELETE, synchronous=FULL, one commit fsync; ASE's 5000-row commit is disabled",
-        "cold: page cache dropped and mincore 0, then open outside the clock without touching the map, then the query",
-        "warm-after-open: page cache dropped, then open outside the clock (open faults a corpus under 1 MiB), then the query",
+        "cold: page cache dropped and mincore 0, then open outside the clock, then the query; a readcon-db open under 1 MiB is one pread before the environment map",
+        "warm-after-open: page cache dropped, then open outside the clock, then the query; a readcon-db open under 1 MiB includes one pread",
         "cold-open: page cache dropped outside the clock, then open and the query inside the clock, both tools",
         "validation element-wise outside the timer; a mismatch aborts the run",
     ]
@@ -952,8 +937,8 @@ def stamp_frame_index(atoms_list: list[Atoms]) -> None:
 def open_readcon(path: Path, *, warm: bool = True):
     """Read-only open. A writable open commits, and a read must not fsync.
 
-    ``warm=False`` is the cold row: no touch of the map, and readahead is
-    turned off so the query starts cold.
+    ``warm=False`` is the cold row. That open still reads a map under
+    1 MiB with one ``pread`` before it returns. The harness does not.
     """
     return ConCorpus(str(path), readonly=True, warm=warm)
 
@@ -1521,11 +1506,8 @@ def execute_read_row(request: dict) -> dict:
                 labels.append((frac, label))
                 return
             state["db"] = open_kind()
-            if cache == "warm-after-open":
-                for path in cold_data_files(kind, dest):
-                    fault_all_pages(path)
-            # cold keeps the pre-open mincore 0 label. The open does not
-            # touch the map, so the query is the first read of its pages.
+            # The drop above is the only cache touch outside the library.
+            # readcon-db's open reads a map under 1 MiB itself.
             labels.append((frac, label))
 
         def teardown(state=state) -> None:
@@ -1544,10 +1526,6 @@ def execute_read_row(request: dict) -> dict:
             # from an open that ran before the timer.
             def run_open(state=state) -> None:
                 state["db"] = open_kind()
-                # readcon-db's open already faulted a small map. Do the same
-                # read for both tools, inside the clock, so ASE pays it too.
-                for path in cold_data_files(kind, dest):
-                    fault_all_pages(path)
                 state["got"] = fetch_materialized(kind, state["db"], op, mid)
 
             stat = sample_operation(run_open, setup, teardown)
@@ -1932,7 +1910,7 @@ def workloads_for(mode: str) -> list[dict]:
             {"name": "frames-10000", "n_frames": 10_000, "n_atoms": 8},
             {"name": "frames-100", "n_frames": 100, "n_atoms": 8},
         ]
-    if mode in ("db10", "db11", "db12"):
+    if mode in ("db10", "db11", "db12", "db14"):
         return [{"name": "frames-100", "n_frames": 100, "n_atoms": 8}]
     if mode == "smoke":
         return [
@@ -1961,6 +1939,7 @@ def main() -> None:
             "db10",
             "db11",
             "db12",
+            "db14",
         ),
         default="all",
     )
@@ -2011,6 +1990,7 @@ def main() -> None:
         if (
             row["workload"] == "frames-100"
             and row["op"] == "selected"
+            and row["op"] in ("selected", "full_read")
             and row["cache"]
             in (
                 "cold",

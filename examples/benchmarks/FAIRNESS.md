@@ -41,25 +41,20 @@ no frame from it is visible.
 Both tools get the same cache treatment on every row.
 
 `cold`: `posix_fadvise(DONTNEED)` until `mincore` is 0, then open,
-then the query. The open stays outside the clock. `POSIX_FADV_RANDOM`
-made LMDB fault leaf pages one at a time, and that fault was bimodal
-(about 0.12 ms against 0.25 ms) even when `mincore` was 0. A head-only
-read left the same hole. readcon-db's cold open therefore reads a
-corpus under 1 MiB in one sequential `pread` before it returns, so the
-query does not fault that hole. ASE gets the same harness steps on its
-sqlite file: drop, open, query, with no harness pre-read.
+then the query. The open stays outside the clock. The harness does
+not read the file. readcon-db's open reads a corpus under 1 MiB with
+one `pread` before it returns, so the query is a read after that
+prefetch. `readahead(2)` instead of the `pread` left the full read
+waiting on the rest of the fault on some samples and not on others
+(about 0.50 ms against 0.76 ms). ASE gets the same harness steps:
+drop, then sqlite's own open, then the query.
 
 `warm-after-open`: the same drop, then that tool's own open, then the
-query. There is no harness pre-read on either side. readcon-db's open
-issues `readahead(2)` for a corpus under 1 MiB. A parallel touch of
-every page was slower than the fault it hid. ASE's open is sqlite's
-open. The open stays outside the clock.
+query. No harness pre-read. The open stays outside the clock.
 
-`cold-open`: the drop is outside the clock. The clock is the open
-plus a read of every page of the database file, plus the query.
-readcon-db's open already does that read for a corpus under 1 MiB.
-The harness repeats it for both tools, so ASE's sqlite file is faulted
-inside the same clock.
+`cold-open`: the drop is outside the clock. The clock is only the
+library open plus the query. readcon-db's open includes the `pread`.
+ASE's open is sqlite's open. The harness does not read the file.
 
 `warm`: one warmup read on the already open store, then the query.
 Both tools.
@@ -75,12 +70,10 @@ those means 1.95e-4 s, IQR/median 0.251. Its per-call distribution is
 Cooked frames are stored in frame-key order, one RCSO blob per frame.
 A 100-frame `tiny_cuh2` trajectory is 27,900 cooked bytes: 9 pages,
 inside a 15-page span. One contiguous value per 64-frame group would
-be 7 pages. `frames-100` is about 180 KiB, and a corpus under 1 MiB is
-`posix_fadvise(WILLNEED)`d as a whole file inside the query, so that
-query already faults every page. Packing the group into one value does
-not change that set. The per-frame blobs stay. The cold tail is the
-open's readahead sometimes faulting those pages before the clock, which
-is why `cold` and `cold-open` are both reported.
+be 7 pages. `frames-100` is about 180 KiB. `open` reads a corpus under
+1 MiB with one `pread` before the environment is mapped, so selected
+cold is the query after that prefetch and `cold-open` is the
+end-to-end number. The per-frame blobs stay.
 
 The CPC ingest is `db_v2.py` in readcon-core, recorded in
 `paper/cpc/logs/db.log` (2026-11-05, 40 frames of 8 Cu). readcon-db's

@@ -100,6 +100,8 @@ Both stores receive the same records: symbols, positions, cell, periodicity, mas
 
 A cold read calls =posix_fadvise(DONTNEED)= on the closed database files, then times a readonly open plus the read. =/proc/sys/vm/drop_caches= was not writable on the measurement host, so it was not used. A warm read is the next read on the already open store. The timed close does not call =gc.collect()=. Full reads use =read_columns=. The single-frame query is =frame_index= of the middle frame.
 
+=open= prefetches a corpus under 1 MiB with one =pread= before it maps the environment. Selected cold is the query after that prefetching open. =cold-open= is the end-to-end number: the cache drop stays outside the clock, and the clock is the open plus the query. The harness does not read the file.
+
 The published CPC ingest (=paper/cpc/logs/db.log=, 40 frames of 8 Cu, no warmup) is readcon-db 4.67 ms and ASE 72.3 ms. ASE committed once per frame. The fair rerun of that insert, one commit each, is readcon-db 1.70 ms and ASE 5.17 ms.
 
 Type-7 medians on that host, seconds:
