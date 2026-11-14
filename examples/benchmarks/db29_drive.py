@@ -410,7 +410,7 @@ def main() -> None:
     print(f"corpora for {commit}", flush=True)
     ensure_corpora(state)
     log_path = REPO / "build" / "db29-campaign.log"
-    log = log_path.open("a")
+    log = log_path.open("w")
     log.write(f"commit {commit}\n")
     wait_quiet()
     for arm in d28.ARMS:

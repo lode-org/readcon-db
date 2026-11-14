@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -95,3 +96,9 @@ def test_driver_writes_policy_and_float32_sections(tmp_path) -> None:
     assert ab["n"] >= 12
     assert ab["host"]["hostname"] == "host"
     assert "policy" in ab and "bits" in ab
+
+
+def test_campaign_log_is_replaced_not_appended() -> None:
+    text = Path(drv.__file__).read_text()
+    assert 'log_path.open("w")' in text
+    assert 'log_path.open("a")' not in text
