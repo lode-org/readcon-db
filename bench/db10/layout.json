@@ -1,0 +1,15 @@
+{
+  "question": "Does one contiguous cooked value per 64-frame group cut the pages a 100-frame query touches?",
+  "fixture": "resources/test/tiny_cuh2.con repeated to 100 frames",
+  "frames_soa": {
+    "n": 100,
+    "bytes": 27900,
+    "value_pages": 9,
+    "span_pages": 15,
+    "packed_pages": 7
+  },
+  "frames_text": {"n": 100, "bytes": 1498, "value_pages": 1},
+  "data_mdb_bytes": 122880,
+  "data_mdb_pages": 30,
+  "decision": "Left the per-frame RCSO blobs in place. Packing a group would drop the cooked values from 9 pages over a 15-page span to 7 contiguous pages. frames-100 is about 180 KiB, and a corpus under 1 MiB is posix_fadvise(WILLNEED)'d as a whole file inside the query, so the cold read already faults every page. A contiguous group does not change that set."
+}
