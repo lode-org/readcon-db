@@ -1240,11 +1240,19 @@ impl ConCorpus {
                         .map_err(|_| Error::Parse("too many frames".into()))?,
                 };
                 let (facts, cooked, stored) = if compress && text.len() >= 256 * 1024 {
+                    // Compress while the coordinate walk fills column scratch.
+                    // The RCSO blob is encoded after that thread exits, so the
+                    // compressor context and the blob are not resident together.
                     std::thread::scope(|scope| {
                         let job = scope.spawn(|| crate::frame_codec::store_frame(text, true));
-                        let projected = crate::span_columns::project_frame_cooked(text.as_bytes());
+                        let scanned =
+                            crate::span_columns::project_frame_parts(text.as_bytes(), true);
                         let stored = job.join().expect("frame compression");
-                        projected.and_then(|(facts, cooked)| {
+                        scanned.and_then(|(facts, acc)| {
+                            let cooked = crate::span_columns::finish_cook(
+                                &facts,
+                                acc.unwrap_or_else(crate::span_columns::CookAcc::empty),
+                            )?;
                             stored.map(|bytes| (facts, cooked, Some(bytes)))
                         })
                     })?

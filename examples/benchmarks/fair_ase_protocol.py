@@ -38,7 +38,6 @@ import socket
 import sqlite3
 import subprocess
 import sys
-import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -54,6 +53,10 @@ from readcon_db import ConCorpus
 REPO = Path(__file__).resolve().parents[2]
 WARMUP = 1
 N_SAMPLES = 6
+# A row whose six means are still wide gets six more. The published
+# figure is then n=12.
+EXTEND_AT = 0.05
+EXTEND_N = 12
 # A single sub-millisecond fsync or query is mostly timer noise. Repeat it
 # until the timed spans cover this long, and publish the mean as one sample.
 # Reads repeat until the timed spans cover this. A 50 ms mean is enough
@@ -501,7 +504,7 @@ def header_lines() -> list[str]:
         f"nproc {os.cpu_count()}",
         f"python {sys.version.split()[0]}",
         f"warmup {WARMUP}",
-        f"samples {N_SAMPLES}",
+        f"samples {N_SAMPLES} (12 when IQR/median exceeds {EXTEND_AT})",
         "quantile type-7 (numpy percentile method=linear)",
         "order serial, tools alternate each sample index, no parallel samples",
         "timer: open, directory fsync, fadvise, mincore, the element-wise check, and the collector stay outside; the clock covers the commit or the query",
@@ -556,6 +559,17 @@ def vm_rss() -> int:
     return 0
 
 
+def iqr_over(values: list[float], limit: float = EXTEND_AT) -> bool:
+    """True when six or more means are wider than ``limit`` and n is still 6."""
+    if len(values) < N_SAMPLES or len(values) >= EXTEND_N:
+        return False
+    stat = summarize(values)
+    med = stat["median_s"]
+    if med <= 0:
+        return False
+    return stat["iqr_s"] / med > limit
+
+
 def sample_operation(run, setup=None, teardown=None, span: float | None = None) -> dict:
     """Time ``run`` only. ``setup`` and ``teardown`` stay outside the clock.
 
@@ -567,17 +581,10 @@ def sample_operation(run, setup=None, teardown=None, span: float | None = None) 
     spans add up to it (reads use 50 ms, inserts use two seconds), and the
     sample is their mean. A single commit that spikes past 5 ms does not
     end the insert early: that spike stays in the mean. Both tools use this.
+
+    Peak RSS is the kernel high-water mark. A polling thread next to a
+    sub-millisecond cold read moved the sample means between runs.
     """
-    peak = vm_rss()
-    stop = threading.Event()
-
-    def poll() -> None:
-        nonlocal peak
-        while not stop.wait(0.002):
-            peak = max(peak, vm_rss())
-
-    thread = threading.Thread(target=poll, daemon=True)
-    thread.start()
     total = 0.0
     count = 0
     collect = gc.isenabled()
@@ -587,13 +594,11 @@ def sample_operation(run, setup=None, teardown=None, span: float | None = None) 
             if setup is not None:
                 setup()
             try:
-                peak = max(peak, vm_rss())
                 if collect:
                     gc.disable()
                 t0 = time.perf_counter()
                 run()
                 dt = time.perf_counter() - t0
-                peak = max(peak, vm_rss())
             finally:
                 if collect:
                     gc.enable()
@@ -609,13 +614,11 @@ def sample_operation(run, setup=None, teardown=None, span: float | None = None) 
     finally:
         if collect:
             gc.enable()
-        stop.set()
-        thread.join()
     return {
-        "seconds": total / count,
+        "seconds": total / count if count else 0.0,
         "inner_n": count,
         "timed_span_s": total,
-        "peak_rss_bytes": peak,
+        "peak_rss_bytes": vm_hwm(),
     }
 
 
@@ -734,9 +737,15 @@ def timed_insert(kind: str, name: str, payload: dict, work: Path) -> dict:
             disk["n"] = disk_bytes(kind, dest)
         geometry_only = bool(payload.get("geometry_only"))
         if kind == "readcon-db":
-            frames = read_con_frames(db, payload["n_frames"])
-            for frame, rec in zip(frames, payload["records"]):
-                check_stored(kind, frame, rec, geometry_only)
+            # A second ConFrame of a million atoms, next to the builder's
+            # text and atoms, was the resident set ASE did not hold. The
+            # numeric arrays are the same check without that object graph.
+            if geometry_only:
+                frames = read_con_frames(db, payload["n_frames"])
+                for frame, rec in zip(frames, payload["records"]):
+                    check_stored(kind, frame, rec, True)
+            else:
+                check_materialized(db.read_arrays(1), payload["records"])
             close_lmdb(db)
         else:
             assert_one_commit(db)
@@ -1253,7 +1262,8 @@ def execute_insert_row(request: dict) -> dict:
     values = []
     inner = []
     disk = None
-    for i in range(N_SAMPLES):
+    i = 0
+    while i < N_SAMPLES or iqr_over(values):
         stat = timed_insert(kind, name, payload, work)
         values.append(stat["seconds"])
         inner.append(stat["inner_n"])
@@ -1264,6 +1274,7 @@ def execute_insert_row(request: dict) -> dict:
             f"inner_n={stat['inner_n']} timed_span_s={stat['timed_span_s']:.6f} "
             f"disk_bytes={stat['disk_bytes']}"
         )
+        i += 1
     row = {
         "protocol": "fair",
         "workload": name,
@@ -1330,7 +1341,8 @@ def execute_read_row(request: dict) -> dict:
             f"warmup protocol=fair workload={name} op={op} tool={kind} cache={cache}"
         )
 
-    for i in range(N_SAMPLES):
+    i = 0
+    while i < N_SAMPLES or iqr_over(samples):
         state: dict = {}
         labels: list[tuple[float, str]] = []
 
@@ -1386,6 +1398,7 @@ def execute_read_row(request: dict) -> dict:
             f"cache={cache} i={i} seconds={stat['seconds']} "
             f"inner_n={stat['inner_n']} timed_span_s={stat['timed_span_s']:.6f}{extra}"
         )
+        i += 1
     if "db" in holder:
         close_reader(kind, holder["db"])
     used = samples or [item["seconds"] for item in cold_meta]
@@ -1639,9 +1652,10 @@ def write_markdown(
         "full read was 0.0166 s against db4's 0.226 s. Open, directory",
         "fsync, fadvise, mincore, and the field check stay outside the",
         "clock. Each row is its own process. A short read repeats to 50 ms",
-        "and a short commit to 2 s. A row that stayed above an IQR/median",
-        "of 0.15 was measured again at a longer span; that budget is",
-        "`span_s` on the row.",
+        "and a short commit to 2 s. Six samples are kept. A row whose",
+        "IQR/median is still above 0.05 takes six more. frames-100",
+        "selected cold stays wider than that: its timed query mixes a",
+        "cached call with a fault, and that mix changes between samples.",
         "",
         "| workload | op | cache | tool | n | median s | IQR s | IQR/median | disk B | peak RSS B | fidelity |",
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",

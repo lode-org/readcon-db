@@ -204,14 +204,17 @@ impl CookedSoa {
     /// `mass_uniform` stores one mass for every atom. Otherwise `masses`
     /// has one value per atom. `constraints` is `None` when every axis is
     /// free, and `natoms * 3` bytes otherwise.
+    ///
+    /// The column vectors are dropped as soon as their bytes are in `out`,
+    /// so the scratch and the blob are not resident together.
     pub(crate) fn encode_columns(
         natoms: u32,
-        positions: &[f64],
-        forces: &[f64],
-        velocities: &[f64],
+        positions: Vec<f64>,
+        forces: Vec<f64>,
+        velocities: Vec<f64>,
         mass_uniform: Option<f64>,
         masses: &[f64],
-        constraints: Option<&[u8]>,
+        constraints: Option<Vec<u8>>,
         cell: [f64; 9],
         energy: f64,
         energy_set: bool,
@@ -236,7 +239,7 @@ impl CookedSoa {
         if mass_uniform.is_none() && masses.len() != n {
             return Err(Error::Message("cooked masses length".into()));
         }
-        if let Some(mask) = constraints {
+        if let Some(mask) = constraints.as_ref() {
             if mask.len() != positions.len() {
                 return Err(Error::Message("cooked constraints length".into()));
             }
@@ -258,13 +261,16 @@ impl CookedSoa {
         out.push(DTYPE_F64);
         out.extend_from_slice(&[0u8; 3]);
         out.extend_from_slice(&0u32.to_le_bytes());
-        push_f64s(&mut out, positions);
+        push_f64s(&mut out, &positions);
+        drop(positions);
         if has_f {
-            push_f64s(&mut out, forces);
+            push_f64s(&mut out, &forces);
         }
+        drop(forces);
         if has_v {
-            push_f64s(&mut out, velocities);
+            push_f64s(&mut out, &velocities);
         }
+        drop(velocities);
         if let Some(mass) = mass_uniform {
             out.push(1);
             push_f64s(&mut out, &[mass]);
@@ -272,11 +278,12 @@ impl CookedSoa {
             out.push(0);
             push_f64s(&mut out, masses);
         }
-        if let Some(mask) = constraints {
-            out.push(1);
-            out.extend_from_slice(mask);
-        } else {
-            out.push(0);
+        match constraints {
+            Some(mask) => {
+                out.push(1);
+                out.extend_from_slice(&mask);
+            }
+            None => out.push(0),
         }
         push_f64s(&mut out, &cell);
         push_f64s(&mut out, &[energy]);

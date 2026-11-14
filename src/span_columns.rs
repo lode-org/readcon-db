@@ -382,7 +382,7 @@ pub(crate) fn project_frame_cooked(bytes: &[u8]) -> Result<(SpanFacts, Vec<u8>)>
     Ok((facts, blob))
 }
 
-struct CookAcc {
+pub(crate) struct CookAcc {
     positions: Vec<f64>,
     forces: Vec<f64>,
     velocities: Vec<f64>,
@@ -393,7 +393,7 @@ struct CookAcc {
 }
 
 impl CookAcc {
-    fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
             positions: Vec::new(),
             forces: Vec::new(),
@@ -406,7 +406,10 @@ impl CookAcc {
     }
 }
 
-fn project_frame_parts(bytes: &[u8], cook: bool) -> Result<(SpanFacts, Option<CookAcc>)> {
+pub(crate) fn project_frame_parts(
+    bytes: &[u8],
+    cook: bool,
+) -> Result<(SpanFacts, Option<CookAcc>)> {
     let mut cur = Cur { bytes, i: 0 };
     if cur.rest_blank() {
         return Err(Error::Parse("empty frame".into()));
@@ -534,7 +537,7 @@ fn project_frame_parts(bytes: &[u8], cook: bool) -> Result<(SpanFacts, Option<Co
     Ok((facts, acc))
 }
 
-fn finish_cook(facts: &SpanFacts, acc: CookAcc) -> Result<Vec<u8>> {
+pub(crate) fn finish_cook(facts: &SpanFacts, mut acc: CookAcc) -> Result<Vec<u8>> {
     let n = facts.n_atoms as usize;
     let mass_uniform = if n == 0 {
         Some(0.0)
@@ -558,19 +561,22 @@ fn finish_cook(facts: &SpanFacts, acc: CookAcc) -> Result<Vec<u8>> {
         Vec::new()
     };
     let constraints = if acc.constraints.iter().any(|b| *b != 0) {
-        Some(acc.constraints.as_slice())
+        Some(std::mem::take(&mut acc.constraints))
     } else {
+        drop(std::mem::take(&mut acc.constraints));
         None
     };
     let forces = if acc.forces.len() == n * 3 {
-        acc.forces.as_slice()
+        std::mem::take(&mut acc.forces)
     } else {
-        &[]
+        drop(std::mem::take(&mut acc.forces));
+        Vec::new()
     };
     let velocities = if acc.velocities.len() == n * 3 {
-        acc.velocities.as_slice()
+        std::mem::take(&mut acc.velocities)
     } else {
-        &[]
+        drop(std::mem::take(&mut acc.velocities));
+        Vec::new()
     };
     let runs: Vec<(&str, u32)> = acc
         .runs
@@ -580,7 +586,7 @@ fn finish_cook(facts: &SpanFacts, acc: CookAcc) -> Result<Vec<u8>> {
     let pbc = facts.pbc.unwrap_or([false, false, false]);
     crate::cooked_soa::CookedSoa::encode_columns(
         facts.n_atoms,
-        &acc.positions,
+        acc.positions,
         forces,
         velocities,
         mass_uniform,
@@ -637,17 +643,22 @@ fn note_section(
             "Forces" => {
                 facts.has_forces = true;
                 let n = *count;
-                let mut block = Vec::new();
-                let xyz = if cook.is_some() {
-                    block.resize(n * 3, 0.0);
-                    Some(block.as_mut_slice())
+                let local = if let Some(c) = cook.as_mut() {
+                    let start = c.forces.len();
+                    c.forces.resize(start + n * 3, 0.0);
+                    check_vector_block(
+                        cur,
+                        n,
+                        where_,
+                        spec,
+                        true,
+                        true,
+                        Some(&mut c.forces[start..]),
+                        None,
+                    )?
                 } else {
-                    None
+                    check_vector_block(cur, n, where_, spec, true, true, None, None)?
                 };
-                let local = check_vector_block(cur, n, where_, spec, true, true, xyz, None)?;
-                if let Some(c) = cook.as_mut() {
-                    c.forces.extend_from_slice(&block);
-                }
                 if let Some(mag) = local {
                     *fmax = Some(fmax.map_or(mag, |cur| cur.max(mag)));
                 }
@@ -655,16 +666,21 @@ fn note_section(
             "Velocities" => {
                 facts.has_velocities = true;
                 let n = *count;
-                let mut block = Vec::new();
-                let xyz = if cook.is_some() {
-                    block.resize(n * 3, 0.0);
-                    Some(block.as_mut_slice())
-                } else {
-                    None
-                };
-                check_vector_block(cur, n, where_, spec, true, false, xyz, None)?;
                 if let Some(c) = cook.as_mut() {
-                    c.velocities.extend_from_slice(&block);
+                    let start = c.velocities.len();
+                    c.velocities.resize(start + n * 3, 0.0);
+                    check_vector_block(
+                        cur,
+                        n,
+                        where_,
+                        spec,
+                        true,
+                        false,
+                        Some(&mut c.velocities[start..]),
+                        None,
+                    )?;
+                } else {
+                    check_vector_block(cur, n, where_, spec, true, false, None, None)?;
                 }
             }
             "Energies" => {
@@ -716,16 +732,45 @@ fn check_vector_block(
         }
         return Ok(max_mag);
     }
-    let ranges = take_row_ranges(cur, n, where_)?;
-    check_vector_rows(
-        cur.bytes,
-        &ranges,
-        spec,
-        id_required,
-        fmax,
-        xyz_out,
-        mask_out,
-    )
+    // A million coordinate lines is 16 MiB of ranges. Walk them in
+    // bounded pieces so that scratch does not sit next to the columns.
+    let mut max_mag = None;
+    let mut done = 0usize;
+    let mut xyz_out = xyz_out;
+    let mut mask_out = mask_out;
+    while done < n {
+        let take = (n - done).min(16_384);
+        let ranges = take_row_ranges(cur, take, where_)?;
+        let xyz_piece = match xyz_out {
+            Some(buf) => {
+                let (head, tail) = buf.split_at_mut(take * 3);
+                xyz_out = Some(tail);
+                Some(head)
+            }
+            None => None,
+        };
+        let mask_piece = match mask_out {
+            Some(buf) => {
+                let (head, tail) = buf.split_at_mut(take * 3);
+                mask_out = Some(tail);
+                Some(head)
+            }
+            None => None,
+        };
+        if let Some(mag) = check_vector_rows(
+            cur.bytes,
+            &ranges,
+            spec,
+            id_required,
+            fmax,
+            xyz_piece,
+            mask_piece,
+        )? {
+            max_mag = Some(max_mag.map_or(mag, |cur: f64| cur.max(mag)));
+        }
+        done += take;
+    }
+    Ok(max_mag)
 }
 
 fn take_row_ranges(cur: &mut Cur<'_>, n: usize, where_: &str) -> Result<Vec<(usize, usize)>> {

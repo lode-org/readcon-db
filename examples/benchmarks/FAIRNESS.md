@@ -1,5 +1,47 @@
 # ASE sqlite comparison
 
+## Fair read protocol
+
+One row is one fresh process. The clock covers one operation. Open,
+directory fsync, `posix_fadvise`, `mincore`, the field check, and the
+collector stay outside it. A read shorter than 50 ms repeats until the
+timed spans add to 50 ms, and a commit shorter than 2 s repeats until
+they add to 2 s. The sample is that mean. One warmup is discarded.
+Six samples are the default. A row whose IQR/median is still above
+0.05 after those six takes six more, and the published n is 12. The
+summary is the type-7 median and IQR. Peak RSS is `VmHWM` of that
+process, not a high-water mark carried over from an earlier row.
+
+Inside the clock both tools return the same materialized frame, as
+NumPy arrays:
+
+* positions, shape `(frames, atoms, 3)`, float64
+* cell, shape `(frames, 3, 3)`, float64
+* masses, shape `(frames, atoms)`, float64
+* atomic numbers, shape `(frames, atoms)`, uint32
+* constraints, shape `(frames, atoms, 3)`, uint8, 1 where that axis is fixed
+* velocities, shape `(frames, atoms, 3)`, float64, zeros when the frame stored none
+* forces, the same shape, or absent when the frame stored none
+
+readcon-db copies those columns out of the cooked RCSO blob (and parses
+the CON text only when that blob lacks the extended blocks). ASE sqlite
+does `select`, then `toatoms()`, and reads masses, atomic numbers,
+velocities, the cell, and forces from that object. The element-wise
+check of those arrays is outside the clock. An insert's clock is the
+commit only: the CON text or the ASE atoms are built before it, and the
+check does not build a second per-atom frame.
+
+A cold read drops the page cache and checks `mincore` is 0 before the
+open. The open stays outside the clock. On a frames-100 selected cold
+read the calls are bimodal: the median call is about 0.10 ms, and a
+tail around 0.35–0.45 ms is a query that still faults pages the open
+readahead brought back after `mincore` had reported them gone. The
+share of that tail changes from sample to sample (p90 moved from
+0.12 ms to 0.32 ms across six 50 ms samples), so the means move and
+IQR/median stays near 0.17 even over a 4 s span of about 20,000 calls.
+The mixture weight is correlated inside a sample, so a longer span
+does not average it away.
+
 The CPC ingest is `db_v2.py` in readcon-core, recorded in
 `paper/cpc/logs/db.log` (2026-11-05, 40 frames of 8 Cu). readcon-db's
 six samples have type-7 median **0.00467 s**. ASE's six samples are
