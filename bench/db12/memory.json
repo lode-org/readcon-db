@@ -1,0 +1,7 @@
+{
+  "frames_10000": {
+    "note": "VmHWM of one process. append_trajectory_frames is one LMDB transaction for the whole call. Groups of 64 are serialized, put, and dropped. The caller yields one frame object. ASE holds the atom list. db11's streamed figure was 101 MB.",
+    "readcon_db_mb": 101.0,
+    "ase_db_mb": 190.0
+  }
+}
