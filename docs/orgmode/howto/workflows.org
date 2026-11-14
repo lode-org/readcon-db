@@ -96,7 +96,11 @@ Legacy =examples/benchmarks/bench_ase_db.py= Cu2 stand-ins are unequal workloads
 :END:
 Use *=examples/benchmarks/fair_ase_protocol.py=*. The protocol write-up is =examples/benchmarks/FAIRNESS.md=. Raw lines and the type-7 table are =examples/benchmarks/results/fair/=.
 
-Both stores receive the same records: symbols, positions, cell, periodicity, masses, forces, energy, and =frame_index=. ASE is SQLite, =journal_mode=DELETE=, =synchronous=FULL=. Each insert is one transaction and one commit fsync, on a database file created for that sample. One warmup is discarded. Twelve serial samples alternate the two tools. The summary is the Hyndman–Fan type-7 median and IQR. A field mismatch aborts the run.
+Both stores receive the same records: symbols, positions, cell, periodicity, masses, forces, energy, and =frame_index=. ASE is SQLite, =journal_mode=DELETE=, =synchronous=FULL=. Each insert is one transaction and one commit fsync, on a database file created for that sample. One warmup is discarded.
+# fair-docs:begin workflows-n
+Twelve serial samples alternate the two tools.
+# fair-docs:end workflows-n
+The summary is the Hyndman–Fan type-7 median and IQR. A field mismatch aborts the run.
 
 A cold read calls =posix_fadvise(DONTNEED)= on the closed database files, then times a readonly open plus the read. =/proc/sys/vm/drop_caches= was not writable on the measurement host, so it was not used. A warm read is the next read on the already open store. The timed close does not call =gc.collect()=. Full reads use =read_columns=. The single-frame query is =frame_index= of the middle frame.
 

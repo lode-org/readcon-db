@@ -7,7 +7,10 @@ directory fsync, `posix_fadvise`, `mincore`, the field check, and the
 collector stay outside it. A read shorter than 50 ms repeats until the
 timed spans add to 50 ms, and a commit shorter than 2 s repeats until
 they add to 2 s. The sample is that mean. One warmup is discarded.
-Twelve samples are kept for every row. The summary is the type-7
+<!-- fair-docs:begin fairness-n-protocol -->
+Twelve samples are kept for every row.
+<!-- fair-docs:end fairness-n-protocol -->
+The summary is the type-7
 median and IQR. Peak RSS is `VmHWM` of that
 process, not a high-water mark carried over from an earlier row.
 

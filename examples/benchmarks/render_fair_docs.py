@@ -221,10 +221,17 @@ def fairness_n_sentence() -> str:
     return f"Samples are serial, the two tools alternate, n = {sample_count()}."
 
 
-def readme_n_sentence() -> str:
+def n_word() -> str:
     n = sample_count()
-    word = {12: "Twelve"}.get(n, str(n))
-    return f"{word} serial samples alternate the two tools."
+    return {12: "Twelve"}.get(n, str(n))
+
+
+def readme_n_sentence() -> str:
+    return f"{n_word()} serial samples alternate the two tools."
+
+
+def protocol_n_sentence() -> str:
+    return f"{n_word()} samples are kept for every row."
 
 
 def cpc_block(data: dict, results_name: str) -> str:
@@ -407,6 +414,18 @@ def render(results: Path = DEFAULT_RESULTS) -> None:
         "fairness-n",
         fairness_n_sentence(),
         "md",
+    )
+    splice(
+        REPO / "examples" / "benchmarks" / "FAIRNESS.md",
+        "fairness-n-protocol",
+        protocol_n_sentence(),
+        "md",
+    )
+    splice(
+        REPO / "docs" / "orgmode" / "howto" / "workflows.org",
+        "workflows-n",
+        readme_n_sentence(),
+        "org",
     )
     splice(
         REPO / "README.md",
