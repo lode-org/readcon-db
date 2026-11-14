@@ -1,0 +1,13 @@
+{
+  "fixture": "resources/test/tiny_cuh2_vel_forces.con",
+  "readcon_core": "0.23.0",
+  "readcon_core_source": "crates.io",
+  "protocol": {
+    "serial": true,
+    "warmup": 1,
+    "samples": 6
+  },
+  "fields": [
+    {"field": "positions", "result": "exact", "samples": ["exact", "exact", "exact", "exact", "exact", "exact"]}
+  ]
+}

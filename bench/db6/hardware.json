@@ -1,0 +1,23 @@
+{
+  "cpu_model": "Intel(R) Xeon(R) Processor",
+  "kernel": "Linux 6.12.113+",
+  "rustc": "rustc 1.88.0 (6b00bc388 2025-06-23)",
+  "readcon_core": "0.23.0",
+  "readcon_core_source": "crates.io",
+  "published_pin": "=0.23.0",
+  "ncpu": 8,
+  "python": "3.12.3",
+  "protocol": {
+    "serial": true,
+    "warmup": 1,
+    "samples": 6,
+    "quantile": "type-7",
+    "cold": "mincore 0, open and advice outside the clock",
+    "materialized": "positions, cell, masses, atomic numbers, constraints, velocities as numpy arrays, inside the clock, both tools",
+    "read_path": "RCSO copy, CON text parsed only when the cooked blocks are absent",
+    "short_read": "a read shorter than 50 ms repeats until the timed spans add to 50 ms",
+    "short_insert": "a commit shorter than 2 s repeats until the timed spans add to 2 s",
+    "peak_rss": "one fresh process per row, VmHWM of that process",
+    "collector": "disabled during the timed call"
+  }
+}

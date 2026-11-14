@@ -1,0 +1,17 @@
+{
+  "workload": "atoms-1000000 full_read warm",
+  "explanation": "db4 timed ASE toatoms() inside the sample, which builds the coordinate arrays. db5 timed list(db.select()) and left toatoms() in the check, outside the clock. read_columns parses the CON coordinate text. read_arrays copies the cooked RCSO blob. The campaign medians for that 1M-atom warm full read are readcon-db 0.0426 s and ASE 0.284 s.",
+  "db4_ase_s": 0.226,
+  "db5_ase_select_s": 0.0166,
+  "this_machine": {
+    "ase_select_s": 0.0181,
+    "ase_materialize_s": 0.25,
+    "read_columns_s": 0.145,
+    "read_arrays_s": 0.0366
+  },
+  "fidelity": "exact",
+  "campaign_1m_warm_full_read_s": {
+    "readcon-db": 0.042623,
+    "ase.db": 0.28449
+  }
+}
