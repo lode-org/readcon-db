@@ -242,6 +242,12 @@ pub fn decode_batch(bytes: &[u8]) -> Result<Vec<Vec<u8>>> {
         )));
     }
     let n = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    // Each entry is a length prefix plus a blob. Reserving `n` before that
+    // check turns a 12-byte header into a multi-gigabyte `Vec`.
+    let rest = bytes.len().saturating_sub(12);
+    if n > rest / 4 {
+        return Err(Error::Message("RCSB count exceeds the buffer".into()));
+    }
     let mut off = 12usize;
     let mut out = Vec::with_capacity(n);
     for _ in 0..n {
@@ -359,4 +365,33 @@ mod tests {
         assert_eq!(dec, vec![a, b]);
         assert!(decode_batch(&enc[..8]).is_err());
     }
+
+    #[test]
+    fn declared_batch_count_does_not_allocate() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(BATCH_MAGIC);
+        bytes.extend_from_slice(&BATCH_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&8_000_000u32.to_le_bytes());
+        let before = resident_bytes();
+        let err = decode_batch(&bytes).unwrap_err();
+        let after = resident_bytes();
+        assert!(err.to_string().contains("exceeds the buffer"), "{err}");
+        assert!(
+            after < before.saturating_add(8 << 20),
+            "resident {before} -> {after}"
+        );
+    }
+}
+
+#[cfg(test)]
+fn resident_bytes() -> usize {
+    let status = std::fs::read_to_string("/proc/self/status").expect("status");
+    for line in status.lines() {
+        let Some(rest) = line.strip_prefix("VmRSS:") else {
+            continue;
+        };
+        let kb: usize = rest.split_whitespace().next().unwrap().parse().unwrap();
+        return kb.saturating_mul(1024);
+    }
+    0
 }
