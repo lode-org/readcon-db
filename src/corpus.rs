@@ -64,6 +64,28 @@ fn testing_fail_this_group(groups_done: u32) -> bool {
         }
     })
 }
+
+/// Fail a grouped insert after `READCON_DB_FAIL_AFTER_GROUPS` groups have
+/// been put, and after the in-process test hook. The trigger clears itself.
+/// `0` and an unset variable do nothing.
+pub(crate) fn fail_injected_group(groups_done: u32) -> bool {
+    #[cfg(test)]
+    if testing_fail_this_group(groups_done) {
+        return true;
+    }
+    let Ok(raw) = std::env::var("READCON_DB_FAIL_AFTER_GROUPS") else {
+        return false;
+    };
+    let Ok(stop) = raw.parse::<u32>() else {
+        return false;
+    };
+    if stop > 0 && groups_done >= stop {
+        std::env::remove_var("READCON_DB_FAIL_AFTER_GROUPS");
+        true
+    } else {
+        false
+    }
+}
 /// Environment variable that overrides [`DEFAULT_MAP_SIZE`]. Accepts a byte
 /// count with an optional `K`, `M`, `G` or `T` suffix (powers of 1024).
 pub const MAP_SIZE_ENV: &str = "READCON_DB_MAP_SIZE";
@@ -1233,17 +1255,33 @@ impl ConCorpus {
         // objects dominate by 10^5 atoms (about 5 MiB of CON text).
         // The species-count guard runs before either walk: the span walk
         // calls the same `with_capacity` on line 7.
+        Self::prepare_trajectory_str_at(traj_id, file_contents, 0, compress)
+    }
+
+    /// [`Self::prepare_trajectory_str`] with frame indexes starting at `start_idx`.
+    fn prepare_trajectory_str_at(
+        traj_id: TrajId,
+        file_contents: &str,
+        start_idx: u32,
+        compress: bool,
+    ) -> Result<Vec<PreparedIndexPuts>> {
         Self::species_counts_fit(file_contents)?;
         if file_contents.len() <= 512 * 1024 {
-            return Self::prepare_trajectory_str_parsed(traj_id, file_contents, compress);
+            return Self::prepare_trajectory_str_parsed(
+                traj_id,
+                file_contents,
+                start_idx,
+                compress,
+            );
         }
-        Self::prepare_trajectory_str_span(traj_id, file_contents, compress)
+        Self::prepare_trajectory_str_span(traj_id, file_contents, start_idx, compress)
     }
 
     /// Index each stored span without building a per-atom frame.
     fn prepare_trajectory_str_span(
         traj_id: TrajId,
         file_contents: &str,
+        start_idx: u32,
         compress: bool,
     ) -> Result<Vec<PreparedIndexPuts>> {
         let spans = readcon_core::index_proj::frame_byte_spans_skip(file_contents)
@@ -1262,8 +1300,8 @@ impl ConCorpus {
             for (i, text) in texts.iter().enumerate() {
                 let fk = FrameKey {
                     traj_id,
-                    frame_idx: u32::try_from(i)
-                        .map_err(|_| Error::Parse("too many frames".into()))?,
+                    frame_idx: start_idx
+                        + u32::try_from(i).map_err(|_| Error::Parse("too many frames".into()))?,
                 };
                 let (facts, cooked, stored) = if compress && text.len() >= 256 * 1024 {
                     // Compress while the coordinate walk fills column scratch.
@@ -1297,7 +1335,8 @@ impl ConCorpus {
         for (i, (text, (facts, cooked))) in texts.iter().zip(projected).enumerate() {
             let fk = FrameKey {
                 traj_id,
-                frame_idx: u32::try_from(i).map_err(|_| Error::Parse("too many frames".into()))?,
+                frame_idx: start_idx
+                    + u32::try_from(i).map_err(|_| Error::Parse("too many frames".into()))?,
             };
             out.push(Self::build_index_from_facts(
                 fk, &facts, text, compress, cooked, None,
@@ -1311,10 +1350,11 @@ impl ConCorpus {
     fn prepare_trajectory_str_parsed(
         traj_id: TrajId,
         file_contents: &str,
+        start_idx: u32,
         compress: bool,
     ) -> Result<Vec<PreparedIndexPuts>> {
         let mut out = Vec::new();
-        let mut frame_idx: u32 = 0;
+        let mut frame_idx: u32 = start_idx;
         let mut iter = ConFrameIterator::new(file_contents);
         loop {
             let (frame, blob) = match iter.next_with_raw_span(file_contents) {
@@ -1685,7 +1725,6 @@ impl ConCorpus {
         let input_bytes = file_contents.len().saturating_mul(2);
         self.with_write(input_bytes, |wtxn| {
             let mut next = 0u32;
-            #[cfg(test)]
             let mut groups = 0u32;
             for chunk in spans.chunks(batch) {
                 let mut prepared = Vec::with_capacity(chunk.len());
@@ -1710,12 +1749,9 @@ impl ConCorpus {
                     self.put_index_puts(wtxn, row)?;
                 }
                 drop(prepared);
-                #[cfg(test)]
-                {
-                    groups += 1;
-                    if testing_fail_this_group(groups) {
-                        return Err(Error::Message("injected insert failure".into()));
-                    }
+                groups += 1;
+                if fail_injected_group(groups) {
+                    return Err(Error::Message("injected insert failure".into()));
                 }
                 next += u32::try_from(chunk.len())
                     .map_err(|_| Error::Parse("too many frames".into()))?;
@@ -1734,6 +1770,58 @@ impl ConCorpus {
                 .put(wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
             Ok(n_frames)
         })
+    }
+
+    /// Cook and put one CON document at `start_idx`, then drop that scratch.
+    ///
+    /// The caller keeps the write transaction open across groups. Dropping
+    /// `prepared` frees this group's cooked blob and its decompressed text.
+    /// The bytes just put live in the transaction's dirty pages until commit.
+    pub(crate) fn put_con_group(
+        &self,
+        wtxn: &mut RwTxn<'_>,
+        traj_id: TrajId,
+        start_idx: u32,
+        text: &str,
+    ) -> Result<u32> {
+        if text.is_empty() {
+            return Ok(0);
+        }
+        let mut prepared =
+            Self::prepare_trajectory_str_at(traj_id, text, start_idx, self.compress_on())?;
+        if self.compress_on() {
+            Self::group_prepared(&mut prepared)?;
+        }
+        for row in &prepared {
+            self.put_index_puts(wtxn, row)?;
+        }
+        let n =
+            u32::try_from(prepared.len()).map_err(|_| Error::Parse("too many frames".into()))?;
+        drop(prepared);
+        Ok(n)
+    }
+
+    /// Record a new trajectory's metadata. Fails if `traj_id` is already stored.
+    pub(crate) fn store_new_traj_meta(
+        &self,
+        wtxn: &mut RwTxn<'_>,
+        traj_id: TrajId,
+        n_frames: u32,
+        source: &str,
+    ) -> Result<()> {
+        let tid_key = traj_id.to_be_bytes();
+        if let Some(existing) = self.traj_meta.get(wtxn, &tid_key[..])? {
+            let meta: TrajMeta = serde_json::from_str(existing)?;
+            return Err(Error::TrajExists(traj_id, meta.n_frames));
+        }
+        let meta = TrajMeta {
+            n_frames,
+            source: source.to_string(),
+            ..TrajMeta::default()
+        };
+        self.traj_meta
+            .put(wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
+        Ok(())
     }
 
     /// Append CON text onto an existing trajectory, or create it when it is absent.
@@ -4081,7 +4169,7 @@ x
             "tiny_multi_cuh2.con",
         ] {
             let text = std::fs::read_to_string(fixture(name)).unwrap();
-            let prepared = ConCorpus::prepare_trajectory_str_span(3, &text, false).unwrap();
+            let prepared = ConCorpus::prepare_trajectory_str_span(3, &text, 0, false).unwrap();
             let mut it = ConFrameIterator::new(&text);
             for puts in &prepared {
                 let (frame, span) = it

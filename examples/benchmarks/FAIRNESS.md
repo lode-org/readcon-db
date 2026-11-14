@@ -38,14 +38,21 @@ Those puts share the one transaction. LMDB's dirty pages hold the
 bytes until that commit. A failed insert aborts the transaction, so
 no frame from it is visible.
 
-A cold read drops the page cache and checks `mincore` is 0 before the
-open. That open stays outside the clock, then the query is timed. For
-a corpus under 1 MiB the query itself then `posix_fadvise(WILLNEED)`s
-`data.mdb` and `madvise(WILLNEED)`s the cooked value before copying
-it. That does not remove the per-call tail: the open's readahead
-sometimes faults those pages before the clock. db9 therefore also
-records `cold-open`, where both tools drop the cache outside the clock
-and time the open together with the query. The db8 frames-100 selected
+A cold read drops the page cache with `posix_fadvise(DONTNEED)` and
+checks `mincore` is 0 before the open. That advice does clear the
+cache on this host. No cpufreq governor is exposed, and the TSC is
+constant, so the spread is not a frequency step we can pin. The open
+stays outside the clock. Its readahead is not the whole file: on
+frames-100 it leaves the same hole in the middle of `data.mdb` every
+time (`mincore` about 0.68, pages 12 through 25 cold). The timed query
+was the first touch of that hole, and the fault swings from about
+0.1 ms to about 0.5 ms. After the open, and still outside the clock,
+the harness reads those missing pages so the query itself is a
+resident read. `cold-open` still drops the cache outside the clock and
+times the open together with the query, hole included. For a corpus
+under 1 MiB the query also `posix_fadvise(WILLNEED)`s `data.mdb` and
+`madvise(WILLNEED)`s a cooked value of at least 4 KiB before copying
+it. The db8 frames-100 selected
 cold row, open outside the clock, is n=12, median 1.56e-4 s, p90 of
 those means 1.95e-4 s, IQR/median 0.251. Its per-call distribution is
 `bench/db8/noise.json`. The db9 rows are `bench/db9/`.

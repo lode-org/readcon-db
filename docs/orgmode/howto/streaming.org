@@ -32,9 +32,9 @@ Rust is =ConCorpus::open= and =ConCorpus::open_readonly=. The command line is =r
 :PROPERTIES:
 :CUSTOM_ID: stream-an-append
 :END:
-=append_trajectory_frames= commits 64 frames at a time. The first group is a new trajectory. Each later group extends it. A list returned by =read_con= is written from the frames the parser already stored, so the append does not build a Python atom for every site.
+=append_trajectory_frames= serializes 64 frames at a time and drops that group's text after the put. Those groups share one LMDB transaction and one commit. A list returned by =read_con= is written from the frames the parser already stored, so the append does not build a Python atom for every site.
 
-Rust =ConCorpus::append_trajectory_frames= still commits the slice you pass in one transaction. The grouping is the Python binding.
+Rust =ConCorpus::append_trajectory_frames= commits the slice you pass in one transaction.
 
 ** All or nothing
 :PROPERTIES:
@@ -42,9 +42,9 @@ Rust =ConCorpus::append_trajectory_frames= still commits the slice you pass in o
 :END:
 =append_trajectory= and =append_trajectory_str= write the whole trajectory in one LMDB transaction and one commit fsync. A file longer than 64 frames is cooked and put one group at a time, and that group's cooked blob and decompressed text are dropped after the put. Those puts share the transaction. LMDB's dirty pages hold the bytes until the commit. If the insert fails, the transaction aborts and no frame from it is visible. A second insert of the same trajectory id fails and leaves the first insert as it was.
 
-=append_trajectory_frames= is not one transaction for the whole list. Each group of 64 frames is its own commit. The first group creates the trajectory. A later group extends it. A failure after the first group leaves the earlier groups stored.
+=append_trajectory_frames= is the same single transaction. It puts one group of 64 frames, drops that scratch, then puts the next group, and commits once at the end. A failure in a later group aborts the transaction, so frames from the earlier groups are not visible either.
 
-=extend_trajectory= and =extend_trajectory_str= add the text you pass in one transaction. They do not roll back groups that =append_trajectory_frames= already committed.
+=extend_trajectory= and =extend_trajectory_str= add the text you pass in one transaction of their own.
 
 ** Reads and queries
 :PROPERTIES:

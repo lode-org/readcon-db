@@ -279,12 +279,15 @@ impl PyConCorpus {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Ingest already-parsed `readcon` frames, committing 64 frames at a time.
+    /// Ingest already-parsed `readcon` frames in one LMDB transaction.
     ///
-    /// The first group is `append_trajectory_str`. Each later group is
-    /// `extend_trajectory_str`. A `read_con` result is written from the stored
-    /// frames, so this does not build a Python frame per index. The return
-    /// value is the number of frames in the trajectory after the last commit.
+    /// Frames are serialized and put 64 at a time. That group's text and
+    /// cooked blob are dropped after the put, so the Rust scratch is one
+    /// group while LMDB's dirty pages hold the trajectory until the single
+    /// commit. A failure aborts the transaction and no frame from the call
+    /// is visible. A `read_con` result is written from the stored frames, so
+    /// this does not build a Python frame per index. The return value is the
+    /// number of frames committed.
     #[pyo3(signature = (traj_id, frames, source="memory"))]
     fn append_trajectory_frames(
         &self,
@@ -296,61 +299,112 @@ impl PyConCorpus {
         let readcon = py
             .import("readcon")
             .map_err(|e| PyRuntimeError::new_err(format!("readcon required: {e}")))?;
-        let mut total = 0u32;
-        let mut started = false;
-        let flush = |text: &str, started: bool| -> PyResult<u32> {
-            let result = if started {
-                self.inner.extend_trajectory_str(traj_id, text, source)
-            } else {
-                self.inner.append_trajectory_str(traj_id, text, source)
-            };
-            result.map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        };
-        // A sequence is serialized in place, 64 frames at a time. Iterating a
-        // `read_con` result builds a Python frame per index and keeps it.
-        if let Ok(n) = frames.len() {
-            if n == 0 {
-                return Ok(0);
-            }
-            let mut start = 0usize;
-            while start < n {
-                let stop = (start + 64).min(n);
-                let kwargs = PyDict::new(py);
-                kwargs.set_item("start", start)?;
-                kwargs.set_item("stop", stop)?;
-                let text: String = readcon
-                    .call_method("write_con_string", (frames.clone(),), Some(&kwargs))
-                    .and_then(|v| v.extract())
-                    .map_err(|e| PyRuntimeError::new_err(format!("write_con_string: {e}")))?;
-                total = flush(&text, started)?;
-                started = true;
-                start = stop;
-            }
-            return Ok(total);
+        let known = frames.len().ok();
+        if known == Some(0) {
+            return Ok(0);
         }
-        let mut chunk: Vec<Py<PyAny>> = Vec::new();
-        for item in frames.try_iter()? {
-            chunk.push(item?.unbind());
-            if chunk.len() == 64 {
-                let list = PyList::new(py, chunk.iter().map(|item| item.bind(py)))?;
-                let text: String = readcon
-                    .call_method1("write_con_string", (list,))
-                    .and_then(|v| v.extract())
-                    .map_err(|e| PyRuntimeError::new_err(format!("write_con_string: {e}")))?;
-                total = flush(&text, started)?;
-                started = true;
-                chunk.clear();
-            }
-        }
-        if !chunk.is_empty() {
-            let list = PyList::new(py, chunk.iter().map(|item| item.bind(py)))?;
-            let text: String = readcon
-                .call_method1("write_con_string", (list,))
-                .and_then(|v| v.extract())
-                .map_err(|e| PyRuntimeError::new_err(format!("write_con_string: {e}")))?;
-            total = flush(&text, started)?;
-        }
-        Ok(total)
+        // Address space for the cooked columns beside the text. The map is
+        // not resident; dirty pages are.
+        let input_bytes = known.unwrap_or(64).saturating_mul(4096).max(1 << 20);
+        let group = crate::frame_codec::GROUP_LEN as usize;
+        let mut one_pass = false;
+        let n = self
+            .inner
+            .with_write(input_bytes, |wtxn| {
+                if known.is_none() {
+                    if one_pass {
+                        return Err(crate::error::Error::Message(
+                            "LMDB map filled while streaming frames; the insert was aborted".into(),
+                        ));
+                    }
+                    one_pass = true;
+                }
+                let mut next = 0u32;
+                let mut groups = 0u32;
+                let mut put_text = |text: String| -> crate::error::Result<()> {
+                    if text.is_empty() {
+                        return Ok(());
+                    }
+                    let nput = self.inner.put_con_group(wtxn, traj_id, next, &text)?;
+                    drop(text);
+                    next += nput;
+                    groups += 1;
+                    if crate::corpus::fail_injected_group(groups) {
+                        return Err(crate::error::Error::Message(
+                            "injected insert failure".into(),
+                        ));
+                    }
+                    Ok(())
+                };
+                if let Some(n) = known {
+                    let mut start = 0usize;
+                    while start < n {
+                        let stop = (start + group).min(n);
+                        let kwargs = PyDict::new(py);
+                        kwargs.set_item("start", start).map_err(|e| {
+                            crate::error::Error::Message(format!("write_con_string: {e}"))
+                        })?;
+                        kwargs.set_item("stop", stop).map_err(|e| {
+                            crate::error::Error::Message(format!("write_con_string: {e}"))
+                        })?;
+                        let text: String = readcon
+                            .call_method("write_con_string", (frames.clone(),), Some(&kwargs))
+                            .and_then(|v| v.extract())
+                            .map_err(|e| {
+                                crate::error::Error::Message(format!("write_con_string: {e}"))
+                            })?;
+                        put_text(text)?;
+                        start = stop;
+                    }
+                } else {
+                    let mut chunk: Vec<Py<PyAny>> = Vec::new();
+                    let iter = frames.try_iter().map_err(|e| {
+                        crate::error::Error::Message(format!("frame iterator: {e}"))
+                    })?;
+                    for item in iter {
+                        let item = item.map_err(|e| {
+                            crate::error::Error::Message(format!("frame iterator: {e}"))
+                        })?;
+                        chunk.push(item.unbind());
+                        if chunk.len() == group {
+                            let list = PyList::new(py, chunk.iter().map(|item| item.bind(py)))
+                                .map_err(|e| {
+                                    crate::error::Error::Message(format!("write_con_string: {e}"))
+                                })?;
+                            let text: String = readcon
+                                .call_method1("write_con_string", (list,))
+                                .and_then(|v| v.extract())
+                                .map_err(|e| {
+                                    crate::error::Error::Message(format!("write_con_string: {e}"))
+                                })?;
+                            chunk.clear();
+                            put_text(text)?;
+                        }
+                    }
+                    if !chunk.is_empty() {
+                        let list = PyList::new(py, chunk.iter().map(|item| item.bind(py)))
+                            .map_err(|e| {
+                                crate::error::Error::Message(format!("write_con_string: {e}"))
+                            })?;
+                        let text: String = readcon
+                            .call_method1("write_con_string", (list,))
+                            .and_then(|v| v.extract())
+                            .map_err(|e| {
+                                crate::error::Error::Message(format!("write_con_string: {e}"))
+                            })?;
+                        chunk.clear();
+                        put_text(text)?;
+                    }
+                }
+                if next == 0 {
+                    return Ok(0);
+                }
+                self.inner
+                    .store_new_traj_meta(wtxn, traj_id, next, source)?;
+                Ok(next)
+            })
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(n)
     }
 
     /// Write caller units onto every frame of `traj_id` (canonical names in CON text).

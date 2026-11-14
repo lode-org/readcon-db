@@ -33,6 +33,6 @@ Positions, forces, and velocities are also still on =get_positions=, =get_forces
 :END:
 In 0.2.0, Python =append_trajectory_frames= turned the whole trajectory into one CON string, then prepared and committed every frame in one transaction. The string and the prepared rows were resident together, and walking a =read_con= result built a Python frame for every index.
 
-In 0.2.1 the same call commits groups of 64 frames. The first group creates the trajectory. Each later group extends it. The return value is still the number of frames in the trajectory after the last commit. A =read_con= list is serialized from the parser's stored frames, so those Python frames are not built.
+In 0.2.1 the same call still serializes groups of 64 frames and drops each group's text after the put, so the scratch is one group. Those groups share one LMDB transaction. A failure aborts that transaction and no frame from the call is visible. The return value is the number of frames committed. A =read_con= list is serialized from the parser's stored frames, so those Python frames are not built.
 
 Python =append_trajectory= and Rust =append_trajectory_path= are unchanged: they read the path as UTF-8 and do not decompress gzip or zstd. Compressed files go through =readcon.read_con=, then =append_trajectory_frames=. The guide is @@rst::doc:`/howto/streaming`@@.

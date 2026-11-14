@@ -226,6 +226,40 @@ def drop_page_cache(path: Path) -> None:
     advise_dontneed(path)
 
 
+def fault_missing_pages(path: Path) -> int:
+    """Read every non-resident page of ``path`` into the cache.
+
+    A readonly open readaheads both ends of a small ``data.mdb`` and leaves
+    a hole in the middle. ``mincore`` after that open is the same pattern
+    every time, and the timed query was the first touch of the hole. That
+    fault is heavy-tailed (about 0.1 ms to 0.5 ms here) even though the
+    resident set does not change. Filling the hole after the open, and
+    before the clock, makes the query a resident read.
+    """
+    size = path.stat().st_size
+    if size <= 0:
+        return 0
+    pages = (size + _PAGE - 1) // _PAGE
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        addr = _LIBC.mmap(None, size, _PROT_READ, _MAP_PRIVATE, fd, 0)
+        if _map_failed(addr):
+            return 0
+        try:
+            vec = (ctypes.c_ubyte * pages)()
+            rc = _LIBC.mincore(ctypes.c_void_p(addr), ctypes.c_size_t(size), vec)
+            if rc != 0:
+                return 0
+            missing = [i for i, byte in enumerate(vec) if not (byte & 1)]
+            for i in missing:
+                os.pread(fd, 1, i * _PAGE)
+            return len(missing)
+        finally:
+            _LIBC.munmap(ctypes.c_void_p(addr), ctypes.c_size_t(size))
+    finally:
+        os.close(fd)
+
+
 def fsync_dir(path: Path) -> None:
     fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
     try:
@@ -631,7 +665,7 @@ def header_lines() -> list[str]:
         "page_cache read_warm: one warmup read on the open store, then time the read",
         "lmdb MDB_NOSYNC unset, one write transaction and one commit fsync for the whole insert; a long trajectory puts one 64-frame group at a time and drops that group's cooked blob and decompressed text after the put",
         "ase one write transaction, journal_mode=DELETE, synchronous=FULL, one commit fsync; ASE's 5000-row commit is disabled",
-        "cold: page cache dropped and mincore 0 outside the clock, then open outside the clock, then the query",
+        "cold: page cache dropped and mincore 0 outside the clock, then open outside the clock, then the open's unprefetched hole is read into the cache, then the query",
         "cold-open: page cache dropped outside the clock, then open and the query inside the clock, both tools",
         "validation element-wise outside the timer; a mismatch aborts the run",
     ]
@@ -1496,6 +1530,10 @@ def execute_read_row(request: dict) -> dict:
             # before the clock and then open a second handle inside it.
             if cache != "cold-open":
                 state["db"] = open_kind()
+                # The open's readahead leaves a hole. Fill it before the clock.
+                if cache == "cold":
+                    for path in cold_data_files(kind, dest):
+                        fault_missing_pages(path)
 
         def teardown(state=state) -> None:
             assert_digests(state["got"], expected)
@@ -1893,7 +1931,7 @@ def workloads_for(mode: str) -> list[dict]:
             {"name": "frames-10000", "n_frames": 10_000, "n_atoms": 8},
             {"name": "frames-100", "n_frames": 100, "n_atoms": 8},
         ]
-    if mode == "db10":
+    if mode in ("db10", "db11"):
         return [{"name": "frames-100", "n_frames": 100, "n_atoms": 8}]
     if mode == "smoke":
         return [
@@ -1911,7 +1949,17 @@ def main() -> None:
     )
     ap.add_argument(
         "--mode",
-        choices=("all", "paper", "ladder", "smoke", "inserts", "db8", "db9", "db10"),
+        choices=(
+            "all",
+            "paper",
+            "ladder",
+            "smoke",
+            "inserts",
+            "db8",
+            "db9",
+            "db10",
+            "db11",
+        ),
         default="all",
     )
     ap.add_argument("--self-check", action="store_true")
