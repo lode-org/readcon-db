@@ -1,0 +1,11 @@
+{
+  "why": "db12 cold-open selected was 1.30e-3 s after a parallel touch of every page at open, slower than db11 7.42e-4 s and behind ASE 1.16e-3 s. Selected cold stayed bimodal at IQR/median 0.461 with POSIX_FADV_RANDOM.",
+  "tried": {
+    "threaded_touch": "open+query about 1.2 ms in Python",
+    "single_pread_plus_open": "about 1.46 ms, slower",
+    "head_8_pages_then_query": "query stayed wide, IQR/median 0.37",
+    "readahead_then_harness_page_read": "open+query median 0.50 ms, IQR/median 0.067",
+    "pread_inside_cold_open_then_query": "query median 0.048 ms, IQR/median 0.044"
+  },
+  "chosen": "Warm opens use readahead(2) and no threads. The cold open reads the whole file under 1 MiB with one pread before it returns, so the query does not fault a hole. The harness was not changed."
+}
