@@ -1,0 +1,18 @@
+{
+  "commit": "73de73cfd7d83dcb4346143902698bc4f5cb8ec7",
+  "tree": "c01190d6eb414be636e1d243af86763bb28f209e",
+  "hostname": "cursor",
+  "system": "Linux",
+  "release": "6.12.113+",
+  "machine": "x86_64",
+  "cpu": "Intel(R) Xeon(R) Processor",
+  "ncpu": 8,
+  "loadavg": [
+    0.93310546875,
+    0.5263671875,
+    0.42578125
+  ],
+  "n": 6,
+  "serial": true,
+  "settings": "full, selected, range; cold and warm; threads unset and 1"
+}
