@@ -406,14 +406,14 @@ def paired_sentence(label: str, paired: dict) -> str:
         f"slower in {paired['shuffle_slower']}, ties {paired['ties']}"
     )
     if hi < 1.0:
-        verdict = "the paired interval is below 1, so shuffle is faster"
+        verdict = "The paired interval is below 1, so shuffle is faster."
     elif lo > 1.0:
-        verdict = "the paired interval is above 1, so shuffle is slower"
+        verdict = "The paired interval is above 1, so shuffle is slower."
     else:
-        verdict = "the paired interval includes 1"
+        verdict = "The paired interval includes 1."
     return (
-        f"{label}: paired median {med:.4f}, 95% CI [{lo:.4f}, {hi:.4f}], "
-        f"{wins}. {verdict}."
+        f"{label}: paired median {med:.4f}, 95% CI [{lo:.4f}, {hi:.4f}]. "
+        f"{wins[0].upper() + wins[1:]}. {verdict}"
     )
 
 
@@ -476,10 +476,12 @@ def write_results(record: dict, levers: dict) -> None:
     gap = stay["seq"]["mean_us"] - fast["seq"]["mean_us"]
     wider = max(stay["seq"]["iqr_us"], fast["seq"]["iqr_us"])
     lines.append(
-        f"Level 3 and a 4 KiB window stay. Level -5 at that window is "
-        f"{gap:.0f} µs under level 3 on the mean. The wider of those two IQRs is "
-        f"{wider:.0f} µs, so the level gap is judged against the lever's own spread, "
-        "not against a selected-row IQR from the fair table."
+        "Level 3 and a 4 KiB window are the parameters these fair rows used. "
+        f"Level -5 at that window is {gap:.0f} µs under level 3 on the mean, "
+        f"and the wider of those two IQRs is {wider:.0f} µs, so that gap is "
+        "outside the lever's own spread. The compressed columns grow from "
+        f"{stay['bytes']} bytes to {fast['bytes']} bytes. The level stays 3. "
+        "The comparison is against this lever IQR, not a selected-row IQR."
     )
     lines.append("")
     high = levers["high_byte_decode_copy"]
@@ -511,8 +513,23 @@ def write_results(record: dict, levers: dict) -> None:
     lines.append(
         f"| traj-100k file | {sizes['db18']} | {sizes['raw']} | {sizes['shuffle']} | {sizes['ase']} |"
     )
+    soa = {}
+    tables_path = BENCH / "tables.json"
+    if tables_path.is_file():
+        for row in json.loads(tables_path.read_text()):
+            for table in row["tables"]:
+                if table["name"] == "frames_soa":
+                    soa[row["workload"]] = table["value_bytes"]
+    if soa:
+        lines.append(
+            f"| `frames_soa` values | {soa.get('traj-100k-db18', '')} | "
+            f"{soa.get('traj-100k-raw', '')} | {soa.get('traj-100k-shuffle', '')} | |"
+        )
     lines.append("")
-    lines.append("`frames_soa` values are in `bench/db24/tables.json`.")
+    lines.append(
+        "`frames_soa` values are the `value_bytes` rows in `bench/db24/tables.json`, "
+        "written by `fair_ase_protocol.record_table_usage`."
+    )
     lines.append("")
     lines.append("## Times")
     lines.append("")
