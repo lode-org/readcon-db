@@ -1,8 +1,8 @@
 """Fair traj-100k A/B. Arm order alternates, as the paper protocol does.
 
 Scratch, wheels, and worker logs go under ``build/`` via :func:`bench_disk`.
-The published record is ``bench/db24``. ``tables.json`` is written by
-``fair_ase_protocol.record_table_usage``.
+The default record is ``bench/db24``; ``--out`` names another.
+``tables.json`` is written by ``fair_ase_protocol.record_table_usage``.
 
 Warm selected is one pass of ``i * 17 mod 64``. Odd sample indexes reverse
 the arm order. A second block repeats the warm rows with
@@ -13,6 +13,7 @@ only adds the bench files on top of ``9dcc9ce``). The raw and shuffle arms
 are this tree. Both prefixes are built under ``build/wheels``.
 """
 
+import argparse
 import json
 import os
 import platform
@@ -449,6 +450,17 @@ def paired_sentence(label: str, paired: dict) -> str:
     )
 
 
+def bench_rel() -> str:
+    return BENCH.relative_to(REPO).as_posix()
+
+
+def parse_out(default: Path) -> Path:
+    """``--out`` names the record directory, relative to the repository."""
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", type=Path, default=default.relative_to(REPO))
+    return REPO / ap.parse_args().out
+
+
 def write_results(record: dict, levers: dict) -> None:
     host = record["host"]
     lines = []
@@ -479,7 +491,7 @@ def write_results(record: dict, levers: dict) -> None:
     lines.append("## Level and window")
     lines.append("")
     lines.append(
-        "`bench/db24/levers.json` is the stdout of `record_db24_levers` (release, ignored). "
+        f"`{bench_rel()}/levers.json` is the stdout of `record_db24_levers` (release, ignored). "
         "One 100k-atom frame, positions and forces, six scalar columns. "
         "Each time is the mean of 20 rounds after 3 untimed rounds. "
         "The same rounds are in `samples_us`, and `iqr_us` is their type-7 IQR. "
@@ -561,7 +573,7 @@ def write_results(record: dict, levers: dict) -> None:
         )
     lines.append("")
     lines.append(
-        "`frames_soa` values are the `value_bytes` rows in `bench/db24/tables.json`, "
+        f"`frames_soa` values are the `value_bytes` rows in `{bench_rel()}/tables.json`, "
         "written by `fair_ase_protocol.record_table_usage`."
     )
     lines.append("")
@@ -662,6 +674,8 @@ def write_results(record: dict, levers: dict) -> None:
 
 
 def main() -> None:
+    global BENCH
+    BENCH = parse_out(BENCH)
     require_pushed_commit()
     scratch_tmp = REPO / "build" / "tmp"
     scratch_tmp.mkdir(parents=True, exist_ok=True)
@@ -752,7 +766,7 @@ def main() -> None:
     out["ops_rayon_num_threads_1"] = pack(one, [("warm", op) for op in OPS])
     (BENCH / "ab.json").write_text(json.dumps(out, indent=2) + "\n")
     write_results(out, levers)
-    log.write("wrote bench/db24\n")
+    log.write(f"wrote {bench_rel()}\n")
     log.close()
     print("wrote", BENCH / "ab.json", flush=True)
 

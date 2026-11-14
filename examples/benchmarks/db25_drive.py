@@ -134,6 +134,8 @@ def write_results(record: dict) -> None:
 
 
 def main() -> None:
+    global BENCH
+    BENCH = fair_drive.parse_out(BENCH)
     fair_drive.require_pushed_commit()
     scratch_tmp = REPO / "build" / "tmp"
     scratch_tmp.mkdir(parents=True, exist_ok=True)

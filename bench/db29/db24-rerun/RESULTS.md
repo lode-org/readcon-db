@@ -8,7 +8,7 @@ db22 lists a warm-selected shuffle/raw ratio of 0.573. That figure is superseded
 
 ## Level and window
 
-`bench/db24/levers.json` is the stdout of `record_db24_levers` (release, ignored). One 100k-atom frame, positions and forces, six scalar columns. Each time is the mean of 20 rounds after 3 untimed rounds. The same rounds are in `samples_us`, and `iqr_us` is their type-7 IQR. Long-distance matching is off. `tables.json` is written by `fair_ase_protocol.record_table_usage`.
+`bench/db29/db24-rerun/levers.json` is the stdout of `record_db24_levers` (release, ignored). One 100k-atom frame, positions and forces, six scalar columns. Each time is the mean of 20 rounds after 3 untimed rounds. The same rounds are in `samples_us`, and `iqr_us` is their type-7 IQR. Long-distance matching is off. `tables.json` is written by `fair_ase_protocol.record_table_usage`.
 
 Two empty `thread::scope` workers cost 110 µs (IQR 61 µs).
 
@@ -35,7 +35,7 @@ A single frame is decoded on the calling thread for raw and for shuffle. The shu
 | traj-100k file | 341966848 | 341966848 | 36569088 | 384503808 |
 | `frames_soa` values | 307208960 | 307208960 | 1583727 | |
 
-`frames_soa` values are the `value_bytes` rows in `bench/db24/tables.json`, written by `fair_ase_protocol.record_table_usage`.
+`frames_soa` values are the `value_bytes` rows in `bench/db29/db24-rerun/tables.json`, written by `fair_ase_protocol.record_table_usage`.
 
 ## Times
 
