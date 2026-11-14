@@ -1,0 +1,9 @@
+{
+  "method": "VmHWM of one process that builds the shared payload, commits once, and checks the stored row",
+  "old_check": "read_con_string built a second per-atom frame while the builder's text and atoms were still alive. That raised the 1M-atom high-water mark from 1.64 GB to 1.90 GB. The append itself did not.",
+  "new_check": "read_arrays, numeric columns only",
+  "hwm_mb": {
+    "atoms_100000": {"readcon-db": 247.2, "ase.db": 247.4},
+    "atoms_1000000": {"readcon-db": 1635.7, "ase.db": 1635.5}
+  }
+}
