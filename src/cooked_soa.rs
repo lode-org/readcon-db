@@ -178,6 +178,31 @@ impl CookedSoa {
     pub fn try_decode(bytes: &[u8]) -> Option<Self> {
         Self::decode(bytes).ok()
     }
+
+    /// Append the position block to `out` as row-major f64. `None` when the
+    /// blob is not a v1 f64 RCSO with a complete position block.
+    pub fn copy_positions(bytes: &[u8], out: &mut Vec<f64>) -> Option<u32> {
+        if bytes.len() < HEADER_LEN || &bytes[0..4] != COOKED_MAGIC {
+            return None;
+        }
+        let version = u32::from_le_bytes(bytes[4..8].try_into().ok()?);
+        if version != COOKED_VERSION || bytes[16] != DTYPE_F64 {
+            return None;
+        }
+        let natoms = u32::from_le_bytes(bytes[8..12].try_into().ok()?);
+        let n = natoms as usize;
+        let nbytes = n.checked_mul(3)?.checked_mul(8)?;
+        let end = HEADER_LEN.checked_add(nbytes)?;
+        if bytes.len() < end {
+            return None;
+        }
+        out.reserve(n.saturating_mul(3));
+        for chunk in bytes[HEADER_LEN..end].chunks_exact(8) {
+            let raw: [u8; 8] = chunk.try_into().ok()?;
+            out.push(f64::from_le_bytes(raw));
+        }
+        Some(natoms)
+    }
 }
 
 /// Length-prefixed RCSO blobs for one collective on the caller comm.

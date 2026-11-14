@@ -138,7 +138,7 @@ RCSO is *not* a complete stand-in for a CON frame: it omits element symbols, mas
 | Rule            | Behavior                                                                                               |
 |-----------------+--------------------------------------------------------------------------------------------------------|
 | Authority       | UTF-8 CON text in `frames` only; xxHash3 / dedup / join-split / =reindex= ignore SoA                   |
-| Opt-in          | Default ingest does *not* cook; =cook_frame= / =recook_all= / =append_trajectory_path_cook(..., true)= |
+| Default         | Ingest writes RCSO beside the CON text. =delete_cooked_soa= drops it; =cook_frame= / =recook_all= rewrite it |
 | Hot path        | Numeric getters prefer valid cooked (*no CON parse* on hit); corrupt/missing → parse CON               |
 | Discard         | =delete_cooked_soa=; reindex and select unaffected; CON text and hash unchanged                        |
 | Non-equivalence | Symbols/metadata/exact bytes live only in CON; RCSO cannot substitute for missing =frames=             |

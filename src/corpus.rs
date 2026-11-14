@@ -154,6 +154,18 @@ struct PreparedIndexPuts {
     pbc_k: Option<[u8; 13]>,
     flag_keys: Vec<[u8; 13]>,
     meta_keys: Vec<[u8; 21]>,
+    /// RCSO bytes written beside the CON text. Empty skips the cooked put.
+    cooked: Vec<u8>,
+}
+
+/// One trajectory of coordinates, row-major `n_frames * n_atoms * 3` f64.
+pub struct TrajectoryPositions {
+    /// Frames in index order.
+    pub n_frames: u32,
+    /// Atoms in every frame. Zero when the trajectory is empty.
+    pub n_atoms: u32,
+    /// Row-major coordinates.
+    pub values: Vec<f64>,
 }
 
 /// One LMDB environment. The directory holds `data.mdb` and `lock.mdb`.
@@ -285,10 +297,23 @@ fn usize_reserve_aborts(count: usize) -> bool {
     count.saturating_mul(std::mem::size_of::<usize>()) >= (1usize << 32)
 }
 
+/// One frame of a stored span, encoded as RCSO. The span walk does not
+/// build a `ConFrame` for the indexes; cooking parses that one frame.
+fn cook_span(text: &str) -> Result<Vec<u8>> {
+    let mut iter = ConFrameIterator::new(text);
+    let frame = match iter.next() {
+        Some(Ok(frame)) => frame,
+        Some(Err(e)) => return Err(Error::Parse(e.to_string())),
+        None => return Err(Error::Parse("span has no frame to cook".into())),
+    };
+    crate::cooked_soa::CookedSoa::encode_frame(&frame)
+}
+
 fn prepared_bytes(prepared: &[PreparedIndexPuts]) -> usize {
-    prepared
-        .iter()
-        .fold(0usize, |n, p| n.saturating_add(p.stored.len()))
+    prepared.iter().fold(0usize, |n, p| {
+        n.saturating_add(p.stored.len())
+            .saturating_add(p.cooked.len())
+    })
 }
 
 /// False only when a species or atom count would make `Vec::with_capacity`
@@ -871,7 +896,8 @@ impl ConCorpus {
         compress: bool,
     ) -> Result<PreparedIndexPuts> {
         let facts = crate::span_columns::facts_from_frame(frame);
-        Self::build_index_from_facts(fk, &facts, &text, compress)
+        let cooked = crate::cooked_soa::CookedSoa::encode_frame(frame)?;
+        Self::build_index_from_facts(fk, &facts, &text, compress, cooked)
     }
 
     /// Index keys for one stored span. `text` is the exact CON substring.
@@ -880,6 +906,7 @@ impl ConCorpus {
         facts: &crate::span_columns::SpanFacts,
         text: &str,
         compress: bool,
+        cooked: Vec<u8>,
     ) -> Result<PreparedIndexPuts> {
         let hash = hash_frame_bytes(text.as_bytes()).to_bytes();
         let stored = crate::frame_codec::store_frame(text, compress)?;
@@ -948,6 +975,7 @@ impl ConCorpus {
             pbc_k,
             flag_keys,
             meta_keys,
+            cooked,
         })
     }
 
@@ -989,6 +1017,9 @@ impl ConCorpus {
         }
         for mk in &p.meta_keys {
             self.idx_meta.put(wtxn, &mk[..], &())?;
+        }
+        if !p.cooked.is_empty() {
+            self.frames_soa.put(wtxn, &fk_b[..], &p.cooked[..])?;
         }
         Ok(())
     }
@@ -1160,7 +1191,10 @@ impl ConCorpus {
                 traj_id,
                 frame_idx: u32::try_from(i).map_err(|_| Error::Parse("too many frames".into()))?,
             };
-            out.push(Self::build_index_from_facts(fk, &facts, text, compress)?);
+            let cooked = cook_span(text)?;
+            out.push(Self::build_index_from_facts(
+                fk, &facts, text, compress, cooked,
+            )?);
         }
         Ok(out)
     }
@@ -2282,6 +2316,73 @@ impl ConCorpus {
         Ok(self
             .get_cooked_soa_bytes(key)?
             .and_then(|b| crate::cooked_soa::CookedSoa::try_decode(&b)))
+    }
+
+    /// Prefer valid cooked SoA (**no CON parse** on hit); otherwise parse CON text in `frames`.
+    /// RCSO is not fully equivalent to CON (no symbols/metadata/exact bytes)—do not omit `frames`.
+    /// Positions of one trajectory, row-major `n_frames * n_atoms * 3`.
+    ///
+    /// Cooked blobs are copied straight into the buffer. A frame with no
+    /// valid RCSO is parsed from its CON text into the same buffer, with
+    /// no per-atom Python object. Every frame must share one atom count.
+    pub fn trajectory_positions(&self, traj_id: TrajId) -> Result<TrajectoryPositions> {
+        let rtxn = self.read_txn()?;
+        let prefix = traj_id.to_be_bytes();
+        let mut keys = Vec::new();
+        let mut iter = self.frames.prefix_iter(&rtxn, &prefix[..])?;
+        while let Some(item) = iter.next() {
+            let (k, _) = item?;
+            if let Some(fk) = FrameKey::from_bytes(k) {
+                if fk.traj_id == traj_id {
+                    keys.push(fk);
+                }
+            }
+        }
+        drop(iter);
+        keys.sort_unstable();
+        let mut values = Vec::new();
+        let mut n_atoms: Option<u32> = None;
+        for key in &keys {
+            let fk_b = key.to_bytes();
+            if let Some(blob) = self.frames_soa.get(&rtxn, &fk_b[..])? {
+                if let Some(n) = crate::cooked_soa::CookedSoa::copy_positions(blob, &mut values) {
+                    match n_atoms {
+                        None => n_atoms = Some(n),
+                        Some(prev) if prev == n => {}
+                        Some(prev) => {
+                            return Err(Error::Message(format!(
+                                "trajectory {traj_id} mixes {prev} and {n} atoms"
+                            )));
+                        }
+                    }
+                    continue;
+                }
+            }
+            let text = self.get_frame_text_txn(&rtxn, *key)?;
+            let frame = ConFrameIterator::new(&text)
+                .next()
+                .ok_or_else(|| Error::Parse("stored frame is empty".into()))?
+                .map_err(|e| Error::Parse(e.to_string()))?;
+            let n = u32::try_from(frame.atom_data.len())
+                .map_err(|_| Error::Message("too many atoms".into()))?;
+            match n_atoms {
+                None => n_atoms = Some(n),
+                Some(prev) if prev == n => {}
+                Some(prev) => {
+                    return Err(Error::Message(format!(
+                        "trajectory {traj_id} mixes {prev} and {n} atoms"
+                    )));
+                }
+            }
+            for atom in &frame.atom_data {
+                values.extend_from_slice(&crate::atom_coord::atom_xyz(atom));
+            }
+        }
+        Ok(TrajectoryPositions {
+            n_frames: keys.len() as u32,
+            n_atoms: n_atoms.unwrap_or(0),
+            values,
+        })
     }
 
     /// Prefer valid cooked SoA (**no CON parse** on hit); otherwise parse CON text in `frames`.
@@ -4637,7 +4738,9 @@ x
         };
         db.append_trajectory_path(1, fixture("tiny_cuh2.con"))
             .unwrap();
-        // default: no cooked
+        // Ingest writes RCSO beside the text. Drop it to measure the parse path.
+        assert!(db.get_cooked_soa_bytes(key).unwrap().is_some());
+        db.delete_cooked_soa(key).unwrap();
         assert!(db.get_cooked_soa_bytes(key).unwrap().is_none());
         let pos_via_parse = db.get_positions(key).unwrap();
         let fr = db.get_frame(key).unwrap();
@@ -4797,7 +4900,7 @@ x
             .iter()
             .map(|a| a.force().unwrap_or([0.0; 3]))
             .collect();
-        // Without cook: parse path
+        // Ingest writes RCSO. The values still match the CON frame.
         assert_eq!(db.get_positions(key).unwrap(), expect_pos);
         assert_eq!(db.get_forces(key).unwrap().unwrap(), expect_f);
         db.cook_frame(key).unwrap();
@@ -4824,7 +4927,7 @@ x
         };
         db.append_trajectory_path(1, fixture("tiny_cuh2_vel_forces.con"))
             .unwrap();
-        assert!(!db.has_valid_cooked_soa(key).unwrap());
+        assert!(db.has_valid_cooked_soa(key).unwrap());
         let fr = db.get_frame(key).unwrap();
         let expect_pos: Vec<_> = fr
             .atom_data
@@ -4845,6 +4948,14 @@ x
         assert_eq!(db.get_forces(key).unwrap().unwrap(), expect_f);
         assert_eq!(db.get_velocities(key).unwrap().unwrap(), expect_v);
         assert!((expect_v[0][0] - 0.001234).abs() < 1e-12);
+        let block = db.trajectory_positions(1).unwrap();
+        assert_eq!(block.n_frames, 1);
+        assert_eq!(block.n_atoms as usize, expect_pos.len());
+        let mut flat = Vec::new();
+        for row in &expect_pos {
+            flat.extend_from_slice(row);
+        }
+        assert_eq!(block.values, flat);
         let text = db.get_frame_text(key).unwrap();
         let h = db.frame_hash(key).unwrap();
         db.cook_frame(key).unwrap();
@@ -5193,7 +5304,7 @@ x
     }
 
     #[test]
-    fn zstd_round_trip_is_byte_exact_and_does_not_cook() {
+    fn zstd_round_trip_is_byte_exact_and_cooks_beside_the_text() {
         let path = fixture("sulfolene.con");
         let spans = raw_spans(&path);
         assert!(!spans.is_empty());
@@ -5217,7 +5328,7 @@ x
                 db.frame_hash(key).unwrap(),
                 hash_frame_bytes(span.as_bytes())
             );
-            assert!(!db.has_valid_cooked_soa(key).unwrap());
+            assert!(db.has_valid_cooked_soa(key).unwrap());
         }
     }
 
@@ -5264,7 +5375,7 @@ x
             } else if i < 64 {
                 assert!(crate::frame_codec::is_redirect(&stored));
             }
-            assert!(!db.has_valid_cooked_soa(key).unwrap());
+            assert!(db.has_valid_cooked_soa(key).unwrap());
         }
         assert!(stored_sum < single_sum, "{stored_sum} vs {single_sum}");
         assert_eq!(db.migrate_frames().unwrap(), 0);
@@ -5318,7 +5429,7 @@ x
         assert_eq!(db.get_frame_text(key0).unwrap(), spans[0]);
         assert_eq!(db.migrate_frames().unwrap(), 0);
         assert_eq!(db.stored_frame(key0).unwrap(), tagged);
-        assert!(!db.has_valid_cooked_soa(key0).unwrap());
+        assert!(db.has_valid_cooked_soa(key0).unwrap());
     }
 
     #[test]

@@ -86,7 +86,7 @@ fn numeric_extract_parse_and_cooked_match() {
     };
     db.append_trajectory_path(1, fixture("tiny_cuh2_vel_forces.con"))
         .unwrap();
-    assert!(!db.has_valid_cooked_soa(key).unwrap());
+    assert!(db.has_valid_cooked_soa(key).unwrap());
 
     let pos_parse = db.get_positions(key).unwrap();
     let f_parse = db.get_forces(key).unwrap().expect("forces");

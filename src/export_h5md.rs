@@ -632,8 +632,18 @@ mod tests {
             traj_id: 1,
             frame_idx: 0,
         };
+        assert!(db.has_valid_cooked_soa(key).unwrap());
+        let cooked_first = db.collect_h5md(1).unwrap();
+        for i in 0..cooked_first.n_frames {
+            db.delete_cooked_soa(crate::keys::FrameKey {
+                traj_id: 1,
+                frame_idx: i as u32,
+            })
+            .unwrap();
+        }
         assert!(!db.has_valid_cooked_soa(key).unwrap());
         let from_con = db.collect_h5md(1).unwrap();
+        assert_eq!(from_con.positions, cooked_first.positions);
         db.recook_all().unwrap();
         assert!(db.has_valid_cooked_soa(key).unwrap());
         let from_rcso = db.collect_h5md(1).unwrap();

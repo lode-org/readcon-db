@@ -570,13 +570,42 @@ impl PyConCorpus {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Prefer frames_soa; fallback parse CON. List of (x,y,z).
-    fn get_positions(&self, traj_id: u64, frame_idx: u32) -> PyResult<Vec<(f64, f64, f64)>> {
+    /// One frame of coordinates as a float64 array of shape `(atoms, 3)`.
+    ///
+    /// A cooked blob is copied into the array. Otherwise the stored CON
+    /// text is parsed in Rust. No `(x, y, z)` tuple is built.
+    fn get_positions<'py>(
+        &self,
+        py: Python<'py>,
+        traj_id: u64,
+        frame_idx: u32,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let v = self
             .inner
             .get_positions(FrameKey { traj_id, frame_idx })
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        Ok(v.into_iter().map(|r| (r[0], r[1], r[2])).collect())
+        let mut flat = Vec::with_capacity(v.len().saturating_mul(3));
+        for row in &v {
+            flat.extend_from_slice(row);
+        }
+        f64_array(py, &flat, &[v.len(), 3])
+    }
+
+    /// Every frame of `traj_id` as one float64 array of shape `(frames, atoms, 3)`.
+    ///
+    /// The scan writes cooked position bytes straight into that array. A
+    /// frame that was never cooked is parsed from its CON text into the
+    /// same buffer. Frames that do not share one atom count are an error.
+    fn get_positions_all<'py>(&self, py: Python<'py>, traj_id: u64) -> PyResult<Bound<'py, PyAny>> {
+        let block = self
+            .inner
+            .trajectory_positions(traj_id)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        f64_array(
+            py,
+            &block.values,
+            &[block.n_frames as usize, block.n_atoms as usize, 3],
+        )
     }
 
     /// Forces of one frame, or `None` when that frame has no forces.
