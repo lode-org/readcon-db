@@ -81,12 +81,10 @@ def test_short_call_is_repeated_until_the_timed_span_covers_the_sample():
     assert stat["seconds"] < 0.005
 
 
-def test_a_wide_six_asks_for_more_and_twelve_stops():
-    wide = [1.0, 1.0, 1.0, 2.0, 2.0, 2.0]
-    assert fair.iqr_over(wide)
-    assert not fair.iqr_over(wide + wide)
-    tight = [1.0, 1.01, 1.0, 1.0, 0.99, 1.0]
-    assert not fair.iqr_over(tight)
+def test_every_row_keeps_twelve_samples():
+    assert fair.N_SAMPLES >= 12
+    assert "iqr_over" not in fair.execute_insert_row.__code__.co_names
+    assert "iqr_over" not in fair._execute_read_row.__code__.co_names
 
 
 def test_setup_stays_outside_the_timer():

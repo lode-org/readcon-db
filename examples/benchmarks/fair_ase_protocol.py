@@ -61,11 +61,7 @@ from readcon_db import ConCorpus
 
 REPO = Path(__file__).resolve().parents[2]
 WARMUP = 1
-N_SAMPLES = int(os.environ.get("READCON_DB_N_SAMPLES", "6"))
-# A row whose first samples are still wide keeps going until the ratio
-# falls or n reaches EXTEND_N. The published wide row is n=12.
-EXTEND_AT = 0.05
-EXTEND_N = max(12, N_SAMPLES)
+N_SAMPLES = int(os.environ.get("READCON_DB_N_SAMPLES", "12"))
 # A single sub-millisecond fsync or query is mostly timer noise. Repeat it
 # until the timed spans cover this long, and publish the mean as one sample.
 # Reads repeat until the timed spans cover this. A 50 ms mean is enough
@@ -999,9 +995,10 @@ def header_lines() -> list[str]:
         f"nproc {os.cpu_count()}",
         f"python {sys.version.split()[0]}",
         f"warmup {WARMUP}",
-        f"samples {N_SAMPLES} (12 when IQR/median exceeds {EXTEND_AT})",
+        f"samples {N_SAMPLES}",
         "quantile type-7 (numpy percentile method=linear)",
         "order serial, tools alternate each sample index, no parallel samples",
+        "threads: the paired rows set RAYON_NUM_THREADS=1 for readcon-db and run ASE in one process; readcon-db is also recorded with RAYON_NUM_THREADS unset",
         "timer: directory fsync, fadvise, mincore, the element-wise check, and the collector stay outside; the clock covers the commit, or the query; cold-open also times the open",
         "gc: automatic collection is off for every read row, for both tools, and restored when the row returns",
         "timer_short: a read shorter than 50 ms is repeated until the timed spans add to 50 ms; the sample is that mean",
@@ -1056,17 +1053,6 @@ def vm_rss() -> int:
     except OSError:
         return 0
     return 0
-
-
-def iqr_over(values: list[float], limit: float = EXTEND_AT) -> bool:
-    """True when six or more means are wider than ``limit`` and n is still 6."""
-    if len(values) < N_SAMPLES or len(values) >= EXTEND_N:
-        return False
-    stat = summarize(values)
-    med = stat["median_s"]
-    if med <= 0:
-        return False
-    return stat["iqr_s"] / med > limit
 
 
 def sample_operation(run, setup=None, teardown=None, span: float | None = None) -> dict:
@@ -1855,8 +1841,7 @@ def execute_insert_row(request: dict) -> dict:
     values = []
     inner = []
     disk = None
-    i = 0
-    while i < N_SAMPLES or iqr_over(values):
+    for i in range(N_SAMPLES):
         stat = timed_insert(kind, name, payload, work)
         values.append(stat["seconds"])
         inner.append(stat["inner_n"])
@@ -1867,7 +1852,6 @@ def execute_insert_row(request: dict) -> dict:
             f"inner_n={stat['inner_n']} timed_span_s={stat['timed_span_s']:.6f} "
             f"disk_bytes={stat['disk_bytes']}"
         )
-        i += 1
     row = {
         "protocol": "fair",
         "workload": name,
@@ -1881,6 +1865,7 @@ def execute_insert_row(request: dict) -> dict:
         "disk_bytes": disk,
         "peak_rss_bytes": vm_hwm(),
         "inner_n": inner,
+        **thread_fields(),
         "span_s": INSERT_SPAN_S,
         "input_bytes": int(spec.get("input_bytes") or 0),
         "log": lines,
@@ -1962,8 +1947,7 @@ def _execute_read_row(request: dict) -> dict:
             f"warmup protocol=fair workload={name} op={op} tool={kind} cache={cache}"
         )
 
-    i = 0
-    while i < N_SAMPLES or iqr_over(samples):
+    for i in range(N_SAMPLES):
         state: dict = {}
         labels: list[tuple[float, str]] = []
 
@@ -2053,7 +2037,6 @@ def _execute_read_row(request: dict) -> dict:
             f"cache={cache} i={i} seconds={stat['seconds']} "
             f"inner_n={stat['inner_n']} timed_span_s={stat['timed_span_s']:.6f}{extra}"
         )
-        i += 1
     if "db" in holder:
         close_reader(kind, holder["db"])
     used = samples or [item["seconds"] for item in cold_meta]
@@ -2069,6 +2052,7 @@ def _execute_read_row(request: dict) -> dict:
         "fidelity": "exact",
         "disk_bytes": disk_bytes(kind, dest),
         "peak_rss_bytes": vm_hwm(),
+        **thread_fields(),
         "span_s": SAMPLE_S,
         "log": lines,
         **summarize(used),
@@ -2086,9 +2070,31 @@ def execute_row(request: dict) -> dict:
     return execute_read_row(request)
 
 
+def thread_fields() -> dict:
+    """What this process was pinned to. Unset means the library default."""
+    raw = os.environ.get("RAYON_NUM_THREADS")
+    if raw is None or raw == "":
+        return {"rayon_num_threads": "unset", "threads": os.cpu_count() or 1}
+    return {"rayon_num_threads": raw, "threads": int(raw)}
+
+
+def apply_rayon(env: dict, mode: str) -> dict:
+    env = dict(env)
+    if mode == "unset":
+        env.pop("RAYON_NUM_THREADS", None)
+    else:
+        env["RAYON_NUM_THREADS"] = mode
+    return env
+
+
+# The paired comparison is one thread on both tools. readcon-db is also
+# recorded with RAYON_NUM_THREADS left unset.
+PAIRED_THREADS = (("readcon-db", "1"), ("ase.db", "1"), ("readcon-db", "unset"))
+
+
 def spawn_row(request: dict) -> dict:
     """One table row, in a process whose high-water mark starts at zero."""
-    env = os.environ.copy()
+    env = apply_rayon(os.environ.copy(), request.get("rayon", "1"))
     env["READCON_DB_ROW"] = "1"
     proc = subprocess.run(
         [sys.executable, str(Path(__file__).resolve()), "--row"],
@@ -2222,13 +2228,14 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
         # Both tools report throughput against this same CON text length.
         insert_spec = dict(spec)
         insert_spec["input_bytes"] = len(text.encode())
-        for kind in ("readcon-db", "ase.db"):
+        for kind, rayon in PAIRED_THREADS:
             row = spawn_row(
                 {
                     "what": "insert",
                     "kind": kind,
                     "spec": insert_spec,
                     "work": str(work),
+                    "rayon": rayon,
                 }
             )
             for line in row.pop("log"):
@@ -2267,7 +2274,7 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
                     request_extra["frame_indices"] = list(range(meta_lo, meta_hi + 1))
                 else:
                     request_extra["digests"] = digests_for_records(used)
-                for kind in ("readcon-db", "ase.db"):
+                for kind, rayon in PAIRED_THREADS:
                     row = spawn_row(
                         {
                             "what": "read",
@@ -2278,6 +2285,7 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
                             "dest": str(stored[kind]),
                             "n_frames": spec["n_frames"],
                             "n_atoms": spec["n_atoms"],
+                            "rayon": rayon,
                             **request_extra,
                         }
                     )
@@ -2301,7 +2309,7 @@ def write_markdown(
     lines = [
         "# readcon-db vs ASE sqlite",
         "",
-        "Type-7 median and IQR. One discarded warmup and six serial samples",
+        "Type-7 median and IQR. One discarded warmup and twelve serial samples",
         "for every fair row. The published log has no discarded warmup.",
         "A mismatch of any stored field aborts the run, so every sample below",
         "passed an element-wise check (fidelity exact).",
@@ -2358,8 +2366,8 @@ def write_markdown(
         "Ingest rows report frames/s and MB/s of the CON text. disk B",
         "is the database file after that ingest.",
         "",
-        "| workload | op | cache | tool | n | median s | p90 s | IQR s | IQR/median | frames/s | MB/s | disk B | peak RSS B | fidelity |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| workload | op | cache | tool | RAYON_NUM_THREADS | threads | n | median s | p90 s | IQR s | IQR/median | frames/s | MB/s | disk B | peak RSS B | fidelity |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in fair_rows:
         ratio = row["iqr_s"] / row["median_s"] if row["median_s"] else 0.0
@@ -2371,7 +2379,8 @@ def write_markdown(
         frames_s = row.get("frames_per_s")
         mb_s = row.get("megabytes_per_s")
         lines.append(
-            f"| {row['workload']} | {row['op']} | {row['cache']} | {row['tool']} | {row['n']} | "
+            f"| {row['workload']} | {row['op']} | {row['cache']} | {row['tool']} | "
+            f"{row.get('rayon_num_threads', '')} | {row.get('threads', '')} | {row['n']} | "
             f"{fmt(row['median_s'])} | {fmt(p90)} | {fmt(row['iqr_s'])} | {ratio:.3f} | "
             f"{fmt(frames_s) if frames_s else ''} | {fmt(mb_s) if mb_s else ''} | "
             f"{row.get('disk_bytes', 0)} | {row.get('peak_rss_bytes', 0)} | "
