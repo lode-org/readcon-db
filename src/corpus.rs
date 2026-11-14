@@ -543,7 +543,12 @@ fn skip_lines(bytes: &[u8], i: &mut usize, n: usize) -> usize {
 
 /// Project many frames at once. One frame stays on the calling thread.
 fn project_spans(texts: &[&str]) -> Result<Vec<(crate::span_columns::SpanFacts, Vec<u8>)>> {
-    if texts.len() < 32 {
+    let bytes: usize = texts.iter().map(|text| text.len()).sum();
+    // Thirty-two tiny frames are enough work to hide a spawn. A handful of
+    // 100k-atom frames are too: each one is several mebibytes, and a serial
+    // walk of those was the ingest that lost to ASE.
+    let parallel = texts.len() >= 32 || (texts.len() > 1 && bytes >= 1024 * 1024);
+    if !parallel {
         return texts
             .iter()
             .map(|text| crate::span_columns::project_frame_cooked(text.as_bytes()))
@@ -1345,9 +1350,13 @@ impl ConCorpus {
             );
         }
         let mut out = Vec::with_capacity(texts.len());
+        let heavy = texts.iter().any(|text| text.len() >= 256 * 1024);
         // One large frame: compress the CON text while the coordinate walk
-        // fills the RCSO blob. Both only read the span.
-        if texts.len() < 32 {
+        // fills the RCSO blob. Both only read the span. Several large frames
+        // are projected together below, and the group compressor is the only
+        // zstd pass. Compressing each frame first made `group_prepared`
+        // decompress that work and compress it again.
+        if texts.len() < 32 && !heavy {
             for (i, text) in texts.iter().enumerate() {
                 let fk = FrameKey {
                     traj_id,
@@ -1383,6 +1392,9 @@ impl ConCorpus {
             return Ok(out);
         }
         let projected = project_spans(&texts)?;
+        // More than one frame is packed by `group_prepared`. Leave the CON
+        // text uncompressed until that single pass.
+        let compress_now = compress && texts.len() < 2;
         for (i, (text, (facts, cooked))) in texts.iter().zip(projected).enumerate() {
             let fk = FrameKey {
                 traj_id,
@@ -1390,7 +1402,12 @@ impl ConCorpus {
                     + u32::try_from(i).map_err(|_| Error::Parse("too many frames".into()))?,
             };
             out.push(Self::build_index_from_facts(
-                fk, &facts, text, compress, cooked, None,
+                fk,
+                &facts,
+                text,
+                compress_now,
+                cooked,
+                None,
             )?);
         }
         Ok(out)
@@ -1778,18 +1795,29 @@ impl ConCorpus {
             let mut groups = 0u32;
             for chunk in spans.chunks(batch) {
                 let mut prepared = Vec::with_capacity(chunk.len());
-                for (offset, span) in chunk.iter().enumerate() {
-                    let text = span
-                        .slice(file_contents)
-                        .ok_or_else(|| Error::Parse("frame span is not valid UTF-8".into()))?;
+                let mut texts = Vec::with_capacity(chunk.len());
+                for span in chunk {
+                    texts.push(
+                        span.slice(file_contents)
+                            .ok_or_else(|| Error::Parse("frame span is not valid UTF-8".into()))?,
+                    );
+                }
+                let heavy = texts.iter().any(|text| text.len() >= 256 * 1024);
+                let projected = project_spans(&texts)?;
+                // A large group is compressed once, in `group_prepared`.
+                let compress_now = compress && !(heavy && texts.len() > 1);
+                for (offset, (text, (facts, cooked))) in texts.iter().zip(projected).enumerate() {
                     let frame_idx = next
                         + u32::try_from(offset)
                             .map_err(|_| Error::Parse("too many frames".into()))?;
-                    let (facts, cooked) =
-                        crate::span_columns::project_frame_cooked(text.as_bytes())?;
                     let fk = FrameKey { traj_id, frame_idx };
                     prepared.push(Self::build_index_from_facts(
-                        fk, &facts, text, compress, cooked, None,
+                        fk,
+                        &facts,
+                        text,
+                        compress_now,
+                        cooked,
+                        None,
                     )?);
                 }
                 if compress {
@@ -2767,6 +2795,16 @@ impl ConCorpus {
         traj_id: TrajId,
         frame: Option<u32>,
     ) -> Result<MaterializedRead> {
+        self.read_materialized_span(traj_id, frame, None)
+    }
+
+    /// Frames with indexes `start..=end`, in index order, as one materialized read.
+    pub fn read_materialized_span(
+        &self,
+        traj_id: TrajId,
+        frame: Option<u32>,
+        span: Option<(u32, u32)>,
+    ) -> Result<MaterializedRead> {
         self.prefetch_small_corpus();
         let rtxn = self.read_txn()?;
         let keys = if let Some(frame_idx) = frame {
@@ -2778,9 +2816,15 @@ impl ConCorpus {
             for item in iter.by_ref() {
                 let (k, _) = item?;
                 if let Some(fk) = FrameKey::from_bytes(k) {
-                    if fk.traj_id == traj_id {
-                        keys.push(fk);
+                    if fk.traj_id != traj_id {
+                        continue;
                     }
+                    if let Some((lo, hi)) = span {
+                        if fk.frame_idx < lo || fk.frame_idx > hi {
+                            continue;
+                        }
+                    }
+                    keys.push(fk);
                 }
             }
             drop(iter);
@@ -4155,6 +4199,10 @@ mod tests {
             text.push_str(&one);
         }
         db.append_trajectory_str(1, &text, "cold").unwrap();
+        let span = db.read_materialized_span(1, None, Some((3, 5))).unwrap();
+        assert_eq!(span.n_frames, 3);
+        let all = db.read_materialized(1, None).unwrap();
+        assert_eq!(all.n_frames, 200);
         drop(db);
         let data = dir.path().join("data.mdb");
         let file = std::fs::File::open(&data).unwrap();

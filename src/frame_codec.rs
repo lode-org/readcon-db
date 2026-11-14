@@ -77,14 +77,16 @@ pub fn pack_aligned(frames: &[(u32, &str)]) -> Result<Vec<Vec<u8>>> {
             j += 1;
         }
         let run = &frames[i..j];
-        let mut singles = Vec::with_capacity(run.len());
-        let mut single_sum = 0usize;
-        for (_, text) in run {
-            let one = store_frame(text, true)?;
-            single_sum = single_sum.saturating_add(one.len());
-            singles.push(one);
-        }
-        if run.len() > 1 {
+        // One zstd frame over a multi-megabyte run is serial. 64 frames of
+        // 100k atoms spent longer in that frame than ASE spent writing the
+        // sqlite file. Per-frame values compress on every core instead.
+        let plain: usize = run.iter().map(|(_, text)| text.len()).sum();
+        if run.len() > 1 && plain < 4 * 1024 * 1024 {
+            let singles = compress_singles(run)?;
+            let single_sum = singles
+                .iter()
+                .map(Vec::len)
+                .fold(0usize, usize::saturating_add);
             let grouped = encode_group(run)?;
             let total = grouped
                 .len()
@@ -98,8 +100,11 @@ pub fn pack_aligned(frames: &[(u32, &str)]) -> Result<Vec<Vec<u8>>> {
                 i = j;
                 continue;
             }
+            out.extend(singles);
+            i = j;
+            continue;
         }
-        out.extend(singles);
+        out.extend(compress_singles(run)?);
         i = j;
     }
     Ok(out)
@@ -155,6 +160,40 @@ fn open_group_or_single(stored: &[u8]) -> Result<Vec<String>> {
     } else {
         Ok(vec![load_frame(stored)?])
     }
+}
+
+fn compress_singles(run: &[(u32, &str)]) -> Result<Vec<Vec<u8>>> {
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .clamp(1, 8);
+    if run.len() < 4 || threads == 1 {
+        return run
+            .iter()
+            .map(|(_, text)| store_frame(text, true))
+            .collect();
+    }
+    let chunk = run.len().div_ceil(threads).max(1);
+    let mut parts = Vec::new();
+    std::thread::scope(|scope| {
+        let mut joins = Vec::new();
+        for piece in run.chunks(chunk) {
+            joins.push(scope.spawn(move || -> Result<Vec<Vec<u8>>> {
+                piece
+                    .iter()
+                    .map(|(_, text)| store_frame(text, true))
+                    .collect()
+            }));
+        }
+        for join in joins {
+            parts.push(join.join().expect("frame compression"));
+        }
+    });
+    let mut out = Vec::with_capacity(run.len());
+    for part in parts {
+        out.extend(part?);
+    }
+    Ok(out)
 }
 
 fn encode_group(run: &[(u32, &str)]) -> Result<Vec<u8>> {

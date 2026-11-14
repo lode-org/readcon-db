@@ -784,18 +784,36 @@ impl PyConCorpus {
     /// `positions`, `velocities`, `masses`, `numbers`, `constraints`, and
     /// `cell` are always materialized. The CON text is not parsed when the
     /// cooked blob carries those blocks.
-    #[pyo3(signature = (traj_id, frame_idx=None))]
+    /// `index_min` and `index_max` are an inclusive frame-index span.
+    /// They are the range query. `frame_idx` remains the single-frame read.
+    #[pyo3(signature = (traj_id, frame_idx=None, index_min=None, index_max=None))]
     fn read_arrays(
         &self,
         py: Python<'_>,
         traj_id: u64,
         frame_idx: Option<u32>,
+        index_min: Option<u32>,
+        index_max: Option<u32>,
     ) -> PyResult<Py<PyDict>> {
+        if frame_idx.is_some() && (index_min.is_some() || index_max.is_some()) {
+            return Err(PyRuntimeError::new_err(
+                "frame_idx and index_min/index_max are different reads",
+            ));
+        }
         let mut block = py
             .detach(|| {
-                self.inner
-                    .read_materialized(traj_id, frame_idx)
-                    .map_err(|e| e.to_string())
+                let result = if let Some(frame_idx) = frame_idx {
+                    self.inner.read_materialized(traj_id, Some(frame_idx))
+                } else if index_min.is_some() || index_max.is_some() {
+                    self.inner.read_materialized_span(
+                        traj_id,
+                        None,
+                        Some((index_min.unwrap_or(0), index_max.unwrap_or(u32::MAX))),
+                    )
+                } else {
+                    self.inner.read_materialized(traj_id, None)
+                };
+                result.map_err(|e| e.to_string())
             })
             .map_err(PyRuntimeError::new_err)?;
         let n_frames = block.n_frames as usize;

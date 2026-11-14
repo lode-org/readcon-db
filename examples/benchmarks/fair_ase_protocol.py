@@ -1302,8 +1302,39 @@ def prepare_cold_files(kind: str, dest: Path) -> tuple[float, str]:
     return worst, label
 
 
-def fetch_materialized(kind: str, db, op: str, mid: int):
+def range_bounds(n_frames: int) -> tuple[int, int]:
+    """Inclusive frame-index span: the middle quarter, starting at n/4."""
+    return n_frames // 4, n_frames // 2
+
+
+def metadata_bounds(n_frames: int) -> tuple[int, int]:
+    """Inclusive frame indexes of the last tenth. Energy is ``-42.5 + index``."""
+    return (9 * n_frames) // 10, n_frames - 1
+
+
+def energy_window(lo: int, hi: int) -> tuple[float, float]:
+    return -42.5 + float(lo), -42.5 + float(hi)
+
+
+def fetch_materialized(kind: str, db, op: str, mid: int, n_frames: int):
     """Arrays for one read. Both tools build them inside the clock."""
+    if op == "metadata":
+        lo, hi = metadata_bounds(n_frames)
+        emin, emax = energy_window(lo, hi)
+        if kind == "readcon-db":
+            keys = db.select(traj_id=1, energy_min=emin, energy_max=emax)
+            idx = sorted(int(key[1]) for key in keys)
+        else:
+            rows = list(db.select(f"{emin!r}<=energy<={emax!r}"))
+            idx = sorted(int(row.key_value_pairs["frame_index"]) for row in rows)
+        return {"frame_index": np.asarray(idx, dtype=np.float64)}
+    if op == "range":
+        lo, hi = range_bounds(n_frames)
+        if kind == "readcon-db":
+            return db.read_arrays(1, index_min=int(lo), index_max=int(hi))
+        rows = list(db.select(f"frame_index>={int(lo)},frame_index<={int(hi)}"))
+        rows.sort(key=lambda row: int(row.key_value_pairs["frame_index"]))
+        return materialize_ase(rows)
     if kind == "readcon-db":
         if op == "full_read":
             return db.read_arrays(1)
@@ -1314,6 +1345,12 @@ def fetch_materialized(kind: str, db, op: str, mid: int):
     else:
         rows = list(db.select(f"frame_index={int(mid)}"))
     return materialize_ase(rows)
+
+
+def assert_frame_ids(got: dict, expected: list[int]) -> None:
+    got_idx = [int(x) for x in np.asarray(got["frame_index"]).tolist()]
+    if got_idx != expected:
+        raise AssertionError((len(got_idx), got_idx[:4], expected[:4], expected[-1:]))
 
 
 def _array_digest(value) -> str:
@@ -1441,9 +1478,13 @@ def execute_insert_row(request: dict) -> dict:
         "peak_rss_bytes": vm_hwm(),
         "inner_n": inner,
         "span_s": INSERT_SPAN_S,
+        "input_bytes": int(spec.get("input_bytes") or 0),
         "log": lines,
         **summarize(values),
     }
+    med = row["median_s"]
+    row["frames_per_s"] = (spec["n_frames"] / med) if med else 0.0
+    row["megabytes_per_s"] = (row["input_bytes"] / med / 1e6) if med else 0.0
     return row
 
 
@@ -1472,8 +1513,16 @@ def _execute_read_row(request: dict) -> dict:
     dest = Path(request["dest"])
     n_frames = int(request["n_frames"])
     mid = n_frames // 2
-    expected = request["digests"]
+    expected = request.get("digests")
+    frame_ids = request.get("frame_indices")
     lines = []
+
+    def check_got(got) -> None:
+        if op == "metadata":
+            assert_frame_ids(got, frame_ids)
+        else:
+            assert_digests(got, expected)
+
     samples = []
     cold_meta = []
     holder = {}
@@ -1491,8 +1540,8 @@ def _execute_read_row(request: dict) -> dict:
 
     if cache == "warm":
         holder["db"] = open_kind()
-        fetch_materialized(kind, holder["db"], op, mid)
-        assert_digests(fetch_materialized(kind, holder["db"], op, mid), expected)
+        fetch_materialized(kind, holder["db"], op, mid, n_frames)
+        check_got(fetch_materialized(kind, holder["db"], op, mid, n_frames))
         lines.append(
             f"warmup protocol=fair workload={name} op={op} tool={kind} cache={cache}"
         )
@@ -1500,8 +1549,8 @@ def _execute_read_row(request: dict) -> dict:
         prepare()
         db = open_kind()
         try:
-            got = fetch_materialized(kind, db, op, mid)
-            assert_digests(got, expected)
+            got = fetch_materialized(kind, db, op, mid, n_frames)
+            check_got(got)
         finally:
             close_reader(kind, db)
             db = None
@@ -1527,20 +1576,20 @@ def _execute_read_row(request: dict) -> dict:
             labels.append((frac, label))
 
         def teardown(state=state) -> None:
-            assert_digests(state["got"], expected)
+            check_got(state["got"])
             close_reader(kind, state["db"])
             state["db"] = None
             state["got"] = None
 
         def run_timed(state=state) -> None:
-            state["got"] = fetch_materialized(kind, state["db"], op, mid)
+            state["got"] = fetch_materialized(kind, state["db"], op, mid, n_frames)
 
         if cache == "cold-open":
             # The open is inside the clock, so neither tool keeps readahead
             # from an open that ran before the timer.
             def run_open(state=state) -> None:
                 state["db"] = open_kind()
-                state["got"] = fetch_materialized(kind, state["db"], op, mid)
+                state["got"] = fetch_materialized(kind, state["db"], op, mid, n_frames)
 
             stat = sample_operation(run_open, setup, teardown)
             resident = max(frac for frac, _label in labels)
@@ -1586,10 +1635,10 @@ def _execute_read_row(request: dict) -> dict:
         else:
 
             def run_warm(state=state) -> None:
-                state["got"] = fetch_materialized(kind, holder["db"], op, mid)
+                state["got"] = fetch_materialized(kind, holder["db"], op, mid, n_frames)
 
             def check_warm(state=state) -> None:
-                assert_digests(state["got"], expected)
+                check_got(state["got"])
                 state["got"] = None
 
             stat = sample_operation(run_warm, teardown=check_warm)
@@ -1739,6 +1788,21 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
                 "n_frames": spec["n_frames"],
                 "geometry_only": True,
             }
+        elif spec["n_atoms"] > 1000:
+            # A ConFrame per 100k-atom frame is the object graph the fair
+            # insert stopped building. The text and the ASE atoms are the
+            # two native inputs, from the same arrays.
+            text, records = build_text_records(spec["n_frames"], spec["n_atoms"])
+            atoms_list, _ase_records = build_atom_records(
+                spec["n_frames"], spec["n_atoms"]
+            )
+            payload = {
+                "text": text,
+                "atoms": atoms_list,
+                "records": records,
+                "n_frames": spec["n_frames"],
+                "geometry_only": False,
+            }
         else:
             text, atoms_list, records = build_records(spec["n_frames"], spec["n_atoms"])
             stamp_frame_index(atoms_list)
@@ -1751,9 +1815,17 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
             }
         log.line(f"workload {name} bytes={len(text)} build_done")
         # One fresh process per row, so peak RSS does not carry over.
+        # Both tools report throughput against this same CON text length.
+        insert_spec = dict(spec)
+        insert_spec["input_bytes"] = len(text.encode())
         for kind in ("readcon-db", "ase.db"):
             row = spawn_row(
-                {"what": "insert", "kind": kind, "spec": spec, "work": str(work)}
+                {
+                    "what": "insert",
+                    "kind": kind,
+                    "spec": insert_spec,
+                    "work": str(work),
+                }
             )
             for line in row.pop("log"):
                 log.line(line)
@@ -1768,18 +1840,27 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
             gc.collect()
             stored[kind] = dest
         mid = spec["n_frames"] // 2
-        ops = ("full_read", "selected")
+        ops = spec.get("ops") or ("full_read", "selected")
         caches = ("cold", "warm")
         if spec["name"] == "frames-100":
             caches = ("cold", "warm-after-open", "cold-open", "warm")
         for cache in caches:
             for op in ops:
-                used = (
-                    payload["records"]
-                    if op == "full_read"
-                    else [payload["records"][mid]]
-                )
-                digests = digests_for_records(used)
+                lo, hi = range_bounds(spec["n_frames"])
+                meta_lo, meta_hi = metadata_bounds(spec["n_frames"])
+                if op == "full_read":
+                    used = payload["records"]
+                elif op == "range":
+                    used = payload["records"][lo : hi + 1]
+                elif op == "selected":
+                    used = [payload["records"][mid]]
+                else:
+                    used = []
+                request_extra = {}
+                if op == "metadata":
+                    request_extra["frame_indices"] = list(range(meta_lo, meta_hi + 1))
+                else:
+                    request_extra["digests"] = digests_for_records(used)
                 for kind in ("readcon-db", "ase.db"):
                     row = spawn_row(
                         {
@@ -1791,7 +1872,7 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
                             "dest": str(stored[kind]),
                             "n_frames": spec["n_frames"],
                             "n_atoms": spec["n_atoms"],
-                            "digests": digests,
+                            **request_extra,
                         }
                     )
                     for line in row.pop("log"):
@@ -1865,10 +1946,14 @@ def write_markdown(
         "group at a time and drops that scratch after the put; the",
         "transaction still commits once. Six samples are kept. A row",
         "whose IQR/median is still above 0.05 takes six more. p90 is",
-        "the type-7 90th percentile of those means.",
+        "the type-7 90th percentile of those means. A range read",
+        "materializes an inclusive frame-index span. A metadata read",
+        "returns the frame indexes whose energy is in the last tenth.",
+        "Ingest rows report frames/s and MB/s of the CON text. disk B",
+        "is the database file after that ingest.",
         "",
-        "| workload | op | cache | tool | n | median s | p90 s | IQR s | IQR/median | disk B | peak RSS B | fidelity |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| workload | op | cache | tool | n | median s | p90 s | IQR s | IQR/median | frames/s | MB/s | disk B | peak RSS B | fidelity |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in fair_rows:
         ratio = row["iqr_s"] / row["median_s"] if row["median_s"] else 0.0
@@ -1877,9 +1962,12 @@ def write_markdown(
                 np.asarray(row["samples_s"], dtype=np.float64), 90, method="linear"
             )
         )
+        frames_s = row.get("frames_per_s")
+        mb_s = row.get("megabytes_per_s")
         lines.append(
             f"| {row['workload']} | {row['op']} | {row['cache']} | {row['tool']} | {row['n']} | "
             f"{fmt(row['median_s'])} | {fmt(p90)} | {fmt(row['iqr_s'])} | {ratio:.3f} | "
+            f"{fmt(frames_s) if frames_s else ''} | {fmt(mb_s) if mb_s else ''} | "
             f"{row.get('disk_bytes', 0)} | {row.get('peak_rss_bytes', 0)} | "
             f"{row.get('fidelity', 'exact')} |"
         )
@@ -1926,6 +2014,18 @@ def workloads_for(mode: str) -> list[dict]:
         ]
     if mode in ("db10", "db11", "db12", "db14"):
         return [{"name": "frames-100", "n_frames": 100, "n_atoms": 8}]
+    if mode == "db15":
+        ops = ("full_read", "selected", "range", "metadata")
+        return [
+            {"name": "frames-1000", "n_frames": 1000, "n_atoms": 8, "ops": ops},
+            {"name": "frames-10000", "n_frames": 10_000, "n_atoms": 8, "ops": ops},
+            {
+                "name": "traj-100k",
+                "n_frames": 64,
+                "n_atoms": 100_000,
+                "ops": ops,
+            },
+        ]
     if mode == "smoke":
         return [
             paper,
@@ -1954,6 +2054,7 @@ def main() -> None:
             "db11",
             "db12",
             "db14",
+            "db15",
         ),
         default="all",
     )
