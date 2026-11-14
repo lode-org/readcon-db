@@ -48,8 +48,48 @@ def _json_hostname(line: str) -> str | None:
     return after[1:end]
 
 
+def replacement_directory(record_dir: Path, root: Path) -> Path | None:
+    """The directory named by ``SUPERSEDED.md``, when that directory exists.
+
+    A note that names a missing path does not hide the record.
+    """
+    note = record_dir / "SUPERSEDED.md"
+    if not note.is_file():
+        return None
+    named = None
+    for line in note.read_text(encoding="utf-8", errors="replace").splitlines():
+        text = line.strip()
+        prefix = "Replacement:"
+        if text.startswith(prefix):
+            named = text[len(prefix) :].strip()
+            break
+    if not named:
+        return None
+    dest = (root / named).resolve()
+    try:
+        dest.relative_to(root.resolve())
+    except ValueError:
+        return None
+    if not dest.is_dir():
+        return None
+    return dest
+
+
+def _superseded(path: Path, root: Path) -> bool:
+    for parent in path.parents:
+        if parent == root:
+            break
+        if replacement_directory(parent, root) is not None:
+            return True
+    return False
+
+
 def vm_host_hits(root: Path) -> list[str]:
-    """Benchmark and bench files that name a VM host or a local path."""
+    """Benchmark and bench files that name a VM host or a local path.
+
+    A record directory is skipped only when its ``SUPERSEDED.md`` names a
+    replacement directory that exists.
+    """
     hits = []
     host_line = "host " + "cursor"
     marked = "`" + "cursor" + "`"
@@ -63,6 +103,8 @@ def vm_host_hits(root: Path) -> list[str]:
             if not path.is_file() or path.suffix not in {".py", ".md", ".log", ".json"}:
                 continue
             if "__pycache__" in path.parts or path.name.startswith("test_"):
+                continue
+            if _superseded(path, root):
                 continue
             text = path.read_text(encoding="utf-8", errors="replace")
             named = False

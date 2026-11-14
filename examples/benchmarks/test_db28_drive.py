@@ -36,22 +36,21 @@ def test_driver_writes_the_record_layout(tmp_path) -> None:
     assert host["hostname"] == "host"
 
 
-# Phase 2 regenerates these and deletes them in the records commit.
-# Until that commit, these paths are the only hits the tree may contain.
-LEGACY_HITS = {
-    *(f"bench/db{number}/campaign.log" for number in (*range(1, 17), 18)),
-    "bench/db17/ab.json",
-    "bench/db28/ab.json",
-    "bench/db28/host.json",
-}
-
-
 def test_fresh_fair_logs_use_the_neutral_label() -> None:
     fresh = drv.REPO / "examples" / "benchmarks" / "results" / "fair-db29"
     for name in ("campaign.log", "insert-span.log", "insert-validate.log"):
         assert (fresh / name).read_text().splitlines()[2] == "host host"
-    extra = set(drv.vm_host_hits(drv.REPO)) - LEGACY_HITS
-    assert not extra
+
+
+def test_superseded_directory_needs_a_real_replacement(tmp_path) -> None:
+    old = tmp_path / "bench" / "db1"
+    old.mkdir(parents=True)
+    (old / "campaign.log").write_text('{"corpus": "' + "/" + "tmp" + '/ab"}\n')
+    (old / "SUPERSEDED.md").write_text("Replacement: bench/db30/missing\n")
+    assert drv.vm_host_hits(tmp_path) == ["bench/db1/campaign.log"]
+    (tmp_path / "bench" / "db30" / "db1-rerun").mkdir(parents=True)
+    (old / "SUPERSEDED.md").write_text("Replacement: bench/db30/db1-rerun\n")
+    assert drv.vm_host_hits(tmp_path) == []
 
 
 def test_vm_host_hits_reads_logs_notes_and_json(tmp_path) -> None:
