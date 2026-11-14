@@ -16,11 +16,16 @@ child exits. fsync latency then tracks the other store's writeback.
 This script keeps every sample. Each sample unlinks and creates the
 database file, both stores use one write transaction and one commit
 fsync, parsing stays outside the timer, and one warmup is discarded.
-Reads are a separate cold series and a warm series. Cold closes the
-store, advises ``DONTNEED``, and checks residency with ``mincore``.
-The advice is retried until no page is resident. A sample that stays
-resident is labeled and left out of the cold median. n = 6, serial,
-type-7 median and IQR. Every stored field is checked; a mismatch aborts.
+A long readcon-db trajectory still puts one 64-frame group at a time
+and drops that group's cooked blob and decompressed text after the
+put. Those puts share the one transaction, so a failed insert leaves
+no frame visible. Reads are a cold series, and on frames-100 also a
+cold-open series, then a warm series. Cold advises ``DONTNEED`` and
+checks ``mincore`` is 0, then opens outside the clock and times the
+query. cold-open does the same advice outside the clock and times the
+open plus the query, for both tools. A sample that stays resident is
+labeled and left out of the cold median. n = 6, serial, type-7 median
+and IQR. Every stored field is checked; a mismatch aborts.
 """
 
 from __future__ import annotations
@@ -616,7 +621,7 @@ def header_lines() -> list[str]:
         f"samples {N_SAMPLES} (12 when IQR/median exceeds {EXTEND_AT})",
         "quantile type-7 (numpy percentile method=linear)",
         "order serial, tools alternate each sample index, no parallel samples",
-        "timer: open, directory fsync, fadvise, mincore, the element-wise check, and the collector stay outside; the clock covers the commit or the query",
+        "timer: directory fsync, fadvise, mincore, the element-wise check, and the collector stay outside; the clock covers the commit, or the query; cold-open also times the open",
         "timer_short: a read shorter than 50 ms is repeated until the timed spans add to 50 ms; the sample is that mean",
         "timer_insert: a commit shorter than 2 s is repeated until the timed spans add to 2 s, because commit fsyncs stay correlated past 250 ms",
         "page_cache insert: unlink and create the database file outside the timer, one commit fsync inside",
@@ -624,8 +629,10 @@ def header_lines() -> list[str]:
         "page_cache read_cold_label: a sample that stays resident is labeled and omitted from the cold median",
         "page_cache drop_caches: /proc/sys/vm/drop_caches is not writable here, so it is not used",
         "page_cache read_warm: one warmup read on the open store, then time the read",
-        "lmdb MDB_NOSYNC unset, fsync on commit; a trajectory longer than 64 frames commits one group at a time",
-        "ase backend sqlite journal_mode=DELETE synchronous=FULL, one commit fsync",
+        "lmdb MDB_NOSYNC unset, one write transaction and one commit fsync for the whole insert; a long trajectory puts one 64-frame group at a time and drops that group's cooked blob and decompressed text after the put",
+        "ase one write transaction, journal_mode=DELETE, synchronous=FULL, one commit fsync; ASE's 5000-row commit is disabled",
+        "cold: page cache dropped and mincore 0 outside the clock, then open outside the clock, then the query",
+        "cold-open: page cache dropped outside the clock, then open and the query inside the clock, both tools",
         "validation element-wise outside the timer; a mismatch aborts the run",
     ]
 
@@ -1095,19 +1102,29 @@ def check_materialized(got: dict, records: list[dict]) -> None:
     cell = got["cell"]
     forces = got.get("forces")
     for i, rec in enumerate(records):
-        if _frame_at(pos, i, n_frames).tobytes() != np.asarray(rec["positions"]).tobytes():
+        if (
+            _frame_at(pos, i, n_frames).tobytes()
+            != np.asarray(rec["positions"]).tobytes()
+        ):
             raise AssertionError("positions")
-        if _frame_at(masses, i, n_frames).tobytes() != np.asarray(rec["masses"]).tobytes():
+        if (
+            _frame_at(masses, i, n_frames).tobytes()
+            != np.asarray(rec["masses"]).tobytes()
+        ):
             raise AssertionError("masses")
         got_z = _frame_at(numbers, i, n_frames).astype(np.uint32, copy=False)
-        exp_z = np.array([atomic_numbers[sym] for sym in rec["symbols"]], dtype=np.uint32)
+        exp_z = np.array(
+            [atomic_numbers[sym] for sym in rec["symbols"]], dtype=np.uint32
+        )
         if got_z.tobytes() != exp_z.tobytes():
             raise AssertionError("numbers")
         got_c = _frame_at(constraints, i, n_frames)
         if rec.get("constraints") is None:
             if np.any(got_c):
                 raise AssertionError("constraints")
-        elif got_c.tobytes() != np.asarray(rec["constraints"], dtype=np.uint8).tobytes():
+        elif (
+            got_c.tobytes() != np.asarray(rec["constraints"], dtype=np.uint8).tobytes()
+        ):
             raise AssertionError("constraints")
         got_v = _frame_at(velocities, i, n_frames)
         if rec.get("velocities") is None:
@@ -1120,7 +1137,10 @@ def check_materialized(got: dict, records: list[dict]) -> None:
         if rec.get("forces") is not None:
             if forces is None:
                 raise AssertionError("forces missing")
-            if _frame_at(forces, i, n_frames).tobytes() != np.asarray(rec["forces"]).tobytes():
+            if (
+                _frame_at(forces, i, n_frames).tobytes()
+                != np.asarray(rec["forces"]).tobytes()
+            ):
                 raise AssertionError("forces")
     energy = np.asarray(got["energy"], dtype=np.float64)
     for i, rec in enumerate(records):
@@ -1472,7 +1492,10 @@ def execute_read_row(request: dict) -> dict:
         def setup(labels=labels, state=state) -> None:
             frac, label = prepare()
             labels.append((frac, label))
-            state["db"] = open_kind()
+            # cold-open times the open. Opening here would fault pages
+            # before the clock and then open a second handle inside it.
+            if cache != "cold-open":
+                state["db"] = open_kind()
 
         def teardown(state=state) -> None:
             assert_digests(state["got"], expected)
@@ -1485,7 +1508,32 @@ def execute_read_row(request: dict) -> dict:
         def run_timed(state=state) -> None:
             state["got"] = fetch_materialized(kind, state["db"], op, mid)
 
-        if cache == "cold":
+        if cache == "cold-open":
+            # The open is inside the clock, so neither tool keeps readahead
+            # from an open that ran before the timer.
+            def run_open(state=state) -> None:
+                state["db"] = open_kind()
+                state["got"] = fetch_materialized(kind, state["db"], op, mid)
+
+            stat = sample_operation(run_open, setup, teardown)
+            resident = max(frac for frac, _label in labels)
+            cold_label = (
+                "verified"
+                if all(label == "verified" for _frac, label in labels)
+                else "resident"
+            )
+            cold_meta.append(
+                {
+                    "resident_fraction": resident,
+                    "cold_label": cold_label,
+                    "seconds": stat["seconds"],
+                    "inner_n": stat["inner_n"],
+                }
+            )
+            if cold_label == "verified":
+                samples.append(stat["seconds"])
+            extra = f" resident_fraction={resident:.6f} cold_label={cold_label}"
+        elif cache == "cold":
             stat = sample_operation(run_timed, setup, teardown)
             resident = max(frac for frac, _label in labels)
             cold_label = (
@@ -1541,7 +1589,7 @@ def execute_read_row(request: dict) -> dict:
         "log": lines,
         **summarize(used),
     }
-    if cache == "cold":
+    if cache in ("cold", "cold-open"):
         row["cold_verified_n"] = len(samples)
         row["cold_samples"] = cold_meta
         row["inner_n"] = [item["inner_n"] for item in cold_meta]
@@ -1690,7 +1738,10 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
             stored[kind] = dest
         mid = spec["n_frames"] // 2
         ops = ("full_read", "selected")
-        for cache in ("cold", "warm"):
+        caches = ("cold", "warm")
+        if spec["name"] == "frames-100":
+            caches = ("cold", "cold-open", "warm")
+        for cache in caches:
             for op in ops:
                 used = (
                     payload["records"]
@@ -1774,20 +1825,30 @@ def write_markdown(
         "db5 timed only the sqlite fetch, which is why its 1M-atom warm",
         "full read was 0.0166 s against db4's 0.226 s. Open, directory",
         "fsync, fadvise, mincore, and the field check stay outside the",
-        "clock. Each row is its own process. A short read repeats to 50 ms",
-        "and a short commit to 2 s. Six samples are kept. A row whose",
-        "IQR/median is still above 0.05 takes six more. frames-100",
-        "selected cold stays wider than that: its timed query mixes a",
-        "cached call with a fault, and that mix changes between samples.",
+        "clock. cold-open times the open and the query together, for",
+        "both tools, so neither keeps readahead from an open outside",
+        "the clock. The cold row still opens outside the clock. Each",
+        "row is its own process. A short read repeats to 50 ms and a",
+        "short commit to 2 s. Both inserts are one transaction and one",
+        "commit fsync. A long readcon-db trajectory puts one 64-frame",
+        "group at a time and drops that scratch after the put; the",
+        "transaction still commits once. Six samples are kept. A row",
+        "whose IQR/median is still above 0.05 takes six more. p90 is",
+        "the type-7 90th percentile of those means.",
         "",
-        "| workload | op | cache | tool | n | median s | IQR s | IQR/median | disk B | peak RSS B | fidelity |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| workload | op | cache | tool | n | median s | p90 s | IQR s | IQR/median | disk B | peak RSS B | fidelity |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in fair_rows:
         ratio = row["iqr_s"] / row["median_s"] if row["median_s"] else 0.0
+        p90 = float(
+            np.percentile(
+                np.asarray(row["samples_s"], dtype=np.float64), 90, method="linear"
+            )
+        )
         lines.append(
             f"| {row['workload']} | {row['op']} | {row['cache']} | {row['tool']} | {row['n']} | "
-            f"{fmt(row['median_s'])} | {fmt(row['iqr_s'])} | {ratio:.3f} | "
+            f"{fmt(row['median_s'])} | {fmt(p90)} | {fmt(row['iqr_s'])} | {ratio:.3f} | "
             f"{row.get('disk_bytes', 0)} | {row.get('peak_rss_bytes', 0)} | "
             f"{row.get('fidelity', 'exact')} |"
         )
@@ -1826,6 +1887,12 @@ def workloads_for(mode: str) -> list[dict]:
             {"name": "frames-100", "n_frames": 100, "n_atoms": 8},
             {"name": "frames-10000", "n_frames": 10_000, "n_atoms": 8},
         ]
+    if mode == "db9":
+        return [
+            {"name": "atoms-1000000", "n_frames": 1, "n_atoms": 1_000_000},
+            {"name": "frames-10000", "n_frames": 10_000, "n_atoms": 8},
+            {"name": "frames-100", "n_frames": 100, "n_atoms": 8},
+        ]
     if mode == "smoke":
         return [
             paper,
@@ -1842,7 +1909,7 @@ def main() -> None:
     )
     ap.add_argument(
         "--mode",
-        choices=("all", "paper", "ladder", "smoke", "inserts", "db8"),
+        choices=("all", "paper", "ladder", "smoke", "inserts", "db8", "db9"),
         default="all",
     )
     ap.add_argument("--self-check", action="store_true")
@@ -1887,6 +1954,34 @@ def main() -> None:
         "head": git_head(),
     }
     (args.out / "campaign.json").write_text(json.dumps(payload, indent=2) + "\n")
+    noise = {}
+    for row in fair_rows:
+        if (
+            row["workload"] == "frames-100"
+            and row["op"] == "selected"
+            and row["cache"]
+            in (
+                "cold",
+                "cold-open",
+            )
+        ):
+            samples = row["samples_s"]
+            noise[f"{row['tool']}:{row['cache']}"] = {
+                "n": row["n"],
+                "median_s": row["median_s"],
+                "p90_s": float(
+                    np.percentile(
+                        np.asarray(samples, dtype=np.float64), 90, method="linear"
+                    )
+                ),
+                "iqr_s": row["iqr_s"],
+                "iqr_over_median": (row["iqr_s"] / row["median_s"])
+                if row["median_s"]
+                else None,
+                "samples_s": samples,
+            }
+    if noise:
+        (args.out / "noise.json").write_text(json.dumps(noise, indent=2) + "\n")
     write_markdown(args.out / "RESULTS.md", published, paper_local, fair_rows)
     print(f"wrote {args.out / 'RESULTS.md'}")
 

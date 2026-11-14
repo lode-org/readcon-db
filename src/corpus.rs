@@ -39,6 +39,31 @@ use crate::topology::{
 /// corpus maps at least twice `data.mdb`, so a database created under the
 /// old 2 GiB default still opens. The map is address space, not disk.
 pub const DEFAULT_MAP_SIZE: usize = 8 * 1024 * 1024;
+
+// Test hook: fail a batched insert after this many groups have been put,
+// before the single commit. `0` disables it. The trigger clears itself.
+#[cfg(test)]
+thread_local! {
+    static FAIL_AFTER_GROUPS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn testing_fail_after_groups(n: u32) {
+    FAIL_AFTER_GROUPS.with(|cell| cell.set(n));
+}
+
+#[cfg(test)]
+fn testing_fail_this_group(groups_done: u32) -> bool {
+    FAIL_AFTER_GROUPS.with(|cell| {
+        let stop = cell.get();
+        if stop > 0 && groups_done >= stop {
+            cell.set(0);
+            true
+        } else {
+            false
+        }
+    })
+}
 /// Environment variable that overrides [`DEFAULT_MAP_SIZE`]. Accepts a byte
 /// count with an optional `K`, `M`, `G` or `T` suffix (powers of 1024).
 pub const MAP_SIZE_ENV: &str = "READCON_DB_MAP_SIZE";
@@ -1622,9 +1647,11 @@ impl ConCorpus {
     ) -> Result<u32> {
         let source = source.into();
         Self::species_counts_fit(file_contents)?;
-        // A long trajectory is committed one zstd group at a time. Holding
-        // every frame's cooked blob and its decompressed text until a single
-        // commit made a 10^4-frame insert resident far past ASE.
+        // A long trajectory is put one zstd group at a time inside one write
+        // transaction. The group's cooked blob and decompressed text are
+        // dropped after the put. LMDB's dirty pages are the copy that
+        // survives until the single commit. A failed insert aborts that
+        // transaction, so no frame is visible.
         if file_contents.len() > 512 * 1024 {
             let spans = readcon_core::index_proj::frame_byte_spans_skip(file_contents)
                 .map_err(|e| Error::Parse(e.to_string()))?;
@@ -1638,7 +1665,11 @@ impl ConCorpus {
         self.commit_prepared(traj_id, &mut prepared, source, false, self.compress_on())
     }
 
-    /// Cook, compress, and commit [`GROUP_LEN`] frames, then drop them.
+    /// Cook and put [`GROUP_LEN`] frames, drop that scratch, then the next group.
+    ///
+    /// One write transaction covers the trajectory. Dropping `prepared` frees
+    /// the cooked blob and the decompressed group text. The bytes just put
+    /// live in the transaction's dirty pages until commit.
     fn append_spans_batched(
         &self,
         traj_id: TrajId,
@@ -1648,66 +1679,57 @@ impl ConCorpus {
     ) -> Result<u32> {
         let compress = self.compress_on();
         let batch = crate::frame_codec::GROUP_LEN as usize;
-        let mut next = 0u32;
-        for chunk in spans.chunks(batch) {
-            let mut prepared = Vec::with_capacity(chunk.len());
-            for (offset, span) in chunk.iter().enumerate() {
-                let text = span
-                    .slice(file_contents)
-                    .ok_or_else(|| Error::Parse("frame span is not valid UTF-8".into()))?;
-                let frame_idx = next
-                    + u32::try_from(offset).map_err(|_| Error::Parse("too many frames".into()))?;
-                let (facts, cooked) = crate::span_columns::project_frame_cooked(text.as_bytes())?;
-                let fk = FrameKey { traj_id, frame_idx };
-                prepared.push(Self::build_index_from_facts(
-                    fk, &facts, text, compress, cooked, None,
-                )?);
-            }
-            if next == 0 {
-                self.commit_prepared(traj_id, &mut prepared, source.clone(), false, compress)?;
-            } else {
-                self.commit_extend_prepared(traj_id, &mut prepared, next)?;
-            }
-            next +=
-                u32::try_from(chunk.len()).map_err(|_| Error::Parse("too many frames".into()))?;
-        }
-        Ok(next)
-    }
-
-    /// Append an already-grouped batch onto a trajectory this process just created.
-    fn commit_extend_prepared(
-        &self,
-        traj_id: TrajId,
-        prepared: &mut [PreparedIndexPuts],
-        start_idx: u32,
-    ) -> Result<u32> {
-        if self.compress_on() {
-            Self::group_prepared(prepared)?;
-        }
-        let input_bytes = prepared_bytes(prepared);
+        let n_frames =
+            u32::try_from(spans.len()).map_err(|_| Error::Parse("too many frames".into()))?;
+        // Cooked columns sit beside the text, so reserve about twice the file.
+        let input_bytes = file_contents.len().saturating_mul(2);
         self.with_write(input_bytes, |wtxn| {
+            let mut next = 0u32;
+            #[cfg(test)]
+            let mut groups = 0u32;
+            for chunk in spans.chunks(batch) {
+                let mut prepared = Vec::with_capacity(chunk.len());
+                for (offset, span) in chunk.iter().enumerate() {
+                    let text = span
+                        .slice(file_contents)
+                        .ok_or_else(|| Error::Parse("frame span is not valid UTF-8".into()))?;
+                    let frame_idx = next
+                        + u32::try_from(offset)
+                            .map_err(|_| Error::Parse("too many frames".into()))?;
+                    let (facts, cooked) =
+                        crate::span_columns::project_frame_cooked(text.as_bytes())?;
+                    let fk = FrameKey { traj_id, frame_idx };
+                    prepared.push(Self::build_index_from_facts(
+                        fk, &facts, text, compress, cooked, None,
+                    )?);
+                }
+                if compress {
+                    Self::group_prepared(&mut prepared)?;
+                }
+                for row in &prepared {
+                    self.put_index_puts(wtxn, row)?;
+                }
+                drop(prepared);
+                #[cfg(test)]
+                {
+                    groups += 1;
+                    if testing_fail_this_group(groups) {
+                        return Err(Error::Message("injected insert failure".into()));
+                    }
+                }
+                next += u32::try_from(chunk.len())
+                    .map_err(|_| Error::Parse("too many frames".into()))?;
+            }
             let tid_key = traj_id.to_be_bytes();
-            let live: TrajMeta = self
-                .traj_meta
-                .get(wtxn, &tid_key[..])?
-                .map(serde_json::from_str)
-                .transpose()?
-                .ok_or_else(|| Error::Message(format!("trajectory {traj_id} is missing")))?;
-            if live.n_frames != start_idx {
-                return Err(Error::Message(format!(
-                    "concurrent extend race on traj {traj_id}: expected start {start_idx}, live {}",
-                    live.n_frames
-                )));
+            if let Some(existing) = self.traj_meta.get(wtxn, &tid_key[..])? {
+                let meta: TrajMeta = serde_json::from_str(existing)?;
+                return Err(Error::TrajExists(traj_id, meta.n_frames));
             }
-            for p in prepared.iter() {
-                self.put_index_puts(wtxn, p)?;
-            }
-            let n_frames = prepared
-                .last()
-                .map(|p| p.fk.frame_idx + 1)
-                .unwrap_or(start_idx);
-            let mut meta = live;
-            meta.n_frames = n_frames;
+            let meta = TrajMeta {
+                n_frames,
+                source: source.clone(),
+                ..TrajMeta::default()
+            };
             self.traj_meta
                 .put(wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
             Ok(n_frames)
@@ -3907,6 +3929,34 @@ impl<'a> IngestSession<'a> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn failed_batched_insert_leaves_no_visible_frames() {
+        let one = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let mut text = String::new();
+        let mut copies = 0usize;
+        while text.len() <= 512 * 1024 || copies <= crate::frame_codec::GROUP_LEN as usize {
+            text.push_str(&one);
+            if !text.ends_with('\n') {
+                text.push('\n');
+            }
+            copies += 1;
+        }
+        let spans = readcon_core::index_proj::frame_byte_spans_skip(&text).unwrap();
+        assert!(spans.len() > crate::frame_codec::GROUP_LEN as usize);
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        testing_fail_after_groups(1);
+        let err = db.append_trajectory_str(1, &text, "partial").unwrap_err();
+        assert!(err.to_string().contains("injected"), "{err}");
+        assert!(
+            db.list_frame_keys().unwrap().is_empty(),
+            "aborted insert must not publish a frame"
+        );
+        let n = db.append_trajectory_str(1, &text, "full").unwrap();
+        assert_eq!(n as usize, spans.len());
+        assert_eq!(db.list_frame_keys().unwrap().len(), spans.len());
+    }
 
     fn fixture(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))

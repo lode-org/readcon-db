@@ -29,17 +29,26 @@ does `select`, then `toatoms()`, and reads masses, atomic numbers,
 velocities, the cell, and forces from that object. The element-wise
 check of those arrays is outside the clock. An insert's clock is the
 commit only: the CON text or the ASE atoms are built before it, and the
-check does not build a second per-atom frame.
+check does not build a second per-atom frame. Both tools use one write
+transaction and one commit fsync. ASE is SQLite `journal_mode=DELETE`,
+`synchronous=FULL`, and its 5000-row commit is off. A readcon-db
+trajectory longer than 64 frames puts one zstd group at a time and
+drops that group's cooked blob and decompressed text after the put.
+Those puts share the one transaction. LMDB's dirty pages hold the
+bytes until that commit. A failed insert aborts the transaction, so
+no frame from it is visible.
 
 A cold read drops the page cache and checks `mincore` is 0 before the
-open. The open stays outside the clock. For a corpus under 1 MiB the
-query itself then `posix_fadvise(WILLNEED)`s `data.mdb` and
-`madvise(WILLNEED)`s the cooked value before copying it. That does not
-remove the per-call tail. On frames-100 selected cold the median call
-stays near 0.11 ms and p90 stays near 0.35 ms: the open's readahead
-still sometimes faults those pages before the clock. The db8 row is
-n=12, median 1.56e-4 s, p90 of those means 1.95e-4 s, IQR/median 0.251.
-The per-call distribution is `bench/db8/noise.json`.
+open. That open stays outside the clock, then the query is timed. For
+a corpus under 1 MiB the query itself then `posix_fadvise(WILLNEED)`s
+`data.mdb` and `madvise(WILLNEED)`s the cooked value before copying
+it. That does not remove the per-call tail: the open's readahead
+sometimes faults those pages before the clock. db9 therefore also
+records `cold-open`, where both tools drop the cache outside the clock
+and time the open together with the query. The db8 frames-100 selected
+cold row, open outside the clock, is n=12, median 1.56e-4 s, p90 of
+those means 1.95e-4 s, IQR/median 0.251. Its per-call distribution is
+`bench/db8/noise.json`. The db9 rows are `bench/db9/`.
 
 The CPC ingest is `db_v2.py` in readcon-core, recorded in
 `paper/cpc/logs/db.log` (2026-11-05, 40 frames of 8 Cu). readcon-db's
