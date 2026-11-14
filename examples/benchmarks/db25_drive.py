@@ -75,7 +75,11 @@ payload = {"atoms": atoms, "records": records, "n_frames": 64, "geometry_only": 
 fair.insert_fair("ase.db", payload, dest)
 print(fair.disk_bytes("ase.db", dest))
 """
-    return int(fair_drive.run_py("ase", code, [str(dest), str(fair_drive.WORKER.parent)], commits))
+    return int(
+        fair_drive.run_py(
+            "ase", code, [str(dest), str(fair_drive.WORKER.parent)], commits
+        )
+    )
 
 
 def write_results(record: dict) -> None:

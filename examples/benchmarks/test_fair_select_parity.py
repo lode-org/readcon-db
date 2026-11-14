@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Assert ASE vs readcon-db hit counts agree on shared CON (symbol Cu, natoms range)."""
+
 from pathlib import Path
 import tempfile
 import sys
@@ -12,6 +13,7 @@ from fair_campaign import (
     bench_readcon_db,
     bench_ase_db,
 )
+
 
 def main():
     assert DEFAULT_FIXTURE.is_file(), DEFAULT_FIXTURE
@@ -26,7 +28,10 @@ def main():
         assert r["hit_natoms_1_10000"] == a["hit_natoms_1_10000"] == n, (r, a)
         assert r["hit_mass_window"] == a["hit_mass_window"] == n, (r, a)
         assert r["hit_volume_window"] == a["hit_volume_window"] == n, (r, a)
-        assert r.get("energy_select_skipped") is True and a.get("energy_select_skipped") is True
+        assert (
+            r.get("energy_select_skipped") is True
+            and a.get("energy_select_skipped") is True
+        )
         assert r.get("select_energy_present_mean_s") is None
         assert a.get("select_energy_present_mean_s") is None
         print(
@@ -39,6 +44,7 @@ def main():
                 "volume": r["hit_volume_window"],
             },
         )
+
 
 if __name__ == "__main__":
     main()

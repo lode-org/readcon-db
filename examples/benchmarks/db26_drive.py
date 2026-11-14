@@ -129,7 +129,9 @@ print(n, (dest / "data.mdb").stat().st_size)
     return int(size_s)
 
 
-def start_worker(name: str, dest: Path, py_path: str, codec: str, extra: dict | None, root: Path):
+def start_worker(
+    name: str, dest: Path, py_path: str, codec: str, extra: dict | None, root: Path
+):
     env = env_base()
     env["PYTHONPATH"] = py_path
     env["PYTHONUNBUFFERED"] = "1"
@@ -247,9 +249,24 @@ def pack_shuffle(series, keys) -> dict:
         ratios = np.asarray(block["shuffle"]["samples_s"]) / np.asarray(
             block["raw"]["samples_s"]
         )
-        faster = int(np.sum(np.asarray(block["shuffle"]["samples_s"]) < np.asarray(block["raw"]["samples_s"])))
-        slower = int(np.sum(np.asarray(block["shuffle"]["samples_s"]) > np.asarray(block["raw"]["samples_s"])))
-        ties = int(np.sum(np.asarray(block["shuffle"]["samples_s"]) == np.asarray(block["raw"]["samples_s"])))
+        faster = int(
+            np.sum(
+                np.asarray(block["shuffle"]["samples_s"])
+                < np.asarray(block["raw"]["samples_s"])
+            )
+        )
+        slower = int(
+            np.sum(
+                np.asarray(block["shuffle"]["samples_s"])
+                > np.asarray(block["raw"]["samples_s"])
+            )
+        )
+        ties = int(
+            np.sum(
+                np.asarray(block["shuffle"]["samples_s"])
+                == np.asarray(block["raw"]["samples_s"])
+            )
+        )
         block["ratio_shuffle_over_raw"] = (shuffle / raw) if raw else None
         block["paired"] = {
             "median": float(np.percentile(ratios, 50, method="linear")),
@@ -275,8 +292,18 @@ def pack_tip(series, keys) -> dict:
         ratios = np.asarray(block["tip"]["samples_s"]) / np.asarray(
             block["aedcbda4"]["samples_s"]
         )
-        faster = int(np.sum(np.asarray(block["tip"]["samples_s"]) < np.asarray(block["aedcbda4"]["samples_s"])))
-        slower = int(np.sum(np.asarray(block["tip"]["samples_s"]) > np.asarray(block["aedcbda4"]["samples_s"])))
+        faster = int(
+            np.sum(
+                np.asarray(block["tip"]["samples_s"])
+                < np.asarray(block["aedcbda4"]["samples_s"])
+            )
+        )
+        slower = int(
+            np.sum(
+                np.asarray(block["tip"]["samples_s"])
+                > np.asarray(block["aedcbda4"]["samples_s"])
+            )
+        )
         ties = N - faster - slower
         block["ratio_tip_over_aedcbda4"] = (tip / base) if base else None
         block["paired"] = {
@@ -296,7 +323,9 @@ def fmt_cell(block, name) -> str:
     return f"{block[name]['median_s']:.4e} ({block[name]['iqr_s']:.4e})"
 
 
-def paired_sentence(label: str, paired: dict, left: str, faster_key: str, slower_key: str) -> str:
+def paired_sentence(
+    label: str, paired: dict, left: str, faster_key: str, slower_key: str
+) -> str:
     lo, hi = paired["ci95"]
     if hi < 1.0:
         verdict = f"The paired interval is below 1, so {left} is faster."
@@ -373,7 +402,9 @@ def write_results(record: dict) -> None:
         "There is no frame cache."
     )
     lines.append("")
-    lines.append("| op | cache | raw | shuffle-zstd | shuffle/raw | paired median | 95% CI | faster |")
+    lines.append(
+        "| op | cache | raw | shuffle-zstd | shuffle/raw | paired median | 95% CI | faster |"
+    )
     lines.append("| --- | --- | --- | --- | --- | --- | --- | --- |")
     for key, op, cache in (
         ("full_read:cold", "full_read", "cold"),
@@ -415,7 +446,9 @@ def write_results(record: dict) -> None:
         "The load average is the 1-minute value sampled before each pair."
     )
     lines.append("")
-    lines.append("| op | threads | aedcbda4 | 20a5f64e | tip/base | paired median | 95% CI | tip faster | load 1m median |")
+    lines.append(
+        "| op | threads | aedcbda4 | 20a5f64e | tip/base | paired median | 95% CI | tip faster | load 1m median |"
+    )
     lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- |")
     for threads, group, load_key in (
         ("unset", record["raw_tip_vs_aedcbda4"], "load_raw_unset"),
@@ -466,7 +499,9 @@ def write_results(record: dict) -> None:
         "high-four figure that also included positions. That mix is not repeated."
     )
     lines.append("")
-    lines.append("| columns | lanes | uncompressed | full shuffle zstd | full decode µs | high-four zstd | low-four raw | high-four decode+copy µs |")
+    lines.append(
+        "| columns | lanes | uncompressed | full shuffle zstd | full decode µs | high-four zstd | low-four raw | high-four decode+copy µs |"
+    )
     lines.append("| --- | --- | --- | --- | --- | --- | --- | --- |")
     for row in record["high_byte"]["sets"]:
         full = row["full_shuffle_decode"]
@@ -505,7 +540,10 @@ def main() -> None:
     os.environ.update(env_base())
     fair.require_pushed_commit()
     commit = fair.git_out("rev-parse", "HEAD")
-    print(f"published db26 records are {PUBLISHED_TIP}; this run records {commit}", flush=True)
+    print(
+        f"published db26 records are {PUBLISHED_TIP}; this run records {commit}",
+        flush=True,
+    )
     tree = fair.git_out("rev-parse", f"{commit}^{{tree}}")
     base_tree = fair.git_out("rev-parse", f"{BASE}^{{tree}}")
     BENCH.mkdir(parents=True, exist_ok=True)
@@ -543,7 +581,9 @@ def main() -> None:
 
     workers = {
         "raw": start_worker("raw", root / "raw", tip_py, "raw", None, root),
-        "shuffle": start_worker("shuffle", root / "shuffle", tip_py, "shuffle-zstd", None, root),
+        "shuffle": start_worker(
+            "shuffle", root / "shuffle", tip_py, "shuffle-zstd", None, root
+        ),
     }
     keys_shuffle = (
         ("cold", "full_read"),
@@ -552,7 +592,9 @@ def main() -> None:
         ("warm", "selected"),
     )
     try:
-        series, _loads = run_pairs(workers, root, keys_shuffle, shuffle_order, log, "shuffle")
+        series, _loads = run_pairs(
+            workers, root, keys_shuffle, shuffle_order, log, "shuffle"
+        )
     finally:
         stop(workers)
     shuffle_pack = pack_shuffle(series, keys_shuffle)
@@ -566,10 +608,14 @@ def main() -> None:
     keys_raw = (("warm", "full_read"), ("warm", "range"))
     workers = {
         "tip": start_worker("tip", root / "raw", tip_py, "raw", None, root),
-        "aedcbda4": start_worker("aedcbda4", root / "aedcbda4", base_py, "raw", None, root),
+        "aedcbda4": start_worker(
+            "aedcbda4", root / "aedcbda4", base_py, "raw", None, root
+        ),
     }
     try:
-        raw_series, raw_loads = run_pairs(workers, root, keys_raw, tip_order, log, "raw-unset")
+        raw_series, raw_loads = run_pairs(
+            workers, root, keys_raw, tip_order, log, "raw-unset"
+        )
     finally:
         stop(workers)
     workers = {
@@ -586,7 +632,9 @@ def main() -> None:
         ),
     }
     try:
-        one_series, one_loads = run_pairs(workers, root, keys_raw, tip_order, log, "raw-1")
+        one_series, one_loads = run_pairs(
+            workers, root, keys_raw, tip_order, log, "raw-1"
+        )
     finally:
         stop(workers)
     out = {

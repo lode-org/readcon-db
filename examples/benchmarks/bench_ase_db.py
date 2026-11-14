@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """LEGACY UNEQUAL WORKLOAD: Cu2 stand-in only. Prefer fair_campaign.py for proper comparison."""
+
 """ASE .db insert/extract/select timings — compare to readcon-db JSON."""
 from __future__ import annotations
 import json, sys, time
@@ -16,10 +17,17 @@ except ImportError:
 # Minimal CON-like structures without readcon-core Python: build Atoms from known tiny_cuh2 geometry
 # For fairness use same N frames as bench files — replicate one Atoms N times.
 
+
 def make_atoms():
     # 2 Cu + H-like from tiny fixture pattern — use 2 Cu only for speed match order of magnitude
-    a = Atoms("Cu2", positions=[[0.64, 0.90, 0.0], [3.20, 0.90, 0.0]], cell=[15.35, 21.70, 100.0], pbc=True)
+    a = Atoms(
+        "Cu2",
+        positions=[[0.64, 0.90, 0.0], [3.20, 0.90, 0.0]],
+        cell=[15.35, 21.70, 100.0],
+        pbc=True,
+    )
     return a
+
 
 def bench_one(n_frames: int, db_path: Path) -> dict:
     if db_path.exists():
@@ -49,6 +57,7 @@ def bench_one(n_frames: int, db_path: Path) -> dict:
 
     # "Concurrent" readers — ASE sqlite often serializes; still measure threads
     import threading
+
     def reader():
         d = connect(str(db_path))
         for row in d.select():
@@ -74,9 +83,12 @@ def bench_one(n_frames: int, db_path: Path) -> dict:
         "note": "ASE Atoms Cu2 stand-in; full scan select (no symbol index)",
     }
 
+
 def main():
     root = Path(__file__).resolve().parents[2]
-    out = Path(sys.argv[1] if len(sys.argv) > 1 else root / "build" / "ase_db_bench.json")
+    out = Path(
+        sys.argv[1] if len(sys.argv) > 1 else root / "build" / "ase_db_bench.json"
+    )
     work = root / "build" / "ase_db_bench_work"
     work.mkdir(parents=True, exist_ok=True)
     results = []
@@ -86,6 +98,7 @@ def main():
         print(r)
     out.write_text(json.dumps(results, indent=2))
     print("wrote", out)
+
 
 if __name__ == "__main__":
     main()

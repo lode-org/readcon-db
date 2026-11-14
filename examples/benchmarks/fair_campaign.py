@@ -12,6 +12,7 @@ Usage:
 Emits JSON + select-parity block. Methodology is measurement-only; ASE is not the product store.
 The CPC appendix freeze lives in ``paper/cpc/freeze/``; this script does not move it.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -134,7 +135,9 @@ def bench_readcon_db(con_path: Path, n_frames: int, corpus_dir: Path) -> dict:
     select_volume_s = (time.perf_counter() - t2v) / sel_rounds
 
     # Energy timing only if corpus has energy metadata (tiny_cuh2 has none → omit, not full-scan).
-    has_energy = any(fr.energy is not None for fr in readcon.read_con(str(con_path))[:1])
+    has_energy = any(
+        fr.energy is not None for fr in readcon.read_con(str(con_path))[:1]
+    )
     select_energy_s = None
     if has_energy:
         t2c = time.perf_counter()
@@ -198,7 +201,12 @@ def bench_ase_db(con_path: Path, n_frames: int, db_path: Path) -> dict:
     with db:
         for i, atoms in enumerate(atoms_list):
             # energy as kwarg for ASE select(energy=...) when present
-            kw = {"traj_id": 1, "frame_idx": i, "mass": atoms.info["mass"], "volume": atoms.info["volume"]}
+            kw = {
+                "traj_id": 1,
+                "frame_idx": i,
+                "mass": atoms.info["mass"],
+                "volume": atoms.info["volume"],
+            }
             if "energy" in atoms.info:
                 kw["energy"] = atoms.info["energy"]
             db.write(atoms, **kw)
@@ -464,12 +472,16 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--fixture", type=Path, default=DEFAULT_FIXTURE)
     ap.add_argument("--ladder", type=str, default="10,50,100,200,500")
-    ap.add_argument("--out", type=Path, default=Path(__file__).resolve().parent / "fair_out")
+    ap.add_argument(
+        "--out", type=Path, default=Path(__file__).resolve().parent / "fair_out"
+    )
     ap.add_argument("--run-id", type=int, default=1)
     args = ap.parse_args()
     ladder = [int(x) for x in args.ladder.split(",") if x.strip()]
     payload = run_campaign(args.fixture, ladder, args.out, args.run_id)
-    write_markdown_table(payload, args.out / f"fair_db_vs_ase_table_run{args.run_id}.md")
+    write_markdown_table(
+        payload, args.out / f"fair_db_vs_ase_table_run{args.run_id}.md"
+    )
     print(
         json.dumps(
             {

@@ -250,7 +250,9 @@ print(fair.disk_bytes("ase.db", dest))
     return int(run_py("ase", code, [str(dest), str(WORKER.parent)], commits))
 
 
-def start_worker(name: str, root: Path, commits: dict[str, str], extra: dict | None = None):
+def start_worker(
+    name: str, root: Path, commits: dict[str, str], extra: dict | None = None
+):
     env = os.environ.copy()
     env["PYTHONPATH"] = prefix(name, commits)
     env["PYTHONUNBUFFERED"] = "1"
@@ -295,13 +297,16 @@ def stop(workers: dict) -> None:
 
 
 def median(values):
-    return float(np.percentile(np.asarray(values, dtype=np.float64), 50, method="linear"))
+    return float(
+        np.percentile(np.asarray(values, dtype=np.float64), 50, method="linear")
+    )
 
 
 def iqr(values):
     arr = np.asarray(values, dtype=np.float64)
     return float(
-        np.percentile(arr, 75, method="linear") - np.percentile(arr, 25, method="linear")
+        np.percentile(arr, 75, method="linear")
+        - np.percentile(arr, 25, method="linear")
     )
 
 
@@ -488,7 +493,9 @@ def write_results(record: dict, levers: dict) -> None:
         f"(IQR {scope['iqr_us']:.0f} µs)."
     )
     lines.append("")
-    lines.append("| level | window | bytes | one thread µs (IQR) | two threads µs (IQR) |")
+    lines.append(
+        "| level | window | bytes | one thread µs (IQR) | two threads µs (IQR) |"
+    )
     lines.append("| --- | --- | --- | --- | --- |")
     for row in levers["rows"]:
         lines.append(
@@ -693,14 +700,17 @@ def main() -> None:
                 row = ask(name, workers[name], "ingest", root)
                 ingest[("ingest", "insert")][name].append(row["seconds"])
                 disks[name].append(row["disk_bytes"])
-                line = f"ingest {i} {name} {row['seconds']:.6e} disk={row['disk_bytes']}"
+                line = (
+                    f"ingest {i} {name} {row['seconds']:.6e} disk={row['disk_bytes']}"
+                )
                 print(line, flush=True)
                 log.write(line + "\n")
                 log.flush()
     finally:
         stop(workers)
     workers = {
-        name: start_worker(name, root, commits, {"RAYON_NUM_THREADS": "1"}) for name in ARMS
+        name: start_worker(name, root, commits, {"RAYON_NUM_THREADS": "1"})
+        for name in ARMS
     }
     try:
         one = run_block(workers, root, ("warm",), OPS, log)
