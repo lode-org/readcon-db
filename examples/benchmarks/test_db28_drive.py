@@ -1,0 +1,34 @@
+"""The db28 driver writes the four record files."""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+pytest.importorskip("readcon")
+pytest.importorskip("readcon_db")
+
+import db28_drive as drv
+
+
+def test_driver_writes_the_record_layout(tmp_path) -> None:
+    record = drv.example_record()
+    drv.write_outputs(tmp_path, record, "commit sample\n")
+    for name in drv.OUTPUTS:
+        path = tmp_path / name
+        assert path.is_file(), name
+        assert path.stat().st_size > 0
+        assert path.read_bytes().endswith(b"\n")
+    text = (tmp_path / "RESULTS.md").read_text()
+    assert text.startswith("# db28")
+    assert "| md |" in text
+    assert "| thermal |" in text
+    assert "| lattice |" in text
+    ab = json.loads((tmp_path / "ab.json").read_text())
+    assert set(ab) >= {"commit", "tree", "host", "n", "codecs", "reads"}
+    assert set(ab["codecs"]) == {"md", "thermal", "lattice"}
+    host = json.loads((tmp_path / "host.json").read_text())
+    assert host["commit"] == record["commit"]
+    assert "hostname" in host
+    assert (tmp_path / "campaign.log").read_text() == "commit sample\n"
