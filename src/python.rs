@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use pyo3::buffer::PyBuffer;
+use pyo3::buffer::{PyBuffer, PyUntypedBuffer};
 use pyo3::exceptions::{PyIndexError, PyRuntimeError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
@@ -1247,19 +1247,17 @@ fn buffer_array<'py>(
     let kwargs = PyDict::new(py);
     kwargs.set_item("dtype", dtype)?;
     // `empty` is writable. `frombuffer` on a `bytes` object is not, and the
-    // shuffled path already returns writable arrays.
+    // shuffled path already returns writable arrays. A float64 array does not
+    // export a u8 buffer, so the copy uses the untyped view.
     let arr = np.call_method("empty", (shape_t,), Some(&kwargs))?;
-    let view = PyBuffer::<u8>::get(&arr)?;
-    let dst = view
-        .as_mut_slice(py)
-        .ok_or_else(|| PyRuntimeError::new_err("numpy array is not a writable byte buffer"))?;
-    if dst.len() != raw.len() {
+    let view = PyUntypedBuffer::get(&arr)?;
+    if view.readonly() || !view.is_c_contiguous() || view.len_bytes() != raw.len() {
         return Err(PyRuntimeError::new_err(
-            "numpy array does not match the column length",
+            "numpy array is not a writable buffer of the column length",
         ));
     }
     unsafe {
-        std::ptr::copy_nonoverlapping(raw.as_ptr(), dst.as_ptr() as *mut u8, raw.len());
+        std::ptr::copy_nonoverlapping(raw.as_ptr(), view.buf_ptr().cast::<u8>(), raw.len());
     }
     Ok(arr)
 }
