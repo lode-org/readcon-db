@@ -36,6 +36,20 @@ def test_driver_writes_the_record_layout(tmp_path) -> None:
     assert host["hostname"] == "host"
 
 
+def test_scanner_ignores_only_the_named_legacy_logs(tmp_path) -> None:
+    assert drv.host_cursor_hits(drv.REPO) == []
+    fair = tmp_path / "examples" / "benchmarks" / "results" / "fair"
+    fair.mkdir(parents=True)
+    for name in ("campaign.log", "insert-span.log", "insert-validate.log"):
+        (fair / name).write_text("host cursor\n")
+    (tmp_path / "examples" / "benchmarks" / "notes.md").write_text(
+        "Host `" + "cursor" + "`\n"
+    )
+    assert drv.host_cursor_hits(tmp_path) == ["examples/benchmarks/notes.md"]
+    for rel in drv.LEGACY_HOST_LOGS:
+        assert (drv.REPO / rel).read_text().splitlines()[2] == "host cursor"
+
+
 def test_recorded_run_refuses_n_below_12(tmp_path) -> None:
     assert drv.N >= 12
     with pytest.raises(ValueError, match="n>=12"):

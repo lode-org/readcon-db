@@ -227,7 +227,8 @@ read. Warm rows in `results/fair/RESULTS.md` stay ahead as well.
 
 ## This machine
 
-Host `cursor`, 2026-11-13, tree `c738f8dd`. Raw lines are
+2026-11-13, tree `c738f8dd`. The host line in the raw log is the VM
+hostname; see `results/fair/HOSTNAME-NOTE.md`. Raw lines are
 `results/fair/campaign.log`. The table is `results/fair/RESULTS.md`.
 
 Rerunning the published harness here gives ASE median 0.0421 s and

@@ -26,10 +26,42 @@ NEUTRAL_HOST = "host"
 
 
 def host_label(name: str) -> str:
-    """Records use this label. A machine hostname, including ``cursor``, is refused."""
+    """Records use this label. A machine hostname is refused."""
     if name != NEUTRAL_HOST:
         raise ValueError(f"refusing non-neutral host label {name!r}")
     return NEUTRAL_HOST
+
+
+# Saved fair logs. Their host line is the VM hostname. Nothing else may say so.
+LEGACY_HOST_LOGS = (
+    Path("examples/benchmarks/results/fair/campaign.log"),
+    Path("examples/benchmarks/results/fair/insert-span.log"),
+    Path("examples/benchmarks/results/fair/insert-validate.log"),
+)
+
+
+def host_cursor_hits(root: Path) -> list[str]:
+    """Files under ``examples/benchmarks`` that still name that VM host.
+
+    The only exemption is :data:`LEGACY_HOST_LOGS`.
+    """
+    base = root / "examples" / "benchmarks"
+    allowed = {(root / rel).resolve() for rel in LEGACY_HOST_LOGS}
+    hits = []
+    for path in sorted(base.rglob("*")):
+        if not path.is_file() or path.suffix not in {".py", ".md", ".log", ".json"}:
+            continue
+        if "__pycache__" in path.parts:
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        host_line = "host " + "cursor"
+        marked = "`" + "cursor" + "`"
+        named = any(
+            line.strip() == host_line or marked in line for line in text.splitlines()
+        )
+        if named and path.resolve() not in allowed:
+            hits.append(path.relative_to(root).as_posix())
+    return hits
 
 
 N = 12
