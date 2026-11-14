@@ -1,49 +1,7 @@
 //! ASE.db-competitive screening scalars — thin wrappers over
 //! [`readcon_core::index_proj`] so CON semantics live in one crate.
 
-use readcon_core::index_proj::{self, FrameIndexProjection};
-use readcon_core::types::ConFrame;
-
-pub use index_proj::{frame_cell_volume, frame_total_mass};
-
-/// Full index projection (preferred entry for prepare/reindex).
-pub fn project_frame(frame: &ConFrame) -> FrameIndexProjection {
-    FrameIndexProjection::from_frame(frame)
-}
-
-/// Explicit PBC from metadata; None if key absent (not indexed → range/match cannot succeed).
-pub fn frame_pbc_mask(frame: &ConFrame) -> Option<u8> {
-    let p = frame.header.pbc()?;
-    Some(crate::keys::pbc_mask_from_bools(p))
-}
-
-pub fn frame_time(frame: &ConFrame) -> Option<f64> {
-    project_frame(frame).time
-}
-
-pub fn frame_timestep(frame: &ConFrame) -> Option<f64> {
-    project_frame(frame).timestep
-}
-
-pub fn frame_frame_index(frame: &ConFrame) -> Option<f64> {
-    project_frame(frame).frame_index
-}
-
-pub fn frame_neb_bead(frame: &ConFrame) -> Option<f64> {
-    project_frame(frame).neb_bead
-}
-
-pub fn frame_neb_band(frame: &ConFrame) -> Option<f64> {
-    project_frame(frame).neb_band
-}
-
-pub fn frame_charge(frame: &ConFrame) -> Option<f64> {
-    project_frame(frame).charge
-}
-
-pub fn frame_magmom(frame: &ConFrame) -> Option<f64> {
-    project_frame(frame).magmom
-}
+pub use readcon_core::index_proj::{frame_cell_volume, frame_total_mass};
 
 #[cfg(test)]
 mod tests {

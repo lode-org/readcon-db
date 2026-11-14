@@ -350,11 +350,14 @@ impl PyConCorpus {
                 }
                 let mut next = 0u32;
                 let mut groups = 0u32;
+                let mut slots = Vec::new();
                 let mut put_text = |text: String| -> crate::error::Result<()> {
                     if text.is_empty() {
                         return Ok(());
                     }
-                    let nput = self.inner.put_con_group(wtxn, traj_id, next, &text)?;
+                    let nput = self
+                        .inner
+                        .put_con_group(wtxn, traj_id, next, &text, &mut slots)?;
                     drop(text);
                     next += nput;
                     groups += 1;
@@ -425,11 +428,13 @@ impl PyConCorpus {
                         put_text(text)?;
                     }
                 }
+                drop(put_text);
                 if next == 0 {
                     return Ok(0);
                 }
                 self.inner
                     .store_new_traj_meta(wtxn, traj_id, next, source)?;
+                self.inner.merge_slots(wtxn, &slots)?;
                 Ok(next)
             })
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;

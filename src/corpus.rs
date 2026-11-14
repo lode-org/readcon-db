@@ -16,10 +16,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::export_xyz::write_frame_extxyz;
-use crate::frame_scalars::{
-    frame_cell_volume, frame_charge, frame_frame_index, frame_magmom, frame_neb_band,
-    frame_neb_bead, frame_pbc_mask, frame_time, frame_timestep, frame_total_mass,
-};
 use crate::keys::{
     composition_formula, elem_count_key, elem_count_symbol_prefix, energy_bin_key, flag_key,
     fmax_bin_key, formula_key, formula_prefix, hash_frame_bytes, mass_bin_key, meta_scalar_key,
@@ -299,6 +295,10 @@ pub struct ConCorpus {
     idx_meta: Database<Bytes, Unit>,
     frame_by_hash: Database<Bytes, Bytes>,
     hash_by_frame: Database<Bytes, Bytes>,
+    /// Scalar columns for one trajectory (`traj_id` → `IXC1` blob).
+    /// Missing on a readonly open of a db15/db16/db17 file; those keep
+    /// the per-key `idx_*` tables, which [`Self::select`] still reads.
+    idx_cols: Option<Database<Bytes, Bytes>>,
     /// Optional derived SoA numerics (`FrameKey` → cooked bytes). Not authoritative.
     frames_soa: Database<Bytes, Bytes>,
     /// Unpacked small cooked groups, indexed by frame for one trajectory.
@@ -322,18 +322,6 @@ pub struct ConCorpus {
 // SAFETY: `cooked_cache` is written only in `finish_open`, before this value
 // is placed where another thread can see it. After that every access is a read.
 unsafe impl Sync for ConCorpus {}
-
-fn frame_has_forces(frame: &ConFrame) -> bool {
-    readcon_core::index_proj::frame_has_forces(frame)
-}
-
-fn frame_has_velocities(frame: &ConFrame) -> bool {
-    readcon_core::index_proj::frame_has_velocities(frame)
-}
-
-fn frame_energy(frame: &ConFrame) -> Option<f64> {
-    readcon_core::index_proj::finite_energy(frame)
-}
 
 /// Euclidean max ||F_i|| over atoms with force data; None if no forces.
 pub fn frame_fmax(frame: &ConFrame) -> Option<f64> {
@@ -924,6 +912,7 @@ impl ConCorpus {
             let hash_by_frame = env
                 .open_database(&rtxn, Some("hash_by_frame"))?
                 .ok_or_else(|| missing("hash_by_frame"))?;
+            let idx_cols = env.open_database(&rtxn, Some("idx_cols"))?;
             let frames_soa = env
                 .open_database(&rtxn, Some("frames_soa"))?
                 .ok_or_else(|| missing("frames_soa"))?;
@@ -954,6 +943,7 @@ impl ConCorpus {
                 idx_meta,
                 frame_by_hash,
                 hash_by_frame,
+                idx_cols,
                 frames_soa,
                 cooked_cache: UnsafeCell::new(CookedCache::empty()),
                 idx_topo,
@@ -979,6 +969,7 @@ impl ConCorpus {
         let idx_meta = env.create_database(&mut wtxn, Some("idx_meta"))?;
         let frame_by_hash = env.create_database(&mut wtxn, Some("frame_by_hash"))?;
         let hash_by_frame = env.create_database(&mut wtxn, Some("hash_by_frame"))?;
+        let idx_cols = env.create_database(&mut wtxn, Some("idx_cols"))?;
         let frames_soa = env.create_database(&mut wtxn, Some("frames_soa"))?;
         let idx_topo = env.create_database(&mut wtxn, Some("idx_topo"))?;
         let topo_by_frame = env.create_database(&mut wtxn, Some("topo_by_frame"))?;
@@ -1006,6 +997,7 @@ impl ConCorpus {
             idx_meta,
             frame_by_hash,
             hash_by_frame,
+            idx_cols: Some(idx_cols),
             frames_soa,
             cooked_cache: UnsafeCell::new(CookedCache::empty()),
             idx_topo: Some(idx_topo),
@@ -1193,47 +1185,112 @@ impl ConCorpus {
         })
     }
 
+    fn scalar_slot(p: &PreparedIndexPuts) -> crate::idx_cols::ScalarSlot {
+        let mut flags = 0x80u8;
+        for key in &p.flag_keys {
+            flags |= match key[0] {
+                FLAG_HAS_FORCES => 0x01,
+                FLAG_HAS_VELOCITIES => 0x02,
+                FLAG_HAS_ENERGY => 0x04,
+                _ => 0,
+            };
+        }
+        let mut meta = [0u64; 7];
+        for key in &p.meta_keys {
+            let channel = key[0];
+            if (1..=7).contains(&channel) {
+                meta[channel as usize - 1] = u64::from_be_bytes(key[1..9].try_into().unwrap());
+            }
+        }
+        let mut symbols = Vec::with_capacity(p.elem_count_keys.len());
+        for key in &p.elem_count_keys {
+            if key.len() < 1 + 4 + 12 {
+                continue;
+            }
+            let body = &key[..key.len() - 12];
+            if body.len() < 5 || body[body.len() - 5] != 0xff {
+                continue;
+            }
+            let count = u32::from_be_bytes(body[body.len() - 4..].try_into().unwrap());
+            if let Ok(sym) = std::str::from_utf8(&body[..body.len() - 5]) {
+                symbols.push((sym.to_string(), count));
+            }
+        }
+        crate::idx_cols::ScalarSlot {
+            natoms: u32::from_be_bytes(p.natoms_k[..4].try_into().unwrap()),
+            energy: p
+                .energy_k
+                .map(|key| u64::from_be_bytes(key[..8].try_into().unwrap()))
+                .unwrap_or(0),
+            fmax: p
+                .fmax_k
+                .map(|key| u64::from_be_bytes(key[..8].try_into().unwrap()))
+                .unwrap_or(0),
+            mass: p
+                .mass_k
+                .map(|key| u64::from_be_bytes(key[..8].try_into().unwrap()))
+                .unwrap_or(0),
+            volume: p
+                .volume_k
+                .map(|key| u64::from_be_bytes(key[..8].try_into().unwrap()))
+                .unwrap_or(0),
+            flags,
+            pbc: p.pbc_k.map(|key| key[0]).unwrap_or(0xff),
+            meta,
+            hash: p.hash,
+            symbols,
+        }
+    }
+
     /// Exclusive section: LMDB puts only (no hash/species/bin derivation).
     fn put_index_puts(&self, wtxn: &mut RwTxn, p: &PreparedIndexPuts) -> Result<()> {
         let fk_b = p.fk.to_bytes();
         self.frames.put(wtxn, &fk_b[..], &p.stored[..])?;
-        self.hash_by_frame.put(wtxn, &fk_b[..], &p.hash[..])?;
         if self.frame_by_hash.get(wtxn, &p.hash[..])?.is_none() {
             self.frame_by_hash.put(wtxn, &p.hash[..], &fk_b[..])?;
         }
-        self.idx_natoms.put(wtxn, &p.natoms_k[..], &())?;
-        for sk in &p.symbol_keys {
-            self.idx_symbol.put(wtxn, &sk[..], &())?;
-        }
-        for ek in &p.elem_count_keys {
-            self.idx_elem_count.put(wtxn, &ek[..], &())?;
-        }
-        if let Some(ref fk_form) = p.formula_k {
-            self.idx_formula.put(wtxn, &fk_form[..], &())?;
-        }
-        if let Some(ek) = p.energy_k {
-            self.idx_energy.put(wtxn, &ek[..], &())?;
-        }
-        if let Some(fk_fm) = p.fmax_k {
-            self.idx_fmax.put(wtxn, &fk_fm[..], &())?;
-        }
-        if let Some(k) = p.mass_k {
-            self.idx_mass.put(wtxn, &k[..], &())?;
-        }
-        if let Some(k) = p.volume_k {
-            self.idx_volume.put(wtxn, &k[..], &())?;
-        }
-        if let Some(pk) = p.pbc_k {
-            self.idx_pbc.put(wtxn, &pk[..], &())?;
-        }
-        for fk_flag in &p.flag_keys {
-            self.idx_flags.put(wtxn, &fk_flag[..], &())?;
-        }
-        for mk in &p.meta_keys {
-            self.idx_meta.put(wtxn, &mk[..], &())?;
-        }
         if !p.cooked.is_empty() {
             self.frames_soa.put(wtxn, &fk_b[..], &p.cooked[..])?;
+        }
+        Ok(())
+    }
+
+    /// Fold these frames into the trajectory's scalar columns. One put per
+    /// trajectory, not one key per scalar.
+    fn merge_columns(&self, wtxn: &mut RwTxn, rows: &[PreparedIndexPuts]) -> Result<()> {
+        let slots: Vec<_> = rows
+            .iter()
+            .map(|row| (row.fk, Self::scalar_slot(row)))
+            .collect();
+        self.merge_slots(wtxn, &slots)
+    }
+
+    /// One column put per trajectory. Call this once per commit so earlier
+    /// copies of the blob do not stay in the file as free pages.
+    pub(crate) fn merge_slots(
+        &self,
+        wtxn: &mut RwTxn,
+        slots: &[(FrameKey, crate::idx_cols::ScalarSlot)],
+    ) -> Result<()> {
+        let Some(db) = self.idx_cols else {
+            return Ok(());
+        };
+        let mut by_traj: BTreeMap<u64, Vec<&(FrameKey, crate::idx_cols::ScalarSlot)>> =
+            BTreeMap::new();
+        for slot in slots {
+            by_traj.entry(slot.0.traj_id).or_default().push(slot);
+        }
+        for (traj, group) in by_traj {
+            let key = traj.to_be_bytes();
+            let mut cols = match db.get(wtxn, &key[..])? {
+                Some(blob) => crate::idx_cols::decode(blob)?,
+                None => crate::idx_cols::Columns::new(),
+            };
+            for (fk, slot) in group {
+                cols.set(fk.frame_idx, slot.clone());
+            }
+            let blob = cols.encode()?;
+            db.put(wtxn, &key[..], &blob)?;
         }
         Ok(())
     }
@@ -1287,6 +1344,15 @@ impl ConCorpus {
         for mk in &p.meta_keys {
             let _ = self.idx_meta.delete(wtxn, &mk[..])?;
         }
+        if let Some(db) = self.idx_cols {
+            let tid = p.fk.traj_id.to_be_bytes();
+            if let Some(blob) = db.get(wtxn, &tid[..])? {
+                let mut cols = crate::idx_cols::decode(blob)?;
+                cols.clear_slot(p.fk.frame_idx);
+                let next = cols.encode()?;
+                db.put(wtxn, &tid[..], &next)?;
+            }
+        }
         Ok(posted.then_some(p.hash))
     }
 
@@ -1314,6 +1380,38 @@ impl ConCorpus {
                 }
             }
         }
+        if let Some(db) = self.idx_cols {
+            let mut blobs: Vec<(u64, Vec<u8>)> = Vec::new();
+            {
+                let mut iter = db.iter(wtxn)?;
+                while let Some(Ok((k, v))) = iter.next() {
+                    if k.len() == 8 {
+                        let mut b = [0u8; 8];
+                        b.copy_from_slice(k);
+                        blobs.push((u64::from_be_bytes(b), v.to_vec()));
+                    }
+                }
+            }
+            for (traj, blob) in blobs {
+                for digest in stale {
+                    if survivor.contains_key(digest) {
+                        continue;
+                    }
+                    if let Some(frame_idx) = crate::idx_cols::frames_with_hash(&blob, digest)?
+                        .into_iter()
+                        .next()
+                    {
+                        survivor.insert(
+                            *digest,
+                            FrameKey {
+                                traj_id: traj,
+                                frame_idx,
+                            },
+                        );
+                    }
+                }
+            }
+        }
         for digest in stale {
             let posted = {
                 let current = self.frame_by_hash.get(wtxn, &digest[..])?;
@@ -1327,6 +1425,14 @@ impl ConCorpus {
             let posted_bytes = posted.to_bytes();
             if self.hash_by_frame.get(wtxn, &posted_bytes[..])?.is_some() {
                 continue;
+            }
+            if let Some(db) = self.idx_cols {
+                let tid = posted.traj_id.to_be_bytes();
+                if let Some(blob) = db.get(wtxn, &tid[..])? {
+                    if crate::idx_cols::stored_hash(blob, posted.frame_idx)? == Some(*digest) {
+                        continue;
+                    }
+                }
             }
             match survivor.get(digest).copied() {
                 Some(other) => {
@@ -1626,6 +1732,9 @@ impl ConCorpus {
             ("hash_by_frame", self.hash_by_frame),
             ("frames_soa", self.frames_soa),
         ];
+        if let Some(d) = self.idx_cols {
+            tables.push(("idx_cols", d));
+        }
         if let Some(d) = self.idx_topo {
             tables.push(("idx_topo", d.remap_types()));
         }
@@ -1675,6 +1784,9 @@ impl ConCorpus {
             ("hash_by_frame", self.hash_by_frame),
             ("frames_soa", self.frames_soa),
         ];
+        if let Some(d) = self.idx_cols {
+            tables.push(("idx_cols", d));
+        }
         if let Some(d) = self.idx_topo {
             tables.push(("idx_topo", d.remap_types()));
         }
@@ -1872,6 +1984,7 @@ impl ConCorpus {
             for p in prepared.iter() {
                 self.put_index_puts(wtxn, p)?;
             }
+            self.merge_columns(wtxn, prepared)?;
             // Same abort point as the batched path: the group is in this
             // transaction and disappears if the commit never happens.
             if fail_injected_group(1) {
@@ -1969,6 +2082,7 @@ impl ConCorpus {
             for p in &prepared {
                 self.put_index_puts(wtxn, p)?;
             }
+            self.merge_columns(wtxn, &prepared)?;
             Ok(keys.len() as u32)
         })
     }
@@ -2022,6 +2136,7 @@ impl ConCorpus {
         let batch = crate::frame_codec::GROUP_LEN as usize;
         let n_frames =
             u32::try_from(spans.len()).map_err(|_| Error::Parse("too many frames".into()))?;
+        let mut slots = Vec::with_capacity(spans.len());
         // Cooked columns sit beside the text, so reserve about twice the file.
         let input_bytes = file_contents.len().saturating_mul(2);
         self.with_write(input_bytes, |wtxn| {
@@ -2059,6 +2174,7 @@ impl ConCorpus {
                     Self::group_prepared(&mut prepared)?;
                 }
                 for row in &prepared {
+                    slots.push((row.fk, Self::scalar_slot(row)));
                     self.put_index_puts(wtxn, row)?;
                 }
                 drop(prepared);
@@ -2081,6 +2197,7 @@ impl ConCorpus {
             };
             self.traj_meta
                 .put(wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
+            self.merge_slots(wtxn, &slots)?;
             Ok(n_frames)
         })
     }
@@ -2097,6 +2214,7 @@ impl ConCorpus {
         traj_id: TrajId,
         start_idx: u32,
         text: &str,
+        slots: &mut Vec<(FrameKey, crate::idx_cols::ScalarSlot)>,
     ) -> Result<u32> {
         if text.is_empty() {
             return Ok(0);
@@ -2108,6 +2226,7 @@ impl ConCorpus {
             Self::group_prepared(&mut prepared)?;
         }
         for row in &prepared {
+            slots.push((row.fk, Self::scalar_slot(row)));
             self.put_index_puts(wtxn, row)?;
         }
         let n =
@@ -2257,6 +2376,7 @@ impl ConCorpus {
             for p in &prepared {
                 self.put_index_puts(wtxn, p)?;
             }
+            self.merge_columns(wtxn, &prepared)?;
             let n_frames = prepared
                 .last()
                 .map(|p| p.fk.frame_idx + 1)
@@ -2316,7 +2436,18 @@ impl ConCorpus {
         self.idx_meta.clear(wtxn)?;
         self.frame_by_hash.clear(wtxn)?;
         self.hash_by_frame.clear(wtxn)?;
+        if let Some(db) = self.idx_cols {
+            db.clear(wtxn)?;
+        }
         Ok(())
+    }
+
+    /// Rebuild scalar columns from CON text and drop the per-key `idx_*` rows.
+    ///
+    /// A db15, db16, or db17 file stays readable without this call. Running
+    /// it rewrites those indexes into `idx_cols` and clears the old keys.
+    pub fn migrate_scalar_indexes(&self) -> Result<u32> {
+        self.reindex()
     }
 
     /// Rebuild all secondary indexes from authoritative `frames` blobs (schema upgrade path).
@@ -2334,6 +2465,7 @@ impl ConCorpus {
             }
 
             let mut n = 0u32;
+            let mut rows = Vec::new();
             // Collect keys first (heed iterator + puts on same txn is safer with snapshot list)
             let mut keys: Vec<Vec<u8>> = Vec::new();
             {
@@ -2371,78 +2503,16 @@ impl ConCorpus {
                     .ok_or_else(|| Error::Parse("empty blob on reindex".into()))?
                     .map_err(|e| Error::Parse(e.to_string()))?;
                 // index_frame would put frames again — only indexes + hashes
-                let hash = hash_frame_bytes(blob_owned.as_bytes());
-                let hb = hash.to_bytes();
-                let fk_b = fk.to_bytes();
-                self.hash_by_frame.put(wtxn, &fk_b[..], &hb[..])?;
+                let row = Self::build_index_puts(fk, &frame, blob_owned, false)?;
+                let hb = row.hash;
                 if self.frame_by_hash.get(wtxn, &hb[..])?.is_none() {
+                    let fk_b = fk.to_bytes();
                     self.frame_by_hash.put(wtxn, &hb[..], &fk_b[..])?;
                 }
-                let n_atoms = frame.atom_data.len() as u32;
-                self.idx_natoms
-                    .put(wtxn, &natoms_key(n_atoms, fk)[..], &())?;
-                let counts = frame_species(&frame);
-                for (sym, cnt) in &counts {
-                    self.idx_elem_count
-                        .put(wtxn, &elem_count_key(sym, *cnt, fk)[..], &())?;
-                    self.idx_symbol.put(wtxn, &symbol_key(sym, fk)[..], &())?;
-                }
-                let formula = composition_formula(&counts);
-                if !formula.is_empty() {
-                    self.idx_formula
-                        .put(wtxn, &formula_key(&formula, fk)[..], &())?;
-                }
-                if let Some(e) = frame_energy(&frame) {
-                    if let Some(ek) = energy_bin_key(e, fk) {
-                        self.idx_energy.put(wtxn, &ek[..], &())?;
-                    }
-                    self.idx_flags
-                        .put(wtxn, &flag_key(FLAG_HAS_ENERGY, fk)[..], &())?;
-                }
-                if frame_has_forces(&frame) {
-                    self.idx_flags
-                        .put(wtxn, &flag_key(FLAG_HAS_FORCES, fk)[..], &())?;
-                    if let Some(fm) = frame_fmax(&frame) {
-                        if let Some(fk_fm) = fmax_bin_key(fm, fk) {
-                            self.idx_fmax.put(wtxn, &fk_fm[..], &())?;
-                        }
-                    }
-                }
-                if frame_has_velocities(&frame) {
-                    self.idx_flags
-                        .put(wtxn, &flag_key(FLAG_HAS_VELOCITIES, fk)[..], &())?;
-                }
-                if let Some(m) = frame_total_mass(&frame) {
-                    if let Some(k) = mass_bin_key(m, fk) {
-                        self.idx_mass.put(wtxn, &k[..], &())?;
-                    }
-                }
-                if let Some(v) = frame_cell_volume(&frame) {
-                    if let Some(k) = volume_bin_key(v, fk) {
-                        self.idx_volume.put(wtxn, &k[..], &())?;
-                    }
-                }
-                if let Some(mask) = frame_pbc_mask(&frame) {
-                    self.idx_pbc.put(wtxn, &pbc_key(mask, fk)[..], &())?;
-                }
-                let meta_puts: [(u8, Option<f64>); 7] = [
-                    (META_TIME, frame_time(&frame)),
-                    (META_TIMESTEP, frame_timestep(&frame)),
-                    (META_FRAME_INDEX, frame_frame_index(&frame)),
-                    (META_NEB_BEAD, frame_neb_bead(&frame)),
-                    (META_NEB_BAND, frame_neb_band(&frame)),
-                    (META_CHARGE, frame_charge(&frame)),
-                    (META_MAGMOM, frame_magmom(&frame)),
-                ];
-                for (ch, val) in meta_puts {
-                    if let Some(x) = val {
-                        if let Some(k) = meta_scalar_key(ch, x, fk) {
-                            self.idx_meta.put(wtxn, &k[..], &())?;
-                        }
-                    }
-                }
+                rows.push(row);
                 n += 1;
             }
+            self.merge_columns(wtxn, &rows)?;
             if recorded.is_some() {
                 self.rebuild_idx_topo_from_stored(wtxn)?;
             }
@@ -3582,13 +3652,19 @@ impl ConCorpus {
     pub fn frame_hash(&self, key: FrameKey) -> Result<ContentHash> {
         let rtxn = self.read_txn()?;
         let fk_b = key.to_bytes();
-        match self.hash_by_frame.get(&rtxn, &fk_b[..])? {
-            Some(b) => ContentHash::from_bytes(b).ok_or_else(|| Error::Message("bad hash".into())),
-            None => {
-                let text = self.get_frame_text_txn(&rtxn, key)?;
-                Ok(hash_frame_bytes(text.as_bytes()))
+        if let Some(b) = self.hash_by_frame.get(&rtxn, &fk_b[..])? {
+            return ContentHash::from_bytes(b).ok_or_else(|| Error::Message("bad hash".into()));
+        }
+        if let Some(db) = self.idx_cols {
+            let tid = key.traj_id.to_be_bytes();
+            if let Some(blob) = db.get(&rtxn, &tid[..])? {
+                if let Some(hash) = crate::idx_cols::stored_hash(blob, key.frame_idx)? {
+                    return Ok(ContentHash(hash));
+                }
             }
         }
+        let text = self.get_frame_text_txn(&rtxn, key)?;
+        Ok(hash_frame_bytes(text.as_bytes()))
     }
 
     /// First frame stored under this content hash, if any.
@@ -3622,14 +3698,280 @@ impl ConCorpus {
         Ok(composition_formula(&frame_species(&fr)))
     }
 
-    /// Frames that match every predicate. The scan uses the secondary indexes.
+    fn energy_only(sel: &Select) -> bool {
+        (sel.energy_min.is_some() || sel.energy_max.is_some())
+            && sel.natoms_min.is_none()
+            && sel.natoms_max.is_none()
+            && sel.symbols_all.is_empty()
+            && sel.content_hash.is_none()
+            && sel.fmax_min.is_none()
+            && sel.fmax_max.is_none()
+            && sel.mass_min.is_none()
+            && sel.mass_max.is_none()
+            && sel.volume_min.is_none()
+            && sel.volume_max.is_none()
+            && sel.pbc_exact.is_none()
+            && sel.time_min.is_none()
+            && sel.time_max.is_none()
+            && sel.timestep_min.is_none()
+            && sel.timestep_max.is_none()
+            && sel.frame_index_min.is_none()
+            && sel.frame_index_max.is_none()
+            && sel.neb_bead_min.is_none()
+            && sel.neb_bead_max.is_none()
+            && sel.neb_band_min.is_none()
+            && sel.neb_band_max.is_none()
+            && sel.charge_min.is_none()
+            && sel.charge_max.is_none()
+            && sel.magmom_min.is_none()
+            && sel.magmom_max.is_none()
+            && sel.element_count_min.is_empty()
+            && sel.element_count_exact.is_empty()
+            && sel.exact_formula.is_none()
+            && sel.topo_key.is_none()
+            && !sel.require_forces
+            && !sel.require_velocities
+            && !sel.require_energy
+    }
+
+    fn bits_in(bits: u64, lo: Option<f64>, hi: Option<f64>) -> bool {
+        if bits == 0 {
+            return false;
+        }
+        let lo_bits = ordered_f64_bits(lo.unwrap_or(f64::NEG_INFINITY)).unwrap_or(0);
+        let hi_bits = ordered_f64_bits(hi.unwrap_or(f64::INFINITY)).unwrap_or(u64::MAX);
+        bits >= lo_bits && bits <= hi_bits
+    }
+
+    fn column_slot_matches(sel: &Select, view: &crate::idx_cols::SlotView<'_>) -> bool {
+        if let (Some(_), _) | (_, Some(_)) = (sel.natoms_min, sel.natoms_max) {
+            let lo = sel.natoms_min.unwrap_or(0);
+            let hi = sel.natoms_max.unwrap_or(u32::MAX);
+            if view.natoms < lo || view.natoms > hi {
+                return false;
+            }
+        }
+        if let Some(hash) = sel.content_hash {
+            if view.hash != hash {
+                return false;
+            }
+        }
+        if (sel.energy_min.is_some() || sel.energy_max.is_some())
+            && !Self::bits_in(view.energy, sel.energy_min, sel.energy_max)
+        {
+            return false;
+        }
+        if (sel.fmax_min.is_some() || sel.fmax_max.is_some())
+            && !Self::bits_in(view.fmax, sel.fmax_min, sel.fmax_max)
+        {
+            return false;
+        }
+        if (sel.mass_min.is_some() || sel.mass_max.is_some())
+            && !Self::bits_in(view.mass, sel.mass_min, sel.mass_max)
+        {
+            return false;
+        }
+        if (sel.volume_min.is_some() || sel.volume_max.is_some())
+            && !Self::bits_in(view.volume, sel.volume_min, sel.volume_max)
+        {
+            return false;
+        }
+        if let Some(pbc) = sel.pbc_exact {
+            if view.pbc == 0xff || view.pbc != pbc_mask_from_bools(pbc) {
+                return false;
+            }
+        }
+        let meta_ok = |channel: u8, lo: Option<f64>, hi: Option<f64>| -> bool {
+            if lo.is_none() && hi.is_none() {
+                return true;
+            }
+            Self::bits_in(view.meta(channel), lo, hi)
+        };
+        if !meta_ok(META_TIME, sel.time_min, sel.time_max)
+            || !meta_ok(META_TIMESTEP, sel.timestep_min, sel.timestep_max)
+            || !meta_ok(META_FRAME_INDEX, sel.frame_index_min, sel.frame_index_max)
+            || !meta_ok(META_NEB_BEAD, sel.neb_bead_min, sel.neb_bead_max)
+            || !meta_ok(META_NEB_BAND, sel.neb_band_min, sel.neb_band_max)
+            || !meta_ok(META_CHARGE, sel.charge_min, sel.charge_max)
+            || !meta_ok(META_MAGMOM, sel.magmom_min, sel.magmom_max)
+        {
+            return false;
+        }
+        if sel.require_forces && view.flags & 0x01 == 0 {
+            return false;
+        }
+        if sel.require_velocities && view.flags & 0x02 == 0 {
+            return false;
+        }
+        if sel.require_energy && view.flags & 0x04 == 0 {
+            return false;
+        }
+        let need_symbols = !sel.symbols_all.is_empty()
+            || !sel.element_count_min.is_empty()
+            || !sel.element_count_exact.is_empty()
+            || sel.exact_formula.is_some();
+        if need_symbols {
+            let symbols = match view.symbols() {
+                Ok(symbols) => symbols,
+                Err(_) => return false,
+            };
+            for sym in &sel.symbols_all {
+                if !symbols.iter().any(|(name, _)| name == sym) {
+                    return false;
+                }
+            }
+            for (sym, exact) in &sel.element_count_exact {
+                match symbols.iter().find(|(name, _)| name == sym) {
+                    Some((_, count)) if count == exact => {}
+                    _ => return false,
+                }
+            }
+            for (sym, min) in &sel.element_count_min {
+                match symbols.iter().find(|(name, _)| name == sym) {
+                    Some((_, count)) if count >= min => {}
+                    _ => return false,
+                }
+            }
+            if let Some(formula) = &sel.exact_formula {
+                if &composition_formula(&symbols) != formula {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Frames that match every predicate.
+    ///
+    /// A trajectory written by this version is answered from `idx_cols`.
+    /// A db15, db16, or db17 file has no such blob; its `idx_*` keys are
+    /// read instead. A file that contains both is the union, with the
+    /// columnar trajectory winning for its own frames.
     pub fn select(&self, sel: &Select) -> Result<Vec<FrameKey>> {
         let rtxn = self.read_txn()?;
+        let covered = self.column_trajs(&rtxn, sel.traj_id)?;
+        if covered.is_empty() {
+            let mut out = self.select_legacy(&rtxn, sel)?;
+            if let Some(lim) = sel.limit {
+                out.truncate(lim);
+            }
+            return Ok(out);
+        }
+        let mut out = self.select_columns(&rtxn, sel, &covered)?;
+        if self.idx_natoms.stat(&rtxn)?.entries > 0 {
+            let mut legacy = self.select_legacy(&rtxn, sel)?;
+            legacy.retain(|fk| !covered.contains(&fk.traj_id));
+            out.extend(legacy);
+            out.sort_unstable();
+            out.dedup();
+        }
+        if let Some(lim) = sel.limit {
+            out.truncate(lim);
+        }
+        Ok(out)
+    }
+
+    fn column_trajs(&self, rtxn: &heed::RoTxn<'_>, traj: Option<TrajId>) -> Result<Vec<TrajId>> {
+        let Some(db) = self.idx_cols else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        if let Some(tid) = traj {
+            let key = tid.to_be_bytes();
+            if db.get(rtxn, &key[..])?.is_some() {
+                out.push(tid);
+            }
+            return Ok(out);
+        }
+        for item in db.iter(rtxn)? {
+            let (k, _) = item?;
+            if k.len() == 8 {
+                let mut b = [0u8; 8];
+                b.copy_from_slice(k);
+                out.push(u64::from_be_bytes(b));
+            }
+        }
+        Ok(out)
+    }
+
+    fn select_columns(
+        &self,
+        rtxn: &heed::RoTxn<'_>,
+        sel: &Select,
+        trajs: &[TrajId],
+    ) -> Result<Vec<FrameKey>> {
+        let db = self
+            .idx_cols
+            .ok_or_else(|| Error::Message("scalar columns are not open".into()))?;
+        let energy_only = Self::energy_only(sel);
+        let mut out = Vec::new();
+        for tid in trajs {
+            let key = tid.to_be_bytes();
+            let Some(blob) = db.get(rtxn, &key[..])? else {
+                continue;
+            };
+            if energy_only {
+                let lo = ordered_f64_bits(sel.energy_min.unwrap_or(f64::NEG_INFINITY)).unwrap_or(0);
+                let hi =
+                    ordered_f64_bits(sel.energy_max.unwrap_or(f64::INFINITY)).unwrap_or(u64::MAX);
+                for frame_idx in crate::idx_cols::energy_frame_indexes(blob, lo, hi)? {
+                    out.push(FrameKey {
+                        traj_id: *tid,
+                        frame_idx,
+                    });
+                }
+                continue;
+            }
+            let blob = blob.to_vec();
+            crate::idx_cols::for_each_slot(&blob, |frame_idx, view| {
+                if Self::column_slot_matches(sel, &view) {
+                    out.push(FrameKey {
+                        traj_id: *tid,
+                        frame_idx,
+                    });
+                }
+            })?;
+        }
+        if let Some(hex) = &sel.topo_key {
+            let topo = self.topo_hits(rtxn, sel, hex)?;
+            out.retain(|fk| topo.contains(fk));
+        }
+        out.sort_unstable();
+        Ok(out)
+    }
+
+    fn topo_hits(
+        &self,
+        rtxn: &heed::RoTxn<'_>,
+        sel: &Select,
+        hex: &str,
+    ) -> Result<BTreeSet<FrameKey>> {
+        let mut s = BTreeSet::new();
+        let Some(idx) = self.idx_topo else {
+            return Ok(s);
+        };
+        let pref = topo_prefix(&normalize_topo_hex(hex)?);
+        let mut iter = idx.prefix_iter(rtxn, &pref)?;
+        while let Some(Ok((k, _))) = iter.next() {
+            if k.len() < 12 {
+                continue;
+            }
+            if let Some(fk) = FrameKey::from_bytes(&k[k.len() - 12..]) {
+                if sel.traj_id.is_none_or(|t| t == fk.traj_id) {
+                    s.insert(fk);
+                }
+            }
+        }
+        Ok(s)
+    }
+
+    /// Frames that match every predicate. The scan uses the secondary indexes.
+    fn select_legacy(&self, rtxn: &heed::RoTxn<'_>, sel: &Select) -> Result<Vec<FrameKey>> {
         let mut sets: Vec<BTreeSet<FrameKey>> = Vec::new();
 
         if let Some(h) = sel.content_hash {
             let mut s = BTreeSet::new();
-            if let Some(b) = self.frame_by_hash.get(&rtxn, &h[..])? {
+            if let Some(b) = self.frame_by_hash.get(rtxn, &h[..])? {
                 if let Some(fk) = FrameKey::from_bytes(b) {
                     if sel.traj_id.is_none_or(|t| t == fk.traj_id) {
                         s.insert(fk);
@@ -3643,7 +3985,7 @@ impl ConCorpus {
             let lo = sel.natoms_min.unwrap_or(0);
             let hi = sel.natoms_max.unwrap_or(u32::MAX);
             let mut s = BTreeSet::new();
-            let mut iter = self.idx_natoms.iter(&rtxn)?;
+            let mut iter = self.idx_natoms.iter(rtxn)?;
             while let Some(Ok((k, _))) = iter.next() {
                 if k.len() < 16 {
                     continue;
@@ -3668,7 +4010,7 @@ impl ConCorpus {
         for sym in &sel.symbols_all {
             let mut s = BTreeSet::new();
             let pref = symbol_prefix(sym);
-            let mut iter = self.idx_symbol.prefix_iter(&rtxn, &pref)?;
+            let mut iter = self.idx_symbol.prefix_iter(rtxn, &pref)?;
             while let Some(Ok((k, _))) = iter.next() {
                 if k.len() < 12 {
                     continue;
@@ -3686,7 +4028,7 @@ impl ConCorpus {
         if let Some(ref formula) = sel.exact_formula {
             let mut s = BTreeSet::new();
             let pref = formula_prefix(formula);
-            let mut iter = self.idx_formula.prefix_iter(&rtxn, &pref)?;
+            let mut iter = self.idx_formula.prefix_iter(rtxn, &pref)?;
             while let Some(Ok((k, _))) = iter.next() {
                 if k.len() < 12 {
                     continue;
@@ -3705,7 +4047,7 @@ impl ConCorpus {
             let mut s = BTreeSet::new();
             if let Some(idx) = self.idx_topo {
                 let pref = topo_prefix(&normalize_topo_hex(hex)?);
-                let mut iter = idx.prefix_iter(&rtxn, &pref)?;
+                let mut iter = idx.prefix_iter(rtxn, &pref)?;
                 while let Some(Ok((k, _))) = iter.next() {
                     if k.len() < 12 {
                         continue;
@@ -3724,7 +4066,7 @@ impl ConCorpus {
         for (sym, exact_c) in &sel.element_count_exact {
             let mut s = BTreeSet::new();
             let pref = elem_count_symbol_prefix(sym);
-            let mut iter = self.idx_elem_count.prefix_iter(&rtxn, &pref)?;
+            let mut iter = self.idx_elem_count.prefix_iter(rtxn, &pref)?;
             while let Some(Ok((k, _))) = iter.next() {
                 if let Some((c, fk)) = parse_elem_count_key(k, sym) {
                     if c == *exact_c && sel.traj_id.is_none_or(|t| t == fk.traj_id) {
@@ -3738,7 +4080,7 @@ impl ConCorpus {
         for (sym, min_c) in &sel.element_count_min {
             let mut s = BTreeSet::new();
             let pref = elem_count_symbol_prefix(sym);
-            let mut iter = self.idx_elem_count.prefix_iter(&rtxn, &pref)?;
+            let mut iter = self.idx_elem_count.prefix_iter(rtxn, &pref)?;
             while let Some(Ok((k, _))) = iter.next() {
                 if let Some((c, fk)) = parse_elem_count_key(k, sym) {
                     if c >= *min_c && sel.traj_id.is_none_or(|t| t == fk.traj_id) {
@@ -3755,7 +4097,7 @@ impl ConCorpus {
             let lo_bits = ordered_f64_bits(lo_e).unwrap_or(0);
             let hi_bits = ordered_f64_bits(hi_e).unwrap_or(u64::MAX);
             let mut s = BTreeSet::new();
-            let mut iter = self.idx_energy.iter(&rtxn)?;
+            let mut iter = self.idx_energy.iter(rtxn)?;
             while let Some(Ok((k, _))) = iter.next() {
                 if k.len() < 20 {
                     continue;
@@ -3783,7 +4125,7 @@ impl ConCorpus {
             let lo_bits = ordered_f64_bits(lo_e).unwrap_or(0);
             let hi_bits = ordered_f64_bits(hi_e).unwrap_or(u64::MAX);
             let mut s = BTreeSet::new();
-            let mut iter = self.idx_fmax.iter(&rtxn)?;
+            let mut iter = self.idx_fmax.iter(rtxn)?;
             while let Some(Ok((k, _))) = iter.next() {
                 if k.len() < 20 {
                     continue;
@@ -3814,7 +4156,7 @@ impl ConCorpus {
             let lo_bits = ordered_f64_bits(lo_e).unwrap_or(0);
             let hi_bits = ordered_f64_bits(hi_e).unwrap_or(u64::MAX);
             let mut s = BTreeSet::new();
-            let mut iter = db.iter(&rtxn)?;
+            let mut iter = db.iter(rtxn)?;
             while let Some(Ok((k, _))) = iter.next() {
                 if k.len() < 20 {
                     continue;
@@ -3847,7 +4189,7 @@ impl ConCorpus {
             let mask = pbc_mask_from_bools(pbc);
             let mut s = BTreeSet::new();
             let pref = [mask];
-            let mut iter = self.idx_pbc.prefix_iter(&rtxn, &pref)?;
+            let mut iter = self.idx_pbc.prefix_iter(rtxn, &pref)?;
             while let Some(Ok((k, _))) = iter.next() {
                 if k.len() < 13 {
                     continue;
@@ -3868,7 +4210,7 @@ impl ConCorpus {
             let hi_bits = ordered_f64_bits(hi_e).unwrap_or(u64::MAX);
             let mut s = BTreeSet::new();
             let pref = [ch];
-            let mut iter = self.idx_meta.prefix_iter(&rtxn, &pref)?;
+            let mut iter = self.idx_meta.prefix_iter(rtxn, &pref)?;
             while let Some(Ok((k, _))) = iter.next() {
                 if k.len() < 21 {
                     continue;
@@ -3931,7 +4273,7 @@ impl ConCorpus {
         let mut push_flag = |flag: u8| -> Result<()> {
             let mut s = BTreeSet::new();
             let pref = [flag];
-            let mut iter = self.idx_flags.prefix_iter(&rtxn, &pref)?;
+            let mut iter = self.idx_flags.prefix_iter(rtxn, &pref)?;
             while let Some(Ok((k, _))) = iter.next() {
                 if k.len() < 13 {
                     continue;
@@ -3957,7 +4299,7 @@ impl ConCorpus {
 
         if sets.is_empty() {
             let mut s = BTreeSet::new();
-            let mut iter = self.frames.iter(&rtxn)?;
+            let mut iter = self.frames.iter(rtxn)?;
             while let Some(Ok((k, _))) = iter.next() {
                 if let Some(fk) = FrameKey::from_bytes(k) {
                     if sel.traj_id.is_none_or(|t| t == fk.traj_id) {
@@ -3988,9 +4330,6 @@ impl ConCorpus {
 
         let mut out: Vec<FrameKey> = acc.into_iter().collect();
         out.sort_unstable();
-        if let Some(lim) = sel.limit {
-            out.truncate(lim);
-        }
         Ok(out)
     }
 
@@ -4522,9 +4861,10 @@ impl<'a> IngestSession<'a> {
         ConCorpus::pack_small_cooked(prepared);
         let corpus = self.corpus;
         let txn = self.txn()?;
-        for p in prepared {
+        for p in prepared.iter() {
             corpus.put_index_puts(txn, p)?;
         }
+        corpus.merge_columns(txn, prepared)?;
         Ok(())
     }
 
@@ -5760,8 +6100,8 @@ x
                 frame_idx: 0,
             })
             .unwrap();
-        let mass1 = frame_total_mass(&fr1).expect("mass");
-        let vol1 = frame_cell_volume(&fr1).expect("vol");
+        let mass1 = crate::frame_scalars::frame_total_mass(&fr1).expect("mass");
+        let vol1 = crate::frame_scalars::frame_cell_volume(&fr1).expect("vol");
 
         // Frame B: inject metadata via rewrite
         let mut fr2 = fr1.clone();
@@ -7010,6 +7350,7 @@ x
             for p in &prepared {
                 db.put_index_puts(wtxn, p)?;
             }
+            db.merge_columns(wtxn, &prepared)?;
             Ok(())
         })
         .unwrap();
@@ -7022,5 +7363,58 @@ x
         drop(session);
         assert!(db.traj_meta(1).unwrap().is_none());
         assert_eq!(db.list_frame_keys().unwrap(), before);
+    }
+
+    #[test]
+    fn scalar_columns_replace_the_per_key_indexes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (text, _) = tiny_copies(4);
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_str(1, &text, "cols").unwrap();
+        let usage = db.table_usage().unwrap();
+        let row = |name: &str| usage.iter().find(|item| item.name == name).unwrap();
+        assert_eq!(row("idx_natoms").entries, 0);
+        assert_eq!(row("idx_energy").entries, 0);
+        assert_eq!(row("hash_by_frame").entries, 0);
+        assert_eq!(row("idx_cols").entries, 1);
+        let keys = db
+            .select(&Select::new().trajectory(1).require_symbol("Cu"))
+            .unwrap();
+        assert_eq!(keys.len(), 4);
+        let hash = db.frame_hash(keys[0]).unwrap();
+        assert_eq!(db.find_by_hash(hash).unwrap(), Some(keys[0]));
+
+        // A db15-shaped natoms key, with the column blob removed, still selects.
+        db.with_write(0, |wtxn| {
+            let tid = 1u64.to_be_bytes();
+            db.idx_cols.unwrap().delete(wtxn, &tid[..])?;
+            let key = natoms_key(
+                2,
+                FrameKey {
+                    traj_id: 1,
+                    frame_idx: 0,
+                },
+            );
+            db.idx_natoms.put(wtxn, &key[..], &())?;
+            Ok(())
+        })
+        .unwrap();
+        let legacy = db.select(&Select::new().natoms_range(2, 2)).unwrap();
+        assert_eq!(
+            legacy,
+            vec![FrameKey {
+                traj_id: 1,
+                frame_idx: 0
+            }]
+        );
+        db.migrate_scalar_indexes().unwrap();
+        let usage = db.table_usage().unwrap();
+        let row = |name: &str| usage.iter().find(|item| item.name == name).unwrap();
+        assert_eq!(row("idx_natoms").entries, 0);
+        assert_eq!(row("idx_cols").entries, 1);
+        let keys = db
+            .select(&Select::new().trajectory(1).require_symbol("Cu"))
+            .unwrap();
+        assert_eq!(keys.len(), 4);
     }
 }

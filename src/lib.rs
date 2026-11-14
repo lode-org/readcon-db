@@ -17,6 +17,7 @@ mod export_h5md;
 mod export_xyz;
 mod frame_codec;
 mod frame_scalars;
+mod idx_cols;
 mod keys;
 #[cfg(feature = "mpi")]
 pub mod mpi_ingest;
