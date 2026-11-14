@@ -36,18 +36,15 @@ def test_driver_writes_the_record_layout(tmp_path) -> None:
     assert host["hostname"] == "host"
 
 
-def test_scanner_ignores_only_the_named_legacy_logs(tmp_path) -> None:
-    assert drv.vm_host_hits(drv.REPO) == []
-    fair = tmp_path / "examples" / "benchmarks" / "results" / "fair"
-    fair.mkdir(parents=True)
+def test_vm_host_hits_are_only_the_superseded_fair_logs() -> None:
+    assert drv.vm_host_hits(drv.REPO) == [
+        "examples/benchmarks/results/fair/campaign.log",
+        "examples/benchmarks/results/fair/insert-span.log",
+        "examples/benchmarks/results/fair/insert-validate.log",
+    ]
+    fresh = drv.REPO / "examples" / "benchmarks" / "results" / "fair-db29"
     for name in ("campaign.log", "insert-span.log", "insert-validate.log"):
-        (fair / name).write_text("host cursor\n")
-    (tmp_path / "examples" / "benchmarks" / "notes.md").write_text(
-        "Host `" + "cursor" + "`\n"
-    )
-    assert drv.vm_host_hits(tmp_path) == ["examples/benchmarks/notes.md"]
-    for rel in drv.LEGACY_HOST_LOGS:
-        assert (drv.REPO / rel).read_text().splitlines()[2] == "host cursor"
+        assert (fresh / name).read_text().splitlines()[2] == "host host"
 
 
 def test_recorded_run_refuses_n_below_12(tmp_path) -> None:

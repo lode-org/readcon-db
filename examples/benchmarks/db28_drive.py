@@ -32,34 +32,22 @@ def host_label(name: str) -> str:
     return NEUTRAL_HOST
 
 
-# Saved fair logs. Their host line is the VM hostname. Nothing else may say so.
-LEGACY_HOST_LOGS = (
-    Path("examples/benchmarks/results/fair/campaign.log"),
-    Path("examples/benchmarks/results/fair/insert-span.log"),
-    Path("examples/benchmarks/results/fair/insert-validate.log"),
-)
-
-
 def vm_host_hits(root: Path) -> list[str]:
-    """Files under ``examples/benchmarks`` that still name that VM host.
-
-    The only exemption is :data:`LEGACY_HOST_LOGS`.
-    """
+    """Files under ``examples/benchmarks`` that name the VM host."""
     base = root / "examples" / "benchmarks"
-    allowed = {(root / rel).resolve() for rel in LEGACY_HOST_LOGS}
     hits = []
+    host_line = "host " + "cursor"
+    marked = "`" + "cursor" + "`"
     for path in sorted(base.rglob("*")):
         if not path.is_file() or path.suffix not in {".py", ".md", ".log", ".json"}:
             continue
         if "__pycache__" in path.parts:
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
-        host_line = "host " + "cursor"
-        marked = "`" + "cursor" + "`"
         named = any(
             line.strip() == host_line or marked in line for line in text.splitlines()
         )
-        if named and path.resolve() not in allowed:
+        if named:
             hits.append(path.relative_to(root).as_posix())
     return hits
 

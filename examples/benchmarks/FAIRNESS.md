@@ -140,7 +140,7 @@ changes the harness.
   was an 8 ms floor on every cold readcon-db sample.
 * After every insert, and inside every read, each stored field is
   compared by its float64 bytes. A mismatch aborts the run. Raw lines
-  are `results/fair/campaign.log`.
+  are `results/fair-db29/campaign.log`.
 
 The size ladder is one frame of 10³, 10⁴, 10⁵, and 10⁶ atoms, and 1,
 100, and 10⁴ frames of 8 atoms. Each point is an insert, a full read,
@@ -227,9 +227,12 @@ read. Warm rows in `results/fair/RESULTS.md` stay ahead as well.
 
 ## This machine
 
-2026-11-13, tree `c738f8dd`. The host line in the raw log is the VM
-hostname; see `results/fair/HOSTNAME-NOTE.md`. Raw lines are
-`results/fair/campaign.log`. The table is `results/fair/RESULTS.md`.
+Regenerated on `67dc0235955e6c0f50a8e814d4d489fbb387ec65`. The host
+line is the neutral label. Raw lines are
+`results/fair-db29/campaign.log`, `results/fair-db29/insert-span.log`,
+and `results/fair-db29/insert-validate.log`. The table is
+`results/fair-db29/RESULTS.md`. The 2026-11-13 logs under
+`results/fair/` are superseded.
 
 Rerunning the published harness here gives ASE median 0.0421 s and
 IQR 0.00280 s (samples 0.0386–0.0426 s). This disk's fsync waits are
