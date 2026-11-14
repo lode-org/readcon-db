@@ -385,6 +385,24 @@ fn fill_soa_chunk(
     has_f: bool,
     has_v: bool,
 ) {
+    crate::cooked_soa::without_column_split(|| {
+        fill_soa_chunk_inner(
+            blobs, positions, forces, velocities, metas, stride, has_f, has_v,
+        )
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fill_soa_chunk_inner(
+    blobs: &[Vec<u8>],
+    positions: &mut [f64],
+    forces: &mut [f64],
+    velocities: &mut [f64],
+    metas: &mut [Option<Result<crate::cooked_soa::MaterializedFrame>>],
+    stride: usize,
+    has_f: bool,
+    has_v: bool,
+) {
     for (i, blob) in blobs.iter().enumerate() {
         let pos = &mut positions[i * stride..(i + 1) * stride];
         let mut bare_f = [];
@@ -575,17 +593,40 @@ fn ingest_chunk_bounds(n: usize) -> Vec<(usize, usize)> {
     bounds
 }
 
+/// Serializes tests that swap `READCON_DB_COOKED_CODEC` with writers that
+/// read it. Uncontended in production.
+static COOKED_CODEC_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// A cooked frame of at least 64 KiB is shuffled when the compressed bytes
-/// are smaller. `READCON_DB_COOKED_CODEC=raw` keeps RCSO. Cooked groups
-/// are never rewritten.
-fn wants_shuffle(cooked: &[u8]) -> bool {
-    if cooked.len() < 64 * 1024 || crate::cooked_soa::is_cooked_group(cooked) {
-        return false;
+/// are smaller. Cooked groups are never rewritten.
+///
+/// `READCON_DB_COOKED_CODEC` is case-sensitive. Unset uses this default.
+/// The only accepted values are exactly `raw` and `shuffle-zstd`.
+fn wants_shuffle(cooked: &[u8]) -> Result<bool> {
+    let forced_raw = {
+        let _guard = COOKED_CODEC_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        cooked_codec_forces_raw()?
+    };
+    if forced_raw || cooked.len() < 64 * 1024 || crate::cooked_soa::is_cooked_group(cooked) {
+        return Ok(false);
     }
-    !matches!(
-        std::env::var("READCON_DB_COOKED_CODEC").as_deref(),
-        Ok("raw")
-    )
+    Ok(true)
+}
+
+fn cooked_codec_forces_raw() -> Result<bool> {
+    match std::env::var("READCON_DB_COOKED_CODEC") {
+        Err(std::env::VarError::NotPresent) => Ok(false),
+        Err(std::env::VarError::NotUnicode(_)) => Err(Error::Message(
+            "READCON_DB_COOKED_CODEC must be exactly \"raw\" or \"shuffle-zstd\"".into(),
+        )),
+        Ok(value) if value == "raw" => Ok(true),
+        Ok(value) if value == "shuffle-zstd" => Ok(false),
+        Ok(value) => Err(Error::Message(format!(
+            "READCON_DB_COOKED_CODEC must be exactly \"raw\" or \"shuffle-zstd\", not {value:?}"
+        ))),
+    }
 }
 
 fn ingest_thread_count() -> usize {
@@ -1524,7 +1565,7 @@ impl ConCorpus {
     }
 
     fn put_cooked_bytes(&self, wtxn: &mut RwTxn<'_>, key: &[u8], cooked: &[u8]) -> Result<()> {
-        if wants_shuffle(cooked) {
+        if wants_shuffle(cooked)? {
             if let Ok(packed) = crate::cooked_soa::compress_shuffled(cooked) {
                 if packed.len() < cooked.len() {
                     self.frames_soa.put(wtxn, key, &packed)?;
@@ -3581,10 +3622,13 @@ impl ConCorpus {
     ) -> Result<Option<Vec<u8>>> {
         let rtxn = self.read_txn()?;
         let fk = FrameKey { traj_id, frame_idx }.to_bytes();
-        Ok(self
-            .frames_soa
-            .get(&rtxn, &fk[..])?
-            .map(|blob| blob.to_vec()))
+        let Some(blob) = self.frames_soa.get(&rtxn, &fk[..])? else {
+            return Ok(None);
+        };
+        if !crate::cooked_soa::is_shuffled_zstd(blob) {
+            return Ok(None);
+        }
+        Ok(Some(blob.to_vec()))
     }
 
     fn shuffled_frame(
@@ -7892,5 +7936,20 @@ x
         let stored = raw_soa(&raw, 0).unwrap();
         assert!(!crate::cooked_soa::is_shuffled_zstd(&stored));
         assert_eq!(frame_positions(&raw, 1, 0)[2].to_bits(), 1.0f64.to_bits());
+    }
+
+    #[test]
+    fn unknown_cooked_codec_is_rejected() {
+        let _lock = COOKED_CODEC_LOCK.lock().unwrap();
+        std::env::set_var("READCON_DB_COOKED_CODEC", "Shuffle-Zstd");
+        let err = cooked_codec_forces_raw().unwrap_err();
+        std::env::remove_var("READCON_DB_COOKED_CODEC");
+        assert!(err.to_string().contains("shuffle-zstd"), "{err}");
+        std::env::set_var("READCON_DB_COOKED_CODEC", "raw");
+        assert!(cooked_codec_forces_raw().unwrap());
+        std::env::set_var("READCON_DB_COOKED_CODEC", "shuffle-zstd");
+        assert!(!cooked_codec_forces_raw().unwrap());
+        std::env::remove_var("READCON_DB_COOKED_CODEC");
+        assert!(!cooked_codec_forces_raw().unwrap());
     }
 }
