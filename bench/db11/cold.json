@@ -1,0 +1,9 @@
+{
+  "question": "Why was frames-100 selected cold bimodal (db10 IQR/median 0.417)?",
+  "page_cache_drop": "posix_fadvise(DONTNEED) then mincore. Before the open the resident fraction was 0 on every trial, so the drop works.",
+  "cpu_frequency": "No cpufreq governor or intel_pstate sysfs on this host. The TSC is constant (constant_tsc, nonstop_tsc), so the timer is not a frequency step.",
+  "open_readahead": "After a cold open, mincore was the same 30 of 44 pages every time: the first 12 pages and the last 18, with pages 12 through 25 absent.",
+  "first_query": "The timed query was the first touch of that hole. One-shot latencies on the identical bit pattern ran from about 0.10 ms to about 0.50 ms. The next query on the open store was about 0.02 ms.",
+  "fix": "After the open and before the clock, the harness reads the missing pages. The selected cold query is then a resident read. n=12 median 4.75e-5 s, IQR/median 0.024.",
+  "cold_open": "cold-open still times the open and the hole fault. That row stays wider."
+}

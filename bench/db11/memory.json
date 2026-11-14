@@ -1,0 +1,7 @@
+{
+  "frames_10000": {
+    "note": "VmHWM of one process. readcon streams append_trajectory_frames: one frame object is yielded at a time, groups of 64 are put into one LMDB transaction, and each group's text is dropped after the put. ASE holds the atom list for the whole trajectory. db9's one-shot text insert was 176.6 MB against ASE 189.8 MB.",
+    "readcon_db_mb": 101.1,
+    "ase_db_mb": 190.2
+  }
+}
