@@ -19,7 +19,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = PathBuf::from(&out_path).parent() {
         fs::create_dir_all(parent)?;
     }
-    let work = tempfile::tempdir()?;
+    let work = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("build/bench_corpus_ops");
+    if work.exists() {
+        fs::remove_dir_all(&work)?;
+    }
+    fs::create_dir_all(&work)?;
     let mut results = Vec::new();
 
     let mut files: Vec<_> = fs::read_dir(&frames_dir)?
@@ -39,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if n_frames == 0 {
             continue;
         }
-        let corpus_path = work.path().join(&name);
+        let corpus_path = work.join(&name);
         let _ = fs::remove_dir_all(&corpus_path);
         let db = ConCorpus::open(&corpus_path)?;
 

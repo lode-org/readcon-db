@@ -78,7 +78,7 @@ def main():
     root = Path(__file__).resolve().parents[2]
     out = Path(sys.argv[1] if len(sys.argv) > 1 else root / "build" / "ase_db_bench.json")
     work = root / "build" / "ase_db_bench_work"
-    work.mkdir(exist_ok=True)
+    work.mkdir(parents=True, exist_ok=True)
     results = []
     for n in [10, 50, 100, 200, 500]:
         r = bench_one(n, work / f"n{n}.db")

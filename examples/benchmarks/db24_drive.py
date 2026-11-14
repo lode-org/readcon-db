@@ -136,16 +136,18 @@ def git_out(*args: str) -> str:
     return subprocess.check_output(["git", *args], cwd=REPO, text=True).strip()
 
 
-def require_pushed_commit() -> None:
+def require_pushed_commit(repo: Path | None = None) -> None:
     """Refuse to measure a commit that origin does not already contain.
 
     Pushes re-stamp local commits, so a SHA measured before it is on origin
-    never exists upstream. The tree must be clean as well.
+    never exists upstream. The tree must be clean as well. ``repo`` is the
+    git checkout; the benchmark drivers use this repository.
     """
-    subprocess.check_call(["git", "fetch", "origin"], cwd=REPO)
+    repo = REPO if repo is None else Path(repo)
+    subprocess.check_call(["git", "fetch", "origin"], cwd=repo)
     contained = subprocess.run(
         ["git", "branch", "-r", "--contains", "HEAD"],
-        cwd=REPO,
+        cwd=repo,
         check=False,
         capture_output=True,
         text=True,
@@ -154,7 +156,9 @@ def require_pushed_commit() -> None:
         raise SystemExit(
             "refusing to measure: HEAD is not contained in any origin branch"
         )
-    dirty = subprocess.check_output(["git", "status", "--porcelain"], cwd=REPO, text=True)
+    dirty = subprocess.check_output(
+        ["git", "status", "--porcelain"], cwd=repo, text=True
+    )
     if dirty.strip():
         raise SystemExit("refusing to measure: working tree is not clean")
 

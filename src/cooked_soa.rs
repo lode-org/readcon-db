@@ -1755,9 +1755,9 @@ mod tests {
             let raw = synthetic_rcso(n, true);
             let packed = compress_shuffled(&raw).unwrap();
             let (parts, _) = component_parts(&packed);
-            assert!(parts.len() > 6, "n={n} parts {}", parts.len());
+            assert!(parts.len() > 8, "n={n} parts {}", parts.len());
             let n3 = n * 3;
-            for part in [3usize, 6] {
+            for part in [3usize, 6, 8] {
                 let bad = cut_component(&packed, part, 3);
                 let mut positions = vec![5f64; n3];
                 let mut forces = vec![5f64; n3];
@@ -1768,9 +1768,18 @@ mod tests {
                     err.to_string().contains("zstd") || err.to_string().contains("length"),
                     "n={n} part={part}: {err}"
                 );
-                assert_eq!(positions[0], 5.0, "n={n} part={part} wrote positions");
-                assert_eq!(forces[n3 - 1], 5.0, "n={n} part={part} wrote forces");
-                assert_eq!(vels[0], 5.0, "n={n} part={part} wrote velocities");
+                assert!(
+                    positions.iter().all(|value| *value == 5.0),
+                    "n={n} part={part} wrote positions"
+                );
+                assert!(
+                    forces.iter().all(|value| *value == 5.0),
+                    "n={n} part={part} wrote forces"
+                );
+                assert!(
+                    vels.iter().all(|value| *value == 5.0),
+                    "n={n} part={part} wrote velocities"
+                );
             }
         }
     }

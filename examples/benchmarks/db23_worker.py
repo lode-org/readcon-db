@@ -2,6 +2,7 @@
 
 import gc
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -13,8 +14,9 @@ import numpy as np
 
 DEST = Path(sys.argv[1])
 KIND = sys.argv[2]
-N_FRAMES = 64
-N_ATOMS = 100_000
+ARM = os.environ.get("READCON_BENCH_ARM", "lattice")
+N_FRAMES = int(os.environ.get("READCON_BENCH_NFRAMES", "64"))
+N_ATOMS = int(os.environ.get("READCON_BENCH_NATOMS", str(fair.arm_natoms(ARM))))
 # 17 is coprime to 64, so this is one permutation of every frame.
 FRAME_SEQUENCE = tuple((i * 17) % N_FRAMES for i in range(N_FRAMES))
 HOLDER = {}
@@ -28,21 +30,36 @@ def check(op: str, got, frame: int | None = None) -> None:
         return
     pos = np.asarray(got["positions"])
     assert pos.shape[1:] == (N_ATOMS, 3), pos.shape
-    assert pos.reshape(-1, N_ATOMS, 3)[0, 0, 1].tobytes() == np.float64(np.pi).tobytes()
-    energy = np.asarray(got["energy"], dtype=np.float64)
+    if ARM == "lattice":
+        assert pos.reshape(-1, N_ATOMS, 3)[0, 0, 1].tobytes() == np.float64(np.pi).tobytes()
+        energy = np.asarray(got["energy"], dtype=np.float64)
+        if op == "selected":
+            mid = N_FRAMES // 2 if frame is None else frame
+            assert pos.shape[0] == 1
+            assert (
+                energy.reshape(-1)[0].tobytes()
+                == (np.float64(-42.5) + np.float64(mid)).tobytes()
+            )
+            return
+        if op == "full_read":
+            assert pos.shape[0] == N_FRAMES
+            return
+        lo, hi = fair.range_bounds(N_FRAMES)
+        assert pos.shape[0] == hi - lo + 1
+        return
     if op == "selected":
         mid = N_FRAMES // 2 if frame is None else frame
         assert pos.shape[0] == 1
-        assert (
-            energy.reshape(-1)[0].tobytes()
-            == (np.float64(-42.5) + np.float64(mid)).tobytes()
-        )
-        return
-    if op == "full_read":
+        expect = fair.arm_positions(ARM, mid, N_ATOMS)
+    elif op == "full_read":
         assert pos.shape[0] == N_FRAMES
-        return
-    lo, hi = fair.range_bounds(N_FRAMES)
-    assert pos.shape[0] == hi - lo + 1
+        expect = fair.arm_positions(ARM, 0, N_ATOMS)
+    else:
+        lo, hi = fair.range_bounds(N_FRAMES)
+        assert pos.shape[0] == hi - lo + 1
+        expect = fair.arm_positions(ARM, lo, N_ATOMS)
+    if np.asarray(pos[0]).tobytes() != np.asarray(expect, dtype=np.float64).tobytes():
+        raise AssertionError(f"{ARM} {op} coordinates")
 
 
 def cold_sample(op: str) -> dict:
@@ -144,7 +161,10 @@ def payload() -> dict:
     if "ready" in PAYLOAD:
         return PAYLOAD["ready"]
     if KIND == "readcon-db":
-        text, records = fair.build_text_records(N_FRAMES, N_ATOMS)
+        if ARM == "lattice":
+            text, records = fair.build_text_records(N_FRAMES, N_ATOMS)
+        else:
+            text, records = fair.build_arm(ARM, N_FRAMES, N_ATOMS)
         built = {
             "text": text,
             "records": records,

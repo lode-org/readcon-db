@@ -347,7 +347,12 @@ def float_token(value: float) -> str:
 
 
 def synthetic_arrays(frame_index: int, n_atoms: int):
-    """The shared geometry. Both tools' records come from this."""
+    """Best-case lattice, not a ratio to quote.
+
+    ``x = i * 0.125`` with ``y`` and ``z`` constant across atoms in a frame.
+    Byte-shuffle then zstd shrinks this far more than a real trajectory.
+    The ``md`` and ``thermal`` arms are the ones to quote.
+    """
     pos = np.zeros((n_atoms, 3), dtype=np.float64)
     pos[:, 0] = np.arange(n_atoms, dtype=np.float64) * np.float64(0.125)
     pos[:, 1] = np.float64(0.5)
@@ -412,15 +417,213 @@ def _write_frame(buf: bytearray, frame_index: int, pos, forces, energy: float) -
         )
 
 
+def refuse_identical_frames(positions: list) -> None:
+    """Raise when two frames have the same coordinate bytes.
+
+    The header can carry a frame index, so the CON text is not the check.
+    Shuffle and the repeated-frame shortcut both key off the coordinates.
+    """
+    seen: set[bytes] = set()
+    for index, pos in enumerate(positions):
+        blob = np.ascontiguousarray(pos, dtype=np.float64).tobytes()
+        if blob in seen:
+            raise RuntimeError(f"refusing byte-identical frames at index {index}")
+        seen.add(blob)
+
+
 def build_text_records(n_frames: int, n_atoms: int) -> tuple[str, list[dict]]:
-    """CON text and the arrays it must round-trip to, without a ConFrame."""
+    """Lattice CON text. This is the labelled best case."""
     buf = bytearray(b"\n")
     records = []
     for i in range(n_frames):
         pos, forces, masses, energy, cell = synthetic_arrays(i, n_atoms)
         _write_frame(buf, i, pos, forces, float(energy))
         records.append(record_from_arrays(pos, forces, masses, energy, cell, i))
+    refuse_identical_frames([rec["positions"] for rec in records])
     return buf.decode(), records
+
+
+# Alanine dipeptide, heavy atoms, frames 0..63 of replica 0.
+# Computational Molecular Biology group, Freie Universität Berlin, mdshare.
+# CC-BY 4.0. Coordinates from
+# http://ftp.imp.fu-berlin.de/pub/cmb-data/alanine-dipeptide-3x250ns-heavy-atom-positions.npz
+# (nm, converted to angstrom). Topology:
+# http://ftp.imp.fu-berlin.de/pub/cmb-data/alanine-dipeptide-nowater.pdb
+# Species order in the file is C, O, N (6, 2, 2), taken from the heavy-atom
+# PDB order C, C, O, N, C, C, C, O, N, C.
+MD_TRAJECTORY_SHA256 = (
+    "a5b598566de2cc35762499696c0d78c8b866e6c52ff0f8520d48c63545c17e88"
+)
+MD_TRAJECTORY_PATH = (
+    Path(__file__).resolve().parents[2] / "resources" / "traj" / "alanine-dipeptide-heavy-64.con"
+)
+MD_N_FRAMES = 64
+MD_SYMBOLS = ["C"] * 6 + ["O"] * 2 + ["N"] * 2
+MD_BOX = 100.0
+THERMAL_SEED = 0
+THERMAL_SIGMA_ANGSTROM = 0.08
+DATA_ARMS = ("lattice", "md", "thermal")
+
+
+def md_trajectory_text() -> str:
+    """The pinned trajectory. The sha256 is of these exact bytes."""
+    data = MD_TRAJECTORY_PATH.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    if digest != MD_TRAJECTORY_SHA256:
+        raise RuntimeError(
+            f"MD trajectory sha256 {digest} != {MD_TRAJECTORY_SHA256}"
+        )
+    return data.decode()
+
+
+_MD_CACHE: list[np.ndarray] | None = None
+
+
+def _md_positions() -> list[np.ndarray]:
+    global _MD_CACHE
+    if _MD_CACHE is not None:
+        return _MD_CACHE
+    md_trajectory_text()
+    parsed = __import__("readcon").read_con(str(MD_TRAJECTORY_PATH))
+    positions = [np.array(frame.coords_array(), dtype=np.float64) for frame in parsed]
+    refuse_identical_frames(positions)
+    _MD_CACHE = positions
+    return positions
+
+
+def md_positions(frame_index: int) -> np.ndarray:
+    if not 0 <= frame_index < MD_N_FRAMES:
+        raise RuntimeError(f"MD trajectory has {MD_N_FRAMES} frames, not {frame_index}")
+    return _md_positions()[frame_index]
+
+
+def _heavy_con_frame(pos: np.ndarray, frame_index: int) -> str:
+    """One species-grouped heavy-atom frame, same layout as the pinned file."""
+    counts = {"C": 6, "O": 2, "N": 2}
+    masses = {"C": 12.011, "O": 15.999, "N": 14.007}
+    groups = ("C", "O", "N")
+    header = (
+        '{"con_spec_minor":1,"con_spec_version":3,"energy":0.0,"frame_index":'
+        + str(frame_index)
+        + ',"lattice_vectors":[[100.0,0.0,0.0],[0.0,100.0,0.0],[0.0,0.0,100.0]],'
+        + '"pbc":[true,true,true],"units":{"energy":"eV","length":"angstrom",'
+        + '"mass":"amu","time":"(amu*angstrom^2/eV)^0.5"}}'
+    )
+    lines = [
+        "Random Number Seed",
+        header,
+        f"{MD_BOX} {MD_BOX} {MD_BOX}",
+        "90.0 90.0 90.0",
+        "0 0",
+        "0 0 0",
+        "3",
+        " ".join(str(counts[s]) for s in groups),
+        " ".join(repr(float(masses[s])) for s in groups),
+    ]
+    cursor = 0
+    for component, symbol in enumerate(groups, start=1):
+        count = counts[symbol]
+        lines.append(symbol)
+        lines.append(f"Coordinates of Component {component}")
+        for row in pos[cursor : cursor + count]:
+            lines.append(
+                f"{repr(float(row[0]))} {repr(float(row[1]))} {repr(float(row[2]))} 0 {cursor}"
+            )
+            cursor += 1
+    if cursor != pos.shape[0]:
+        raise RuntimeError("heavy-atom frame has the wrong atom count")
+    return "\n".join(lines) + "\n"
+
+
+def thermal_positions(frame_index: int) -> np.ndarray:
+    """Seeded Gaussian noise on the first frame of the real trajectory."""
+    base = md_positions(0)
+    rng = np.random.default_rng(THERMAL_SEED + frame_index * 1_000_003)
+    noise = rng.normal(0.0, THERMAL_SIGMA_ANGSTROM, size=base.shape)
+    return np.asarray(base + noise, dtype=np.float64)
+
+
+def _md_records(positions: list[np.ndarray]) -> list[dict]:
+    cell = np.diag(np.array([MD_BOX, MD_BOX, MD_BOX], dtype=np.float64))
+    masses = np.array(
+        [{"C": 12.011, "O": 15.999, "N": 14.007}[sym] for sym in MD_SYMBOLS],
+        dtype=np.float64,
+    )
+    records = []
+    for i, pos in enumerate(positions):
+        records.append(
+            {
+                "symbols": list(MD_SYMBOLS),
+                "symbol_runs": _symbol_runs(list(MD_SYMBOLS)),
+                "positions": pos,
+                "cell": cell,
+                "pbc": (True, True, True),
+                "masses": masses.copy(),
+                "energy": 0.0,
+                "frame_index": i,
+            }
+        )
+    return records
+
+
+def build_md_records(n_frames: int | None = None) -> tuple[str, list[dict]]:
+    """Real MD frames. ``n_frames`` defaults to the whole pinned trajectory."""
+    positions = _md_positions()
+    if n_frames is None:
+        n_frames = len(positions)
+    if n_frames > len(positions):
+        raise RuntimeError(f"MD trajectory has {len(positions)} frames")
+    positions = positions[:n_frames]
+    refuse_identical_frames(positions)
+    text = "".join(_heavy_con_frame(pos, i) for i, pos in enumerate(positions))
+    # The committed file is the pin. A prefix is the same frames, rewritten
+    # with the same tokens, so a full read of the file is authoritative.
+    if n_frames == MD_N_FRAMES:
+        text = md_trajectory_text()
+        positions = _md_positions()
+    return text, _md_records(positions)
+
+
+def build_thermal_records(n_frames: int = 64) -> tuple[str, list[dict]]:
+    """Thermal noise on the real structure. Frames are seeded and distinct."""
+    positions = [thermal_positions(i) for i in range(n_frames)]
+    refuse_identical_frames(positions)
+    text = "".join(_heavy_con_frame(pos, i) for i, pos in enumerate(positions))
+    return text, _md_records(positions)
+
+
+def build_arm(
+    arm: str, n_frames: int = 64, n_atoms: int | None = None
+) -> tuple[str, list[dict]]:
+    """One data arm. ``lattice`` is the best case. Quote ``md`` or ``thermal``."""
+    if arm == "lattice":
+        return build_text_records(n_frames, 100_000 if n_atoms is None else n_atoms)
+    if arm == "md":
+        return build_md_records(n_frames)
+    if arm == "thermal":
+        return build_thermal_records(n_frames)
+    raise RuntimeError(f"unknown data arm {arm!r}")
+
+
+def arm_natoms(arm: str) -> int:
+    if arm == "lattice":
+        return 100_000
+    if arm in ("md", "thermal"):
+        return len(MD_SYMBOLS)
+    raise RuntimeError(f"unknown data arm {arm!r}")
+
+
+def arm_positions(arm: str, frame_index: int, n_atoms: int | None = None) -> np.ndarray:
+    if arm == "lattice":
+        pos, _forces, _masses, _energy, _cell = synthetic_arrays(
+            frame_index, 100_000 if n_atoms is None else n_atoms
+        )
+        return pos
+    if arm == "md":
+        return md_positions(frame_index)
+    if arm == "thermal":
+        return thermal_positions(frame_index)
+    raise RuntimeError(f"unknown data arm {arm!r}")
 
 
 def build_atom_records(n_frames: int, n_atoms: int) -> tuple[list[Atoms], list[dict]]:

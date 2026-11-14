@@ -53,6 +53,7 @@ mpi = { version = "0.8", optional = true, default-features = false }
 [dev-dependencies]
 tempfile = "3"
 sha2 = "0.10"
+zstd = { version = "0.13", default-features = false }
 
 [package.metadata.docs.rs]
 all-features = false
@@ -79,6 +80,10 @@ asset = [
 [[example]]
 name = "bench_corpus_ops"
 path = "examples/bench_corpus_ops.rs"
+
+[[example]]
+name = "db26_highbyte"
+path = "examples/db26_highbyte.rs"
 
 [[example]]
 name = "mpi_ingest_check"

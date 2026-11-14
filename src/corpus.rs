@@ -3840,7 +3840,7 @@ impl ConCorpus {
     /// Component-major shuffled blobs for one span, copied out of the read
     /// transaction. `None` when any frame is raw, grouped, or a different tag,
     /// so the caller keeps the path that parses those bytes.
-    #[cfg(feature = "python")]
+    #[cfg(any(feature = "python", test))]
     pub(crate) fn copy_shuffled_soa_blobs(
         &self,
         traj_id: TrajId,
@@ -8316,7 +8316,6 @@ x
         }
     }
 
-    #[cfg(feature = "python")]
     #[test]
     fn raw_codec_skips_the_shuffled_blob_scan() {
         let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
