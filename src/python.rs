@@ -352,54 +352,74 @@ impl PyConCorpus {
                 let mut next = 0u32;
                 let mut groups = 0u32;
                 let mut slots = Vec::new();
-                let mut put_text = |text: String| -> crate::error::Result<()> {
-                    if text.is_empty() {
-                        return Ok(());
-                    }
-                    let nput = self
-                        .inner
-                        .put_con_group(wtxn, traj_id, next, &text, &mut slots)?;
-                    drop(text);
-                    next += nput;
-                    groups += 1;
-                    if crate::corpus::fail_injected_group(groups) {
-                        return Err(crate::error::Error::Message(
-                            "injected insert failure".into(),
-                        ));
-                    }
-                    Ok(())
-                };
-                if let Some(n) = known {
-                    let mut start = 0usize;
-                    while start < n {
-                        let stop = (start + group).min(n);
-                        let kwargs = PyDict::new(py);
-                        kwargs.set_item("start", start).map_err(|e| {
-                            crate::error::Error::Message(format!("write_con_string: {e}"))
-                        })?;
-                        kwargs.set_item("stop", stop).map_err(|e| {
-                            crate::error::Error::Message(format!("write_con_string: {e}"))
-                        })?;
-                        let text: String = readcon
-                            .call_method("write_con_string", (frames.clone(),), Some(&kwargs))
-                            .and_then(|v| v.extract())
-                            .map_err(|e| {
+                {
+                    let mut put_text = |text: String| -> crate::error::Result<()> {
+                        if text.is_empty() {
+                            return Ok(());
+                        }
+                        let nput = self
+                            .inner
+                            .put_con_group(wtxn, traj_id, next, &text, &mut slots)?;
+                        drop(text);
+                        next += nput;
+                        groups += 1;
+                        if crate::corpus::fail_injected_group(groups) {
+                            return Err(crate::error::Error::Message(
+                                "injected insert failure".into(),
+                            ));
+                        }
+                        Ok(())
+                    };
+                    if let Some(n) = known {
+                        let mut start = 0usize;
+                        while start < n {
+                            let stop = (start + group).min(n);
+                            let kwargs = PyDict::new(py);
+                            kwargs.set_item("start", start).map_err(|e| {
                                 crate::error::Error::Message(format!("write_con_string: {e}"))
                             })?;
-                        put_text(text)?;
-                        start = stop;
-                    }
-                } else {
-                    let mut chunk: Vec<Py<PyAny>> = Vec::new();
-                    let iter = frames.try_iter().map_err(|e| {
-                        crate::error::Error::Message(format!("frame iterator: {e}"))
-                    })?;
-                    for item in iter {
-                        let item = item.map_err(|e| {
+                            kwargs.set_item("stop", stop).map_err(|e| {
+                                crate::error::Error::Message(format!("write_con_string: {e}"))
+                            })?;
+                            let text: String = readcon
+                                .call_method("write_con_string", (frames.clone(),), Some(&kwargs))
+                                .and_then(|v| v.extract())
+                                .map_err(|e| {
+                                    crate::error::Error::Message(format!("write_con_string: {e}"))
+                                })?;
+                            put_text(text)?;
+                            start = stop;
+                        }
+                    } else {
+                        let mut chunk: Vec<Py<PyAny>> = Vec::new();
+                        let iter = frames.try_iter().map_err(|e| {
                             crate::error::Error::Message(format!("frame iterator: {e}"))
                         })?;
-                        chunk.push(item.unbind());
-                        if chunk.len() == group {
+                        for item in iter {
+                            let item = item.map_err(|e| {
+                                crate::error::Error::Message(format!("frame iterator: {e}"))
+                            })?;
+                            chunk.push(item.unbind());
+                            if chunk.len() == group {
+                                let list = PyList::new(py, chunk.iter().map(|item| item.bind(py)))
+                                    .map_err(|e| {
+                                        crate::error::Error::Message(format!(
+                                            "write_con_string: {e}"
+                                        ))
+                                    })?;
+                                let text: String = readcon
+                                    .call_method1("write_con_string", (list,))
+                                    .and_then(|v| v.extract())
+                                    .map_err(|e| {
+                                        crate::error::Error::Message(format!(
+                                            "write_con_string: {e}"
+                                        ))
+                                    })?;
+                                chunk.clear();
+                                put_text(text)?;
+                            }
+                        }
+                        if !chunk.is_empty() {
                             let list = PyList::new(py, chunk.iter().map(|item| item.bind(py)))
                                 .map_err(|e| {
                                     crate::error::Error::Message(format!("write_con_string: {e}"))
@@ -414,22 +434,8 @@ impl PyConCorpus {
                             put_text(text)?;
                         }
                     }
-                    if !chunk.is_empty() {
-                        let list = PyList::new(py, chunk.iter().map(|item| item.bind(py)))
-                            .map_err(|e| {
-                                crate::error::Error::Message(format!("write_con_string: {e}"))
-                            })?;
-                        let text: String = readcon
-                            .call_method1("write_con_string", (list,))
-                            .and_then(|v| v.extract())
-                            .map_err(|e| {
-                                crate::error::Error::Message(format!("write_con_string: {e}"))
-                            })?;
-                        chunk.clear();
-                        put_text(text)?;
-                    }
+                    // End the closure borrow of `wtxn` before the metadata put.
                 }
-                drop(put_text);
                 if next == 0 {
                     return Ok(0);
                 }
@@ -510,6 +516,7 @@ impl PyConCorpus {
     /// The default atom-count window is the full `u32` domain. That window
     /// is not a predicate and does not walk `idx_natoms`. A narrower
     /// `natoms_min` or `natoms_max` does.
+    #[allow(clippy::too_many_arguments)]
     fn select(
         &self,
         traj_id: Option<u64>,
@@ -977,8 +984,8 @@ impl PyConCorpus {
             Ok((slice.as_ptr() as *mut f64, slice.len()))
         };
         let (pos_ptr, pos_len) = writable(&pos_buf)?;
-        let force_ptr = force_buf.as_ref().map(|buf| writable(buf)).transpose()?;
-        let vel_ptr = vel_buf.as_ref().map(|buf| writable(buf)).transpose()?;
+        let force_ptr = force_buf.as_ref().map(writable).transpose()?;
+        let vel_ptr = vel_buf.as_ref().map(writable).transpose()?;
         let pos_buf_ptr = (pos_ptr as usize, pos_len);
         let force_buf_ptr = force_ptr.map(|(ptr, len)| (ptr as usize, len));
         let vel_buf_ptr = vel_ptr.map(|(ptr, len)| (ptr as usize, len));

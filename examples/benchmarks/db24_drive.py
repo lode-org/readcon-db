@@ -136,6 +136,29 @@ def git_out(*args: str) -> str:
     return subprocess.check_output(["git", *args], cwd=REPO, text=True).strip()
 
 
+def require_pushed_commit() -> None:
+    """Refuse to measure a commit that origin does not already contain.
+
+    Pushes re-stamp local commits, so a SHA measured before it is on origin
+    never exists upstream. The tree must be clean as well.
+    """
+    subprocess.check_call(["git", "fetch", "origin"], cwd=REPO)
+    contained = subprocess.run(
+        ["git", "branch", "-r", "--contains", "HEAD"],
+        cwd=REPO,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if contained.returncode != 0 or not contained.stdout.strip():
+        raise SystemExit(
+            "refusing to measure: HEAD is not contained in any origin branch"
+        )
+    dirty = subprocess.check_output(["git", "status", "--porcelain"], cwd=REPO, text=True)
+    if dirty.strip():
+        raise SystemExit("refusing to measure: working tree is not clean")
+
+
 def cpu_model() -> str:
     try:
         for line in Path("/proc/cpuinfo").read_text().splitlines():
@@ -628,6 +651,7 @@ def write_results(record: dict, levers: dict) -> None:
 
 
 def main() -> None:
+    require_pushed_commit()
     scratch_tmp = REPO / "build" / "tmp"
     scratch_tmp.mkdir(parents=True, exist_ok=True)
     os.environ["TMPDIR"] = str(scratch_tmp)

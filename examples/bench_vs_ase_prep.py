@@ -8,7 +8,11 @@ root = pathlib.Path(
     if len(sys.argv) > 1
     else pathlib.Path(__file__).resolve().parents[1] / "resources" / "test"
 )
-out = pathlib.Path(sys.argv[2] if len(sys.argv) > 2 else "/tmp/bench_frames")
+out = pathlib.Path(
+    sys.argv[2]
+    if len(sys.argv) > 2
+    else pathlib.Path(__file__).resolve().parents[1] / "build" / "bench_frames"
+)
 out.mkdir(parents=True, exist_ok=True)
 single = (root / "tiny_cuh2.con").read_text()
 for n in [10, 50, 100, 200, 500]:

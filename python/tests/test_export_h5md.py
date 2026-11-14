@@ -237,6 +237,8 @@ def test_export_h5md_con_fallback_matches_rcso(tmp_path):
     db = ConCorpus(str(tmp_path / "corpus"))
     n = db.append_trajectory(1, str(FIXTURE / "tiny_multi_cuh2.con"))
     assert n >= 2
+    for frame in range(n):
+        db.delete_cooked_soa(1, frame)
     assert not db.has_valid_cooked_soa(1, 0)
     out_con = tmp_path / "from_con.h5"
     db.export_h5md(1, str(out_con))

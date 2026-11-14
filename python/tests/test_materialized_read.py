@@ -26,7 +26,7 @@ def test_both_tools_materialize_the_same_arrays(tmp_path):
             db = fair.open_readcon(dest / "corpus")
         else:
             db = fair.open_ase_reader(dest / "atoms.db")
-        got = fair.fetch_materialized(kind, db, "full_read", 0)
+        got = fair.fetch_materialized(kind, db, "full_read", 0, 1)
         fair.check_materialized(got, records)
         assert got["positions"].dtype == np.float64
         assert got["masses"].dtype == np.float64

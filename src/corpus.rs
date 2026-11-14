@@ -267,19 +267,31 @@ fn column_buf(n: usize) -> Vec<f64> {
     out
 }
 
-#[allow(clippy::too_many_arguments)]
+fn shuffled_soa_header(blob: &[u8]) -> Result<(u32, u32)> {
+    if blob.len() < 2 || blob[0] != 0xFB || blob[1] != 0x04 {
+        return Err(Error::Message("not a shuffled cooked frame".into()));
+    }
+    if blob.len() < 10 {
+        return Err(Error::Message(
+            "shuffled cooked frame is shorter than its header".into(),
+        ));
+    }
+    Ok((
+        u32::from_le_bytes(blob[2..6].try_into().unwrap()),
+        u32::from_le_bytes(blob[6..10].try_into().unwrap()),
+    ))
+}
+
 fn decode_soa_columns(blobs: &[Vec<u8>]) -> Result<MaterializedRead> {
-    let natoms = u32::from_le_bytes(blobs[0][2..6].try_into().unwrap());
-    let flags = u32::from_le_bytes(blobs[0][6..10].try_into().unwrap());
+    let (natoms, flags) = shuffled_soa_header(&blobs[0])?;
     let atoms = natoms as usize;
     let stride = atoms * 3;
     let n = blobs.len();
     let has_f = flags & crate::cooked_soa::FLAG_FORCES != 0;
     let has_v = flags & crate::cooked_soa::FLAG_VELOCITIES != 0;
     for blob in blobs {
-        let same_n = u32::from_le_bytes(blob[2..6].try_into().unwrap()) == natoms;
-        let same_f = u32::from_le_bytes(blob[6..10].try_into().unwrap()) == flags;
-        if !same_n || !same_f {
+        let (same_n, same_f) = shuffled_soa_header(blob)?;
+        if same_n != natoms || same_f != flags {
             return Err(Error::Message(
                 "shuffled frames in one read do not share a layout".into(),
             ));
@@ -316,8 +328,7 @@ pub(crate) fn decode_shuffled_soa_into(
     if blobs.is_empty() {
         return Ok(Vec::new());
     }
-    let natoms = u32::from_le_bytes(blobs[0][2..6].try_into().unwrap());
-    let flags = u32::from_le_bytes(blobs[0][6..10].try_into().unwrap());
+    let (natoms, flags) = shuffled_soa_header(&blobs[0])?;
     let stride = natoms as usize * 3;
     let n = blobs.len();
     let has_f = flags & crate::cooked_soa::FLAG_FORCES != 0;
@@ -331,9 +342,8 @@ pub(crate) fn decode_shuffled_soa_into(
         ));
     }
     for blob in blobs {
-        let same_n = u32::from_le_bytes(blob[2..6].try_into().unwrap()) == natoms;
-        let same_f = u32::from_le_bytes(blob[6..10].try_into().unwrap()) == flags;
-        if !same_n || !same_f || blob.len() < 2 || blob[0] != 0xFB || blob[1] != 0x04 {
+        let (same_n, same_f) = shuffled_soa_header(blob)?;
+        if same_n != natoms || same_f != flags {
             return Err(Error::Message(
                 "shuffled frames in one read do not share a layout".into(),
             ));
@@ -649,9 +659,17 @@ impl FreshDir {
 impl Drop for FreshDir {
     fn drop(&mut self) {
         if self.remove.load(Ordering::Relaxed) {
-            let _ = fs::remove_dir_all(&self.path);
+            remove_fresh_corpus(&self.path);
         }
     }
+}
+
+/// Drop the LMDB files this open created, then the directory if it is empty.
+/// A foreign file stays. This never uses `remove_dir_all`.
+fn remove_fresh_corpus(path: &Path) {
+    let _ = fs::remove_file(path.join("data.mdb"));
+    let _ = fs::remove_file(path.join("lock.mdb"));
+    let _ = fs::remove_dir(path);
 }
 
 /// Removes a directory created by `open` when that open does not succeed.
@@ -663,7 +681,7 @@ struct AbortDir {
 impl Drop for AbortDir {
     fn drop(&mut self) {
         if self.armed {
-            let _ = fs::remove_dir_all(&self.path);
+            remove_fresh_corpus(&self.path);
         }
     }
 }
@@ -1282,13 +1300,11 @@ impl ConCorpus {
                 path.display()
             )));
         }
-        if readonly {
-            if !path.join("data.mdb").is_file() {
-                return Err(Error::Message(format!(
-                    "readonly open: {} is not a corpus directory",
-                    path.display()
-                )));
-            }
+        if readonly && !path.join("data.mdb").is_file() {
+            return Err(Error::Message(format!(
+                "readonly open: {} is not a corpus directory",
+                path.display()
+            )));
         }
         let created = !readonly && !path.exists();
         if !readonly {
@@ -3831,6 +3847,14 @@ impl ConCorpus {
         span: Option<(u32, u32)>,
     ) -> Result<Option<Vec<Vec<u8>>>> {
         let rtxn = self.read_txn()?;
+        let tid = traj_id.to_be_bytes();
+        if let Some(raw) = self.traj_meta.get(&rtxn, &tid[..])? {
+            let meta: TrajMeta = serde_json::from_str(raw)?;
+            // A raw corpus has no component-major frames. Skip the key scan.
+            if meta.cooked_codec.as_deref() == Some("raw") {
+                return Ok(None);
+            }
+        }
         let prefix = traj_id.to_be_bytes();
         let mut keys = Vec::new();
         let mut iter = self.frames.prefix_iter(&rtxn, &prefix[..])?;
@@ -3859,6 +3883,11 @@ impl ConCorpus {
             let Some(blob) = self.frames_soa.get(&rtxn, &fk_b[..])? else {
                 return Ok(None);
             };
+            if (2..10).contains(&blob.len()) {
+                return Err(Error::Message(
+                    "shuffled cooked frame is shorter than its header".into(),
+                ));
+            }
             if blob.len() < 2 || blob[0] != 0xFB || blob[1] != 0x04 {
                 return Ok(None);
             }
@@ -8250,6 +8279,77 @@ x
         assert!(path.join("data.mdb").is_file());
         let db = reopen(&path);
         assert!(db.traj_meta(1).unwrap().is_some());
+    }
+
+    #[test]
+    fn rejected_write_keeps_a_foreign_file() {
+        let parent = tempfile::tempdir().unwrap();
+        let path = parent.path().join("corpus");
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let _token = lock_codec();
+        let _restore = CodecVar;
+        std::env::set_var("READCON_DB_COOKED_CODEC", "nope");
+        let db = ConCorpus::open(&path).unwrap();
+        std::fs::write(path.join("notes.txt"), b"keep me").unwrap();
+        let err = db
+            .append_trajectory_str(1, &text, "tiny_cuh2.con")
+            .unwrap_err();
+        drop(db);
+        assert!(err.to_string().contains("shuffle-zstd"), "{err}");
+        assert!(path.is_dir());
+        assert_eq!(std::fs::read(path.join("notes.txt")).unwrap(), b"keep me");
+        assert!(!path.join("data.mdb").exists());
+        assert!(!path.join("lock.mdb").exists());
+    }
+
+    #[test]
+    fn short_shuffled_header_is_an_error() {
+        for len in 2..10 {
+            let mut blob = vec![0u8; len];
+            blob[0] = 0xFB;
+            blob[1] = 0x04;
+            let err = decode_shuffled_soa_into(&[blob], &mut [], &mut [], &mut []).unwrap_err();
+            assert!(
+                err.to_string().contains("shorter than its header"),
+                "len={len}: {err}"
+            );
+        }
+    }
+
+    #[cfg(feature = "python")]
+    #[test]
+    fn raw_codec_skips_the_shuffled_blob_scan() {
+        let text = std::fs::read_to_string(fixture("tiny_cuh2.con")).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let _token = lock_codec();
+        let _restore = CodecVar;
+        std::env::set_var("READCON_DB_COOKED_CODEC", "raw");
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_str(1, &text, "tiny_cuh2.con").unwrap();
+        let key = FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        db.with_write(0, |wtxn| {
+            let fk = key.to_bytes();
+            db.frames_soa.put(wtxn, &fk[..], &[0xFB, 0x04, 1, 2, 3])?;
+            Ok(())
+        })
+        .unwrap();
+        let skipped = db.copy_shuffled_soa_blobs(1, None).unwrap();
+        assert!(skipped.is_none());
+        db.with_write(0, |wtxn| {
+            let tid = 1u64.to_be_bytes();
+            let raw = db.traj_meta.get(wtxn, &tid[..])?.unwrap().to_string();
+            let mut meta: TrajMeta = serde_json::from_str(&raw)?;
+            meta.cooked_codec = Some("shuffle-zstd".into());
+            db.traj_meta
+                .put(wtxn, &tid[..], &serde_json::to_string(&meta)?)?;
+            Ok(())
+        })
+        .unwrap();
+        let err = db.copy_shuffled_soa_blobs(1, None).unwrap_err();
+        assert!(err.to_string().contains("shorter than its header"), "{err}");
     }
 
     fn hash_table_entries(db: &ConCorpus, name: &str) -> u64 {

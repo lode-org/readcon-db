@@ -620,9 +620,6 @@ struct ZstdScratch {
     dec: zstd::bulk::Decompressor<'static>,
     /// One decompressed column, reused by the interleaved db20 tag.
     buf: Vec<u8>,
-    /// Decompressed `x`, `y`, and `z` for one component-major block.
-    /// Reused across frames so a full read does not allocate per column.
-    cols: [Vec<u8>; 3],
 }
 
 fn with_zstd_scratch<T>(body: impl FnOnce(&mut ZstdScratch) -> Result<T>) -> Result<T> {
@@ -637,7 +634,6 @@ fn with_zstd_scratch<T>(body: impl FnOnce(&mut ZstdScratch) -> Result<T>) -> Res
             *guard = Some(ZstdScratch {
                 dec,
                 buf: Vec::new(),
-                cols: [Vec::new(), Vec::new(), Vec::new()],
             });
         }
         body(guard.as_mut().unwrap())
@@ -1027,13 +1023,13 @@ fn fill_component_columns(
         if off + 4 > stored.len() {
             return Err(Error::Message("truncated shuffled cooked frame".into()));
         }
-        let clen = u32::from_le_bytes(stored[off..off + 4].try_into().unwrap()) as usize;
+        let comp_len = u32::from_le_bytes(stored[off..off + 4].try_into().unwrap()) as usize;
         off += 4;
-        if off + clen > stored.len() {
+        if off + comp_len > stored.len() {
             return Err(Error::Message("truncated shuffled cooked frame".into()));
         }
-        parts.push((off, clen));
-        off += clen;
+        parts.push((off, comp_len));
+        off += comp_len;
     }
     if stored.len() < off + HEADER_LEN || &stored[off..off + 4] != COOKED_MAGIC {
         return Err(Error::Message(
@@ -1047,61 +1043,61 @@ fn fill_component_columns(
             "shuffled cooked frame length mismatch".into(),
         ));
     }
+    if !positions.len().is_multiple_of(3) {
+        return Err(Error::Message(
+            "shuffled cooked frame length mismatch".into(),
+        ));
+    }
+    let atoms = positions.len() / 3;
+    // Every lane is decompressed before any caller buffer is written. A short
+    // part, including one past the position columns, leaves those buffers as
+    // the caller left them.
+    let decoded = decompress_component_columns(stored, &parts, atoms * 8)?;
     let mut i = 0usize;
     for dst in [positions, forces, velocities] {
         if dst.is_empty() {
             continue;
         }
-        if i + 3 > parts.len() {
+        if i + 3 > decoded.len() || !dst.len().is_multiple_of(3) {
             return Err(Error::Message(
                 "shuffled cooked frame length mismatch".into(),
             ));
         }
-        decode_lanes(stored, &parts[i..i + 3], dst)?;
+        crate::byte_shuffle::unshuffle_interleave(
+            &decoded[i],
+            &decoded[i + 1],
+            &decoded[i + 2],
+            dst,
+        );
         i += 3;
     }
     Ok(off)
 }
 
-fn decode_lanes(stored: &[u8], parts: &[(usize, usize)], dst: &mut [f64]) -> Result<()> {
-    if dst.is_empty() {
-        return Ok(());
-    }
-    if parts.len() != 3 || dst.len() % 3 != 0 {
-        return Err(Error::Message(
-            "shuffled cooked frame length mismatch".into(),
-        ));
-    }
-    let n = dst.len() / 3;
-    // Decompress and unshuffle every lane before the destination is written.
-    // A short or extra part then leaves the caller's buffer unchanged.
+fn decompress_component_columns(
+    stored: &[u8],
+    parts: &[(usize, usize)],
+    expect: usize,
+) -> Result<Vec<Vec<u8>>> {
     with_zstd_scratch(|scratch| {
-        for lane in 0..3 {
-            let (start, clen) = parts[lane];
-            let comp = &stored[start..start + clen];
-            let mut col = std::mem::take(&mut scratch.cols[lane]);
-            col.clear();
-            col.reserve(n * 8);
-            let decoded = scratch
+        let mut decoded = Vec::with_capacity(parts.len());
+        for &(start, comp_len) in parts {
+            let comp = stored
+                .get(start..start + comp_len)
+                .ok_or_else(|| Error::Message("truncated shuffled cooked frame".into()))?;
+            let mut col = Vec::with_capacity(expect);
+            scratch
                 .dec
                 .decompress_to_buffer(comp, &mut col)
-                .map_err(|e| Error::Message(format!("zstd decode: {e}")));
-            let len = col.len();
-            scratch.cols[lane] = col;
-            decoded?;
-            if len != n * 8 {
+                .map_err(|e| Error::Message(format!("zstd decode: {e}")))?;
+            if col.len() != expect {
                 return Err(Error::Message(
                     "shuffled cooked frame has the wrong length".into(),
                 ));
             }
+            decoded.push(col);
         }
-        crate::byte_shuffle::unshuffle_interleave(
-            &scratch.cols[0],
-            &scratch.cols[1],
-            &scratch.cols[2],
-            dst,
-        );
-        Ok(())
+        Ok(decoded)
     })
 }
 
@@ -1652,10 +1648,10 @@ mod tests {
         let mut off = 14usize;
         let mut parts = Vec::with_capacity(ncomp);
         for _ in 0..ncomp {
-            let clen = u32::from_le_bytes(packed[off..off + 4].try_into().unwrap()) as usize;
+            let comp_len = u32::from_le_bytes(packed[off..off + 4].try_into().unwrap()) as usize;
             off += 4;
-            parts.push((off, clen));
-            off += clen;
+            parts.push((off, comp_len));
+            off += comp_len;
         }
         (parts, off)
     }
@@ -1663,13 +1659,16 @@ mod tests {
     /// Shorten one component's payload and its length prefix. Later parts stay aligned.
     fn cut_component(packed: &[u8], part: usize, new_len: usize) -> Vec<u8> {
         let (parts, _) = component_parts(packed);
-        let (start, clen) = parts[part];
-        assert!(new_len < clen, "cut {new_len} is not shorter than {clen}");
-        let mut out = Vec::with_capacity(packed.len() - (clen - new_len));
+        let (start, comp_len) = parts[part];
+        assert!(
+            new_len < comp_len,
+            "cut {new_len} is not shorter than {comp_len}"
+        );
+        let mut out = Vec::with_capacity(packed.len() - (comp_len - new_len));
         out.extend_from_slice(&packed[..start - 4]);
         out.extend_from_slice(&(new_len as u32).to_le_bytes());
         out.extend_from_slice(&packed[start..start + new_len]);
-        out.extend_from_slice(&packed[start + clen..]);
+        out.extend_from_slice(&packed[start + comp_len..]);
         out
     }
 
@@ -1716,6 +1715,63 @@ mod tests {
             assert!(decompress_shuffled(&extra).is_err(), "n={n} extra");
             assert_eq!(positions[0], 0.0, "n={n} extra wrote positions");
             assert_eq!(vels[0], 7.0, "n={n} extra wrote velocities");
+        }
+    }
+
+    fn replace_component(packed: &[u8], part: usize, plain: &[u8]) -> Vec<u8> {
+        let (parts, _) = component_parts(packed);
+        let (start, comp_len) = parts[part];
+        let compressed = zstd::bulk::compress(plain, 3).unwrap();
+        let mut out = Vec::new();
+        out.extend_from_slice(&packed[..start - 4]);
+        out.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
+        out.extend_from_slice(&compressed);
+        out.extend_from_slice(&packed[start + comp_len..]);
+        out
+    }
+
+    #[test]
+    fn valid_zstd_with_the_wrong_decoded_length_is_rejected() {
+        let n = 64usize;
+        let raw = synthetic_rcso(n, false);
+        let packed = compress_shuffled(&raw).unwrap();
+        let (parts, _) = component_parts(&packed);
+        let (start, comp_len) = parts[0];
+        let plain = zstd::stream::decode_all(&packed[start..start + comp_len]).unwrap();
+        assert_eq!(plain.len(), n * 8);
+        let bad = replace_component(&packed, 0, &plain[..plain.len() - 8]);
+        let n3 = n * 3;
+        let mut positions = vec![3f64; n3];
+        let mut forces = vec![3f64; n3];
+        let err = decompress_shuffled_into(&bad, &mut positions, &mut forces, &mut []).unwrap_err();
+        assert!(err.to_string().contains("wrong length"), "{err}");
+        assert_eq!(positions[0], 3.0);
+        assert_eq!(forces[0], 3.0);
+    }
+
+    #[test]
+    fn a_short_later_part_does_not_write_earlier_columns() {
+        for n in [16_383usize, 16_384, 16_385] {
+            let raw = synthetic_rcso(n, true);
+            let packed = compress_shuffled(&raw).unwrap();
+            let (parts, _) = component_parts(&packed);
+            assert!(parts.len() > 6, "n={n} parts {}", parts.len());
+            let n3 = n * 3;
+            for part in [3usize, 6] {
+                let bad = cut_component(&packed, part, 3);
+                let mut positions = vec![5f64; n3];
+                let mut forces = vec![5f64; n3];
+                let mut vels = vec![5f64; n3];
+                let err = decompress_shuffled_into(&bad, &mut positions, &mut forces, &mut vels)
+                    .unwrap_err();
+                assert!(
+                    err.to_string().contains("zstd") || err.to_string().contains("length"),
+                    "n={n} part={part}: {err}"
+                );
+                assert_eq!(positions[0], 5.0, "n={n} part={part} wrote positions");
+                assert_eq!(forces[n3 - 1], 5.0, "n={n} part={part} wrote forces");
+                assert_eq!(vels[0], 5.0, "n={n} part={part} wrote velocities");
+            }
         }
     }
 

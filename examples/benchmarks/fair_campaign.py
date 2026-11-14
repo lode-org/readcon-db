@@ -295,7 +295,9 @@ def bench_ase_db(con_path: Path, n_frames: int, db_path: Path) -> dict:
 
 def interchange_parse(fixture: Path, n_frames: int = 100, repeats: int = 5) -> dict:
     """Parse throughput: readcon vs ASE on multi-frame CON text file."""
-    with tempfile.TemporaryDirectory() as td:
+    scratch = REPO_DB / "build" / "fair-campaign"
+    scratch.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=scratch) as td:
         p = Path(td) / "traj.con"
         write_ladder_con(fixture, n_frames, p)
         # warm
