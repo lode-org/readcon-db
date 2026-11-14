@@ -10,6 +10,7 @@ exclude = """(?x)(
     ^fortran/.*/build/|
     ^resources/test/|
     ^examples/benchmarks/|
+    ^fuzz/corpus/|
     ^.*\\.svg$|
     ^.*\\.lock$
 )"""

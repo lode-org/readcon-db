@@ -9,12 +9,42 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+readcon-core = { version = "=0.23.0", features = ["zstd"] }
 readcon-db = { path = ".." }
+serde_json = "1"
 tempfile = "3"
 
 [[bin]]
 name = "ingest-query"
 path = "fuzz_targets/ingest_query.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ingest-files"
+path = "fuzz_targets/ingest_files.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ingest-roundtrip"
+path = "fuzz_targets/ingest_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "corrupt-store"
+path = "fuzz_targets/corrupt_store.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rcso-blob"
+path = "fuzz_targets/rcso_blob.rs"
 test = false
 doc = false
 bench = false
