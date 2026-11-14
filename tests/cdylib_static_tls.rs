@@ -1,5 +1,8 @@
 //! The db cdylib must dlopen after static TLS surplus is spent.
 
+// readelf, dlopen, and the .so name are Linux; the whole file is.
+#![cfg(target_os = "linux")]
+
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -29,7 +32,6 @@ fn cdylib() -> PathBuf {
     so
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn a_late_dlopen_has_no_initial_exec_tls() {
     let so = cdylib();
