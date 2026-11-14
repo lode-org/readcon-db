@@ -1,77 +1,82 @@
-"""Paired raw full-read bisect, n=30, 95% CI.
+"""Paired raw full-read summaries from per-sample times.
 
-Warm full reads of the lattice arm (100000 atoms, 64 frames), raw codec,
-same settings on both sides of each step. The median is type-7. The CI is
-a 10000-draw percentile bootstrap of the paired ratio at one sample index,
-numpy Generator seed 0.
+Warm full reads of the lattice arm, raw codec, n=30. The median is
+type-7. The CI is a 10000-draw percentile bootstrap of the paired
+ratio at one sample index, numpy Generator seed 0.
 
-Every interval includes 1. The largest point estimate is aedcbda4 to
-750b197 at one thread, 1.1169 [0.9890, 1.2829], and the newer side was
-faster on 11 of 30 pairs. The two later steps sit on 1.0. The raw full-read
-path is unchanged from 20a5f64e to this tip (the later source edits are a
-shuffle-decode test and a cfg on the shuffled blob copy), so the same
-intervals cover HEAD. There is no commit whose removal would put the
-slowdown outside the noise.
+``STEPS`` is computed from ``raw_full_bisect_samples.json``. Medians
+and intervals are not stored in that file.
 """
 
 from __future__ import annotations
 
-STEPS = (
-    {
-        "left": "aedcbda4",
-        "right": "750b197",
-        "threads": "unset",
-        "n": 30,
-        "paired_median": 0.9908,
-        "ci95": (0.9366, 1.2785),
-        "right_faster": 16,
-    },
-    {
-        "left": "aedcbda4",
-        "right": "750b197",
-        "threads": "1",
-        "n": 30,
-        "paired_median": 1.1169,
-        "ci95": (0.9890, 1.2829),
-        "right_faster": 11,
-    },
-    {
-        "left": "750b197",
-        "right": "d671c32",
-        "threads": "unset",
-        "n": 30,
-        "paired_median": 1.0365,
-        "ci95": (0.9612, 1.1562),
-        "right_faster": 13,
-    },
-    {
-        "left": "750b197",
-        "right": "d671c32",
-        "threads": "1",
-        "n": 30,
-        "paired_median": 1.0023,
-        "ci95": (0.9044, 1.1178),
-        "right_faster": 15,
-    },
-    {
-        "left": "d671c32",
-        "right": "20a5f64",
-        "threads": "unset",
-        "n": 30,
-        "paired_median": 1.0089,
-        "ci95": (0.9674, 1.0537),
-        "right_faster": 14,
-    },
-    {
-        "left": "d671c32",
-        "right": "20a5f64",
-        "threads": "1",
-        "n": 30,
-        "paired_median": 0.9957,
-        "ci95": (0.8876, 1.2003),
-        "right_faster": 15,
-    },
-)
+import json
+from pathlib import Path
+
+import numpy as np
+
+SAMPLES_PATH = Path(__file__).resolve().parent / "raw_full_bisect_samples.json"
+BOOT_DRAWS = 10_000
+BOOT_SEED = 0
+
+
+def bootstrap_ci(
+    ratios: np.ndarray, draws: int = BOOT_DRAWS, seed: int = BOOT_SEED
+) -> list[float]:
+    rng = np.random.default_rng(seed)
+    n = int(ratios.size)
+    boots = np.empty(draws, dtype=np.float64)
+    for i in range(draws):
+        idx = rng.integers(0, n, n)
+        boots[i] = np.percentile(ratios[idx], 50, method="linear")
+    lo, hi = np.percentile(boots, [2.5, 97.5], method="linear")
+    return [float(lo), float(hi)]
+
+
+def summarize_pair(left: list[float], right: list[float]) -> dict:
+    """Median, 95% CI, and win count of ``right / left`` at the same index."""
+    a = np.asarray(left, dtype=np.float64)
+    b = np.asarray(right, dtype=np.float64)
+    if a.shape != b.shape or a.size < 30:
+        raise ValueError(
+            f"a paired bisect needs n>=30 on both sides, got {a.size} and {b.size}"
+        )
+    ratios = b / a
+    return {
+        "n": int(a.size),
+        "left_median_s": float(np.percentile(a, 50, method="linear")),
+        "right_median_s": float(np.percentile(b, 50, method="linear")),
+        "paired_median": float(np.percentile(ratios, 50, method="linear")),
+        "ci95": bootstrap_ci(ratios),
+        "right_faster": int(np.sum(b < a)),
+    }
+
+
+def steps_from_samples(records: list[dict]) -> list[dict]:
+    steps = []
+    for record in records:
+        summary = summarize_pair(
+            record["samples"][record["left"]], record["samples"][record["right"]]
+        )
+        steps.append(
+            {
+                "left": record["left"],
+                "right": record["right"],
+                "left_sha": record["left_sha"],
+                "right_sha": record["right_sha"],
+                "threads": record["threads"],
+                **summary,
+            }
+        )
+    return steps
+
+
+def load_steps(path: Path | None = None) -> list[dict]:
+    records = json.loads((path or SAMPLES_PATH).read_text())
+    return steps_from_samples(records)
+
+
+STEPS = load_steps()
 
 
 def intervals_include_one() -> bool:
