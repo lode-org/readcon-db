@@ -60,6 +60,8 @@ fn symbol(id: u8) -> &'static str {
 fn frames_from(data: &[u8]) -> Option<Vec<ConFrame>> {
     let mut input = Input { data, at: 0 };
     let n_frames = 1 + usize::from(input.byte() % 3);
+    // trajectory_positions requires one atom count for the whole trajectory.
+    let atoms = 1 + usize::from(input.byte() % 4);
     let mut frames = Vec::with_capacity(n_frames);
     for _ in 0..n_frames {
         let mut builder = ConFrameBuilder::new(
@@ -74,7 +76,6 @@ fn frames_from(data: &[u8]) -> Option<Vec<ConFrame>> {
                 "time": NATURAL_TIME_UNIT,
             }))
             .ok()?;
-        let atoms = 1 + usize::from(input.byte() % 4);
         let velocities = input.byte() & 1 == 1;
         let mut masses = [None; 8];
         for index in 0..atoms {
