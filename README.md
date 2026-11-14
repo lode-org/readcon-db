@@ -73,7 +73,7 @@ let h = db.frame_hash(keys[0])?;
 
 Foreign trajectories: **`readcon.read_chemfiles("traj.xyz")` → frames → ingest into readcon-db** (chemfiles-enabled build), not `ase.io.read`.
 
-Python `append_trajectory_frames` commits 64 frames at a time. `get_frame` returns a `StoredFrame` (`atoms[i]` builds that atom only). Gzip and zstd files are read with `readcon.read_con`, then appended. Python `append_trajectory` and Rust `append_trajectory_path` read UTF-8 and do not decompress. `readcon-db` does not register an `ase.ioformats` entry point. Guide: [`docs/orgmode/howto/streaming.org`](docs/orgmode/howto/streaming.org). Upgrade from 0.2.0: [`docs/orgmode/howto/migration.org`](docs/orgmode/howto/migration.org).
+`append_trajectory` and `append_trajectory_str` commit the whole trajectory once. A failure aborts that transaction, so no frame from it is visible. Python `append_trajectory_frames` commits 64 frames at a time: a later group can fail after earlier groups are stored. `get_frame` returns a `StoredFrame` (`atoms[i]` builds that atom only). `select` returns keys. `read_arrays` copies the cooked columns into NumPy. Gzip and zstd files are read with `readcon.read_con`, then appended. Python `append_trajectory` and Rust `append_trajectory_path` read UTF-8 and do not decompress. `readcon-db` does not register an `ase.ioformats` entry point. Guide: [`docs/orgmode/howto/streaming.org`](docs/orgmode/howto/streaming.org). The CLI tutorial is [`docs/orgmode/tutorials/tutorial.org`](docs/orgmode/tutorials/tutorial.org). Upgrade from 0.2.0: [`docs/orgmode/howto/migration.org`](docs/orgmode/howto/migration.org).
 
 ## Design
 
@@ -127,12 +127,14 @@ sample. One warmup is discarded. Six serial samples alternate the two
 tools. The summary is the Hyndman–Fan type-7 median and IQR. Every
 stored field is checked by its float64 bytes; a mismatch aborts the run.
 
-A cold read calls `posix_fadvise(DONTNEED)` on the closed database
-files, then times a readonly open plus the read.
+A cold read drops the page cache and opens outside the clock, then
+times the query. `cold-open` drops the cache outside the clock and
+times the open together with the query, for both tools.
 `/proc/sys/vm/drop_caches` was not writable on the measurement host.
 A warm read is the next read on the already open store. The timed
-close does not call `gc.collect()`. Full reads use `read_columns`.
-The single-frame query is `frame_index` of the middle frame.
+close does not call `gc.collect()`. Full reads and the selected frame
+copy the same materialized columns. The single-frame query is
+`frame_index` of the middle frame. The rules are in `FAIRNESS.md`.
 
 The published CPC log (`paper/cpc/logs/db.log`, 40 frames of 8 Cu, no
 warmup) is readcon-db 4.67 ms and ASE 72.3 ms (IQR 37.7 ms). ASE

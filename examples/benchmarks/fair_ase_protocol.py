@@ -58,11 +58,11 @@ from readcon_db import ConCorpus
 
 REPO = Path(__file__).resolve().parents[2]
 WARMUP = 1
-N_SAMPLES = 6
-# A row whose six means are still wide gets six more. The published
-# figure is then n=12.
+N_SAMPLES = int(os.environ.get("READCON_DB_N_SAMPLES", "6"))
+# A row whose first samples are still wide keeps going until the ratio
+# falls or n reaches EXTEND_N. The published wide row is n=12.
 EXTEND_AT = 0.05
-EXTEND_N = 12
+EXTEND_N = max(12, N_SAMPLES)
 # A single sub-millisecond fsync or query is mostly timer noise. Repeat it
 # until the timed spans cover this long, and publish the mean as one sample.
 # Reads repeat until the timed spans cover this. A 50 ms mean is enough
@@ -1893,6 +1893,8 @@ def workloads_for(mode: str) -> list[dict]:
             {"name": "frames-10000", "n_frames": 10_000, "n_atoms": 8},
             {"name": "frames-100", "n_frames": 100, "n_atoms": 8},
         ]
+    if mode == "db10":
+        return [{"name": "frames-100", "n_frames": 100, "n_atoms": 8}]
     if mode == "smoke":
         return [
             paper,
@@ -1909,7 +1911,7 @@ def main() -> None:
     )
     ap.add_argument(
         "--mode",
-        choices=("all", "paper", "ladder", "smoke", "inserts", "db8", "db9"),
+        choices=("all", "paper", "ladder", "smoke", "inserts", "db8", "db9", "db10"),
         default="all",
     )
     ap.add_argument("--self-check", action="store_true")

@@ -50,6 +50,16 @@ cold row, open outside the clock, is n=12, median 1.56e-4 s, p90 of
 those means 1.95e-4 s, IQR/median 0.251. Its per-call distribution is
 `bench/db8/noise.json`. The db9 rows are `bench/db9/`.
 
+Cooked frames are stored in frame-key order, one RCSO blob per frame.
+A 100-frame `tiny_cuh2` trajectory is 27,900 cooked bytes: 9 pages,
+inside a 15-page span. One contiguous value per 64-frame group would
+be 7 pages. `frames-100` is about 180 KiB, and a corpus under 1 MiB is
+`posix_fadvise(WILLNEED)`d as a whole file inside the query, so that
+query already faults every page. Packing the group into one value does
+not change that set. The per-frame blobs stay. The cold tail is the
+open's readahead sometimes faulting those pages before the clock, which
+is why `cold` and `cold-open` are both reported.
+
 The CPC ingest is `db_v2.py` in readcon-core, recorded in
 `paper/cpc/logs/db.log` (2026-11-05, 40 frames of 8 Cu). readcon-db's
 six samples have type-7 median **0.00467 s**. ASE's six samples are

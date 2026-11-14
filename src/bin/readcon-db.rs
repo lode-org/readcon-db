@@ -72,7 +72,8 @@ fn usage() -> ExitCode {
   readcon-db h5md-velocities <corpus_dir> --traj T [--velocity-time-unit UNIT]
   readcon-db hash-file <file.con>
   readcon-db migrate <corpus_dir>
-  (RCSO cooked tier is opt-in; ingest and migrate do not cook. CON text remains authority.)
+  (Ingest stores an RCSO blob beside the CON text. CON text remains authority.
+   cook-frame and recook-all rebuild that blob. delete-cooked drops only the blob.)
 "
     );
     ExitCode::from(2)

@@ -3894,6 +3894,14 @@ impl<'a> IngestSession<'a> {
                 let mut r = Rd(&enc);
                 let hash: [u8; 16] = r.take(16)?.try_into().unwrap();
                 let natoms_k: [u8; 16] = r.take(16)?.try_into().unwrap();
+                // A single-frame value can be cooked here. A grouped value is
+                // a redirect or a shared zstd frame; recook-all rebuilds those.
+                let cooked = match crate::frame_codec::load_frame(&stored) {
+                    Ok(text) => crate::span_columns::project_frame_cooked(text.as_bytes())
+                        .map(|(_facts, blob)| blob)
+                        .unwrap_or_default(),
+                    Err(_) => Vec::new(),
+                };
                 Ok(PreparedIndexPuts {
                     fk,
                     stored,
@@ -3909,6 +3917,7 @@ impl<'a> IngestSession<'a> {
                     pbc_k: r.fixed::<13>()?.pop(),
                     flag_keys: r.fixed::<13>()?,
                     meta_keys: r.fixed::<21>()?,
+                    cooked,
                 })
             })
             .collect::<Result<Vec<_>>>()?;

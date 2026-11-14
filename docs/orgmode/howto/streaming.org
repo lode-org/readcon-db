@@ -36,6 +36,24 @@ Rust is =ConCorpus::open= and =ConCorpus::open_readonly=. The command line is =r
 
 Rust =ConCorpus::append_trajectory_frames= still commits the slice you pass in one transaction. The grouping is the Python binding.
 
+** All or nothing
+:PROPERTIES:
+:CUSTOM_ID: all-or-nothing
+:END:
+=append_trajectory= and =append_trajectory_str= write the whole trajectory in one LMDB transaction and one commit fsync. A file longer than 64 frames is cooked and put one group at a time, and that group's cooked blob and decompressed text are dropped after the put. Those puts share the transaction. LMDB's dirty pages hold the bytes until the commit. If the insert fails, the transaction aborts and no frame from it is visible. A second insert of the same trajectory id fails and leaves the first insert as it was.
+
+=append_trajectory_frames= is not one transaction for the whole list. Each group of 64 frames is its own commit. The first group creates the trajectory. A later group extends it. A failure after the first group leaves the earlier groups stored.
+
+=extend_trajectory= and =extend_trajectory_str= add the text you pass in one transaction. They do not roll back groups that =append_trajectory_frames= already committed.
+
+** Reads and queries
+:PROPERTIES:
+:CUSTOM_ID: reads-and-queries
+:END:
+=select= returns =(traj_id, frame_idx)= keys from the indexes. It does not decode atoms. =get_frame= returns a =StoredFrame=. =get_frame_text= returns the CON text, which is the authority. =read_arrays(traj_id)= copies every frame into NumPy arrays from the cooked blob. =read_arrays(traj_id, frame_idx=i)= copies one frame. =get_positions=, =get_forces=, and =get_velocities= are the single-column forms. A missing cooked blob is parsed from the CON text.
+
+The command line is the same split. =readcon-db ingest= and =readcon-db ingest-dir= insert. =readcon-db select= prints keys. =readcon-db positions= prints one frame. The tutorial runs those commands: @@rst::doc:`/tutorials/tutorial`@@.
+
 ** Random access
 :PROPERTIES:
 :CUSTOM_ID: random-access
@@ -146,4 +164,35 @@ eps = metadata.entry_points()
 group = eps.select(group="ase.ioformats") if hasattr(eps, "select") else eps.get("ase.ioformats", [])
 registered = [ep for ep in group if "readcon_db" in ep.value]
 assert registered == []
+#+end_src
+
+One transaction for a whole text, then a query and a materialized read. This block is executed by the same test.
+
+#+begin_src python
+# runnable
+from pathlib import Path
+
+import readcon
+from readcon_db import ConCorpus
+
+root = Path("atomic")
+root.mkdir()
+sites = [readcon.Atom("Cu", float(i), 0.0, 1.0, atom_id=i) for i in range(4)]
+frame = readcon.ConFrame((12.0, 12.0, 12.0), (90.0, 90.0, 90.0), sites)
+text = readcon.write_con_string([frame] * 3)
+db = ConCorpus(str(root / "db"))
+assert db.append_trajectory_str(1, text, source="mem") == 3
+keys = db.select(traj_id=1, symbol="Cu")
+assert keys == [(1, 0), (1, 1), (1, 2)]
+arrays = db.read_arrays(1)
+assert arrays["positions"].shape == (3, 4, 3)
+one = db.read_arrays(1, frame_idx=1)
+assert one["positions"].shape == (1, 4, 3)
+refused = False
+try:
+    db.append_trajectory_str(1, text, source="again")
+except RuntimeError:
+    refused = True
+assert refused
+assert len(db.select(traj_id=1)) == 3
 #+end_src

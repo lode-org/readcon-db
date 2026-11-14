@@ -20,7 +20,7 @@ $ readcon-db select tutorial.db --energy-max 0
 1 keys
   traj=3 frame=0
 $ readcon-db positions tutorial.db --traj 1 --frame 0
-traj=1 frame=0 natoms=4 valid_cooked=false
+traj=1 frame=0 natoms=4 valid_cooked=true
   [0] 0.6394 0.9045 6.9753
   [1] 3.1969 0.9045 6.9753
   [2] 8.6823 9.947 11.733

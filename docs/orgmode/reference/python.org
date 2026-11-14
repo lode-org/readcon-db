@@ -82,5 +82,6 @@ Standalone: =examples/mpi_bcast_frame.py=.
 :CUSTOM_ID: cooked-soa-rcso
 :END:
 See @@rst::doc:`/cooked-soa`@@.
-Tier is opt-in; the =.con= text remains authority.
+Ingest writes an RCSO blob beside the CON text. The text remains authority.
+=cook_frame= and =recook_all= rebuild that blob. =delete_cooked_soa= drops only the blob.
 Bindings expose cook / delete / has-valid / positions / forces / velocities.

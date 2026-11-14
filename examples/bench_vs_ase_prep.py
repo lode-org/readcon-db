@@ -4,7 +4,9 @@ import pathlib
 import sys
 
 root = pathlib.Path(
-    sys.argv[1] if len(sys.argv) > 1 else "../readcon-core/resources/test"
+    sys.argv[1]
+    if len(sys.argv) > 1
+    else pathlib.Path(__file__).resolve().parents[1] / "resources" / "test"
 )
 out = pathlib.Path(sys.argv[2] if len(sys.argv) > 2 else "/tmp/bench_frames")
 out.mkdir(parents=True, exist_ok=True)

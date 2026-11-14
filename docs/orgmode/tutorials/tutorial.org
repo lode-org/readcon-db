@@ -111,15 +111,16 @@ Print the positions of the first frame of trajectory 1:
 
 #+begin_src console
 $ readcon-db positions tutorial.db --traj 1 --frame 0
-traj=1 frame=0 natoms=4 valid_cooked=false
+traj=1 frame=0 natoms=4 valid_cooked=true
   [0] 0.6394 0.9045 6.9753
   [1] 3.1969 0.9045 6.9753
   [2] 8.6823 9.947 11.733
   [3] 7.9421 9.947 11.733
 #+end_src
 
-These are the coordinates in =resources/test/tiny_multi_cuh2.con=, parsed from the stored CON text.
-~valid_cooked=false~ means the frame has no optional cooked numeric copy, which is the default after ingest.
+These are the coordinates in =resources/test/tiny_multi_cuh2.con=.
+Ingest stores a cooked numeric copy beside the CON text, so ~valid_cooked=true~.
+The text is still the authority. =readcon-db delete-cooked= drops only the copy.
 
 ** Find a repeated trajectory
 :PROPERTIES:
