@@ -469,11 +469,24 @@ impl MaterializedFrame {
         }
         let n = natoms as usize;
         let mut off = HEADER_LEN;
-        let positions = take_f64(bytes, &mut off, n.checked_mul(3)?)?;
-        let forces = if flags & FLAG_FORCES != 0 {
-            take_f64(bytes, &mut off, n.checked_mul(3)?)?
+        let npos = n.checked_mul(3)?;
+        let (positions, forces) = if flags & FLAG_FORCES != 0 && use_column_split(n) {
+            let force_at = off + npos * 8;
+            let copied = std::thread::scope(|scope| {
+                let positions = scope.spawn(|| copy_f64_block(bytes, off, npos));
+                let forces = scope.spawn(|| copy_f64_block(bytes, force_at, npos));
+                (positions.join().unwrap(), forces.join().unwrap())
+            });
+            off = force_at + npos * 8;
+            (copied.0?, copied.1?)
         } else {
-            Vec::new()
+            let positions = take_f64(bytes, &mut off, npos)?;
+            let forces = if flags & FLAG_FORCES != 0 {
+                take_f64(bytes, &mut off, npos)?
+            } else {
+                Vec::new()
+            };
+            (positions, forces)
         };
         let (velocities, velocities_set) = if flags & FLAG_VELOCITIES != 0 {
             (take_f64(bytes, &mut off, n.checked_mul(3)?)?, true)
@@ -985,6 +998,12 @@ pub(crate) fn decompress_shuffled_into(
             "shuffled cooked frame length mismatch".into(),
         ));
     }
+    let expect = [npos, nfor, nvel].iter().filter(|n| **n > 0).count() * 3;
+    if ncomp != expect || atoms == 0 {
+        return Err(Error::Message(
+            "shuffled cooked frame length mismatch".into(),
+        ));
+    }
     let suffix_at = fill_component_columns(stored, 14, ncomp, positions, forces, velocities)?;
     if stored.len() < suffix_at + HEADER_LEN || &stored[suffix_at..suffix_at + 4] != COOKED_MAGIC {
         return Err(Error::Message(
@@ -1002,9 +1021,42 @@ pub(crate) fn decompress_shuffled_into(
     .ok_or_else(|| Error::Message("shuffled cooked frame metadata is corrupt".into()))
 }
 
-/// Two `thread::scope` workers cost about 70 µs. Below this atom count the
-/// columns are too small for that to pay.
+/// Two workers are only worth it once a column is large. Smaller frames,
+/// and `RAYON_NUM_THREADS=1`, stay on the calling thread.
 const PARALLEL_ATOMS: usize = 16_384;
+
+std::thread_local! {
+    static SUPPRESS_COLUMN_SPLIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn column_threads() -> usize {
+    match std::env::var("RAYON_NUM_THREADS") {
+        Ok(raw) => raw.parse::<usize>().unwrap_or(1).max(1),
+        Err(_) => std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1),
+    }
+}
+
+fn use_column_split(atoms: usize) -> bool {
+    atoms >= PARALLEL_ATOMS
+        && column_threads() > 1
+        && !SUPPRESS_COLUMN_SPLIT.with(|flag| flag.get())
+}
+
+/// Run `body` without splitting one frame's columns across threads.
+///
+/// A range or full read already has one worker per frame. A second split
+/// inside that worker would nest.
+pub(crate) fn without_column_split<T>(body: impl FnOnce() -> T) -> T {
+    SUPPRESS_COLUMN_SPLIT.with(|flag| {
+        let prev = flag.get();
+        flag.set(true);
+        let out = body();
+        flag.set(prev);
+        out
+    })
+}
 
 fn fill_component_columns(
     stored: &[u8],
@@ -1033,14 +1085,26 @@ fn fill_component_columns(
         ));
     }
     let atoms = positions.len() / 3;
-    if atoms >= PARALLEL_ATOMS && parts.len() >= 6 && !forces.is_empty() {
+    let declared =
+        3 + usize::from(!forces.is_empty()) * 3 + usize::from(!velocities.is_empty()) * 3;
+    if parts.len() != declared {
+        return Err(Error::Message(
+            "shuffled cooked frame length mismatch".into(),
+        ));
+    }
+    if use_column_split(atoms) && parts.len() >= 6 {
         let (xyz, rest) = parts.split_at(3);
-        let (frc, vel) = rest.split_at(3.min(rest.len()));
         std::thread::scope(|scope| {
-            let positions = scope.spawn(|| decode_lanes(stored, xyz, positions));
+            let positions =
+                scope.spawn(|| without_column_split(|| decode_lanes(stored, xyz, positions)));
             let forces = scope.spawn(|| {
-                decode_lanes(stored, frc, forces)?;
-                decode_lanes(stored, vel, velocities)
+                without_column_split(|| {
+                    decode_lanes(stored, &rest[..3], forces)?;
+                    if !velocities.is_empty() {
+                        decode_lanes(stored, &rest[3..], velocities)?;
+                    }
+                    Ok::<(), Error>(())
+                })
             });
             positions.join().unwrap()?;
             forces.join().unwrap()?;
@@ -1172,11 +1236,10 @@ fn push_coord_block(
     Ok(())
 }
 
-fn take_f64(bytes: &[u8], off: &mut usize, n: usize) -> Option<Vec<f64>> {
+fn copy_f64_block(bytes: &[u8], off: usize, n: usize) -> Option<Vec<f64>> {
     let nbytes = n.checked_mul(8)?;
-    let raw = bytes.get(*off..*off + nbytes)?;
-    *off += nbytes;
-    let mut out = vec![0.0; n];
+    let raw = bytes.get(off..off + nbytes)?;
+    let mut out = uninit_f64(n);
     if cfg!(target_endian = "little") {
         unsafe {
             std::ptr::copy_nonoverlapping(raw.as_ptr(), out.as_mut_ptr().cast::<u8>(), nbytes);
@@ -1186,6 +1249,12 @@ fn take_f64(bytes: &[u8], off: &mut usize, n: usize) -> Option<Vec<f64>> {
             *dst = f64::from_le_bytes(chunk.try_into().ok()?);
         }
     }
+    Some(out)
+}
+
+fn take_f64(bytes: &[u8], off: &mut usize, n: usize) -> Option<Vec<f64>> {
+    let out = copy_f64_block(bytes, *off, n)?;
+    *off += n * 8;
     Some(out)
 }
 
@@ -1559,28 +1628,101 @@ mod tests {
         );
     }
 
-    #[test]
-    fn parallel_columns_round_trip_every_bit() {
-        let n = 16_384usize;
+    fn synthetic_rcso(n: usize, velocities: bool) -> Vec<u8> {
         let mut builder =
             readcon_core::types::ConFrameBuilder::new([10.5, 12.25, 8.0], [90.0, 90.0, 90.0]);
-        let mut forces = Vec::with_capacity(n * 3);
         for i in 0..n {
-            let x = i as f64 * 0.125;
-            let y = 0.5;
-            let z = 1.0;
-            builder.add_atom("Cu", x, y, z, [false, false, false], i as u64, 63.546);
-            forces.extend_from_slice(&[x * 0.5, y * 0.5, z * 0.5]);
+            builder.add_atom(
+                "Cu",
+                i as f64 * 0.125,
+                0.5,
+                1.0,
+                [false, false, false],
+                i as u64,
+                63.546,
+            );
         }
+        let forces: Vec<f64> = (0..n)
+            .flat_map(|i| {
+                let x = i as f64 * 0.125;
+                [x * 0.5, 0.25, 0.5]
+            })
+            .collect();
         builder.set_forces_from_flat(&forces).unwrap();
+        if velocities {
+            for (i, slot) in builder.velocities_mut().iter_mut().enumerate() {
+                *slot = i as f64 * 0.01;
+            }
+        }
         let mut fr = builder.build().unwrap();
         fr.header.set_energy(-42.5);
-        let raw = CookedSoa::encode_frame(&fr).unwrap();
+        CookedSoa::encode_frame(&fr).unwrap()
+    }
+
+    #[test]
+    fn column_counts_around_the_parallel_threshold_round_trip() {
+        for (n, velocities) in [
+            (16_383usize, false),
+            (16_384, false),
+            (16_385, false),
+            (16_384, true),
+        ] {
+            let raw = synthetic_rcso(n, velocities);
+            let packed = compress_shuffled(&raw).unwrap();
+            let plain = MaterializedFrame::from_blob(&raw).unwrap();
+            let back = decompress_shuffled(&packed).unwrap();
+            assert_eq!(back.positions, plain.positions, "n={n} vel={velocities}");
+            assert_eq!(back.forces, plain.forces, "n={n}");
+            if velocities {
+                assert_eq!(back.velocities, plain.velocities, "n={n}");
+                let n3 = n * 3;
+                let mut positions = vec![0f64; n3];
+                let mut forces = vec![0f64; n3];
+                let mut vels = vec![0f64; n3];
+                let meta =
+                    decompress_shuffled_into(&packed, &mut positions, &mut forces, &mut vels)
+                        .unwrap();
+                assert!(meta.positions.is_empty());
+                assert_eq!(positions, plain.positions);
+                assert_eq!(forces, plain.forces);
+                assert_eq!(vels, plain.velocities);
+                assert!(meta.velocities_set);
+            }
+        }
+    }
+
+    #[test]
+    fn dropped_truncated_and_corrupt_components_are_rejected() {
+        let raw = synthetic_rcso(16_384, true);
         let packed = compress_shuffled(&raw).unwrap();
-        let plain = MaterializedFrame::from_blob(&raw).unwrap();
-        let back = decompress_shuffled(&packed).unwrap();
-        assert_eq!(back.positions, plain.positions);
-        assert_eq!(back.forces, plain.forces);
-        assert_eq!(back.energy.to_bits(), plain.energy.to_bits());
+        let n3 = 16_384 * 3;
+        let mut positions = vec![0f64; n3];
+        let mut forces = vec![0f64; n3];
+        let mut vels = vec![1f64; n3];
+
+        let mut dropped = packed.clone();
+        dropped[10..14].copy_from_slice(&6u32.to_le_bytes());
+        let err =
+            decompress_shuffled_into(&dropped, &mut positions, &mut forces, &mut vels).unwrap_err();
+        assert!(err.to_string().contains("length mismatch"), "{err}");
+        assert!(decompress_shuffled(&dropped).is_err());
+        assert_eq!(vels[0], 1.0, "a rejected frame must not look decoded");
+
+        assert!(decompress_shuffled(&packed[..packed.len() / 2]).is_err());
+        assert!(
+            decompress_shuffled_into(&packed[..80], &mut positions, &mut forces, &mut vels)
+                .is_err()
+        );
+
+        let mut corrupt = packed.clone();
+        let magic = corrupt
+            .windows(4)
+            .rposition(|window| window == COOKED_MAGIC)
+            .unwrap();
+        corrupt[magic] = b'X';
+        assert!(decompress_shuffled(&corrupt).is_err());
+        assert!(
+            decompress_shuffled_into(&corrupt, &mut positions, &mut forces, &mut vels).is_err()
+        );
     }
 }
