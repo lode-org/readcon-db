@@ -482,6 +482,28 @@ impl MaterializedFrame {
             // otherwise keep 24 MiB of zeros beside the position columns.
             (Vec::new(), false)
         };
+        Self::finish(
+            natoms,
+            positions,
+            forces,
+            velocities,
+            velocities_set,
+            &bytes[off..],
+        )
+    }
+}
+
+impl MaterializedFrame {
+    fn finish(
+        natoms: u32,
+        positions: Vec<f64>,
+        forces: Vec<f64>,
+        velocities: Vec<f64>,
+        velocities_set: bool,
+        bytes: &[u8],
+    ) -> Option<Self> {
+        let n = natoms as usize;
+        let mut off = 0usize;
         let mass_mode = *bytes.get(off)?;
         off += 1;
         let masses = if mass_mode == 1 {
@@ -553,6 +575,157 @@ impl MaterializedFrame {
             symbol_runs,
         })
     }
+}
+
+/// Tag for a byte-shuffled zstd frame. Not `RCSO` and not a cooked group.
+pub const SHUFFLE_ZSTD_TAG: [u8; 2] = [0xFB, 0x03];
+
+/// True when `stored` is a shuffled zstd frame rather than raw RCSO.
+pub fn is_shuffled_zstd(stored: &[u8]) -> bool {
+    stored.len() >= 2 && stored[0] == SHUFFLE_ZSTD_TAG[0] && stored[1] == SHUFFLE_ZSTD_TAG[1]
+}
+
+fn coord_f64s(raw: &[u8]) -> Option<usize> {
+    if raw.len() < HEADER_LEN || &raw[0..4] != COOKED_MAGIC {
+        return None;
+    }
+    let natoms = u32::from_le_bytes(raw.get(8..12)?.try_into().ok()?) as usize;
+    let flags = u32::from_le_bytes(raw.get(12..16)?.try_into().ok()?);
+    let mut n = natoms.checked_mul(3)?;
+    if flags & FLAG_FORCES != 0 {
+        n = n.checked_add(natoms.checked_mul(3)?)?;
+    }
+    if flags & FLAG_VELOCITIES != 0 {
+        n = n.checked_add(natoms.checked_mul(3)?)?;
+    }
+    let end = HEADER_LEN.checked_add(n.checked_mul(8)?)?;
+    if raw.len() < end {
+        return None;
+    }
+    Some(n)
+}
+
+/// Byte-shuffle each coordinate column and zstd them at level 1.
+///
+/// Positions, forces, and velocities are shuffled separately. A shuffle of
+/// the concatenated columns cannot be unshuffled one column at a time.
+/// The header and the trailing metadata stay uncompressed so a reader can
+/// unshuffle straight into the position and force buffers.
+pub fn compress_shuffled(raw: &[u8]) -> Result<Vec<u8>> {
+    let n = coord_f64s(raw).ok_or_else(|| Error::Message("cooked frame is not RCSO".into()))?;
+    let coord_bytes = n * 8;
+    let coords = &raw[HEADER_LEN..HEADER_LEN + coord_bytes];
+    let natoms = u32::from_le_bytes(raw[8..12].try_into().unwrap()) as usize;
+    let flags = u32::from_le_bytes(raw[12..16].try_into().unwrap());
+    let npos = natoms * 3;
+    let nfor = if flags & FLAG_FORCES != 0 { npos } else { 0 };
+    let nvel = if flags & FLAG_VELOCITIES != 0 {
+        npos
+    } else {
+        0
+    };
+    let mut shuffled = vec![0u8; coord_bytes];
+    let mut off = 0usize;
+    for count in [npos, nfor, nvel] {
+        if count == 0 {
+            continue;
+        }
+        let bytes = count * 8;
+        crate::byte_shuffle::shuffle_bytes(
+            &coords[off..off + bytes],
+            &mut shuffled[off..off + bytes],
+        );
+        off += bytes;
+    }
+    let comp = zstd::bulk::compress(&shuffled, 1)
+        .map_err(|e| Error::Message(format!("zstd encode: {e}")))?;
+    let suffix = &raw[HEADER_LEN + coord_bytes..];
+    let mut out = Vec::with_capacity(2 + 4 + 4 + comp.len() + suffix.len());
+    out.extend_from_slice(&SHUFFLE_ZSTD_TAG);
+    out.extend_from_slice(&(n as u32).to_le_bytes());
+    out.extend_from_slice(&(comp.len() as u32).to_le_bytes());
+    out.extend_from_slice(&comp);
+    out.extend_from_slice(&raw[..HEADER_LEN]);
+    out.extend_from_slice(suffix);
+    Ok(out)
+}
+
+/// Unshuffle one compressed frame straight into its column buffers.
+pub fn decompress_shuffled(stored: &[u8]) -> Result<MaterializedFrame> {
+    if !is_shuffled_zstd(stored) || stored.len() < 10 {
+        return Err(Error::Message("not a shuffled cooked frame".into()));
+    }
+    let n = u32::from_le_bytes(stored[2..6].try_into().unwrap()) as usize;
+    let comp_len = u32::from_le_bytes(stored[6..10].try_into().unwrap()) as usize;
+    if stored.len() < 10 + comp_len + HEADER_LEN {
+        return Err(Error::Message("truncated shuffled cooked frame".into()));
+    }
+    let comp = &stored[10..10 + comp_len];
+    let mut dec =
+        zstd::bulk::Decompressor::new().map_err(|e| Error::Message(format!("zstd decode: {e}")))?;
+    let shuffled = dec
+        .decompress(comp, n * 8)
+        .map_err(|e| Error::Message(format!("zstd decode: {e}")))?;
+    if shuffled.len() != n * 8 {
+        return Err(Error::Message(
+            "shuffled cooked frame has the wrong length".into(),
+        ));
+    }
+    let rest = &stored[10 + comp_len..];
+    if rest.len() < HEADER_LEN || &rest[..4] != COOKED_MAGIC {
+        return Err(Error::Message(
+            "shuffled cooked frame is missing its header".into(),
+        ));
+    }
+    let natoms = u32::from_le_bytes(rest[8..12].try_into().unwrap());
+    let flags = u32::from_le_bytes(rest[12..16].try_into().unwrap());
+    let atoms = natoms as usize;
+    let npos = atoms * 3;
+    let nfor = if flags & FLAG_FORCES != 0 { npos } else { 0 };
+    let nvel = if flags & FLAG_VELOCITIES != 0 {
+        npos
+    } else {
+        0
+    };
+    if npos + nfor + nvel != n {
+        return Err(Error::Message(
+            "shuffled cooked frame length mismatch".into(),
+        ));
+    }
+    let mut positions = vec![0f64; npos];
+    unshuffle_into(&shuffled[..npos * 8], &mut positions);
+    let forces = if nfor == 0 {
+        Vec::new()
+    } else {
+        let mut forces = vec![0f64; nfor];
+        let start = npos * 8;
+        unshuffle_into(&shuffled[start..start + nfor * 8], &mut forces);
+        forces
+    };
+    let (velocities, velocities_set) = if nvel == 0 {
+        (Vec::new(), false)
+    } else {
+        let mut velocities = vec![0f64; nvel];
+        let start = (npos + nfor) * 8;
+        unshuffle_into(&shuffled[start..start + nvel * 8], &mut velocities);
+        (velocities, true)
+    };
+    let suffix = &rest[HEADER_LEN..];
+    MaterializedFrame::finish(
+        natoms,
+        positions,
+        forces,
+        velocities,
+        velocities_set,
+        suffix,
+    )
+    .ok_or_else(|| Error::Message("shuffled cooked frame metadata is corrupt".into()))
+}
+
+fn unshuffle_into(src: &[u8], dst: &mut [f64]) {
+    let out =
+        unsafe { std::slice::from_raw_parts_mut(dst.as_mut_ptr().cast::<u8>(), dst.len() * 8) };
+    crate::byte_shuffle::unshuffle_bytes(src, out);
 }
 
 fn push_f64s(out: &mut Vec<u8>, xs: &[f64]) {
@@ -833,6 +1006,21 @@ mod tests {
             assert_eq!(cooked.positions[i], crate::atom_coord::atom_xyz(a));
         }
         assert!(cooked.forces.is_none());
+    }
+
+    #[test]
+    fn shuffled_forces_round_trip_every_bit() {
+        let text = fixture("tiny_cuh2_vel_forces.con");
+        let fr = ConFrameIterator::new(&text).next().unwrap().unwrap();
+        let raw = CookedSoa::encode_frame(&fr).unwrap();
+        let packed = compress_shuffled(&raw).unwrap();
+        assert!(is_shuffled_zstd(&packed));
+        let plain = MaterializedFrame::from_blob(&raw).unwrap();
+        let back = decompress_shuffled(&packed).unwrap();
+        assert_eq!(back.positions, plain.positions);
+        assert_eq!(back.forces, plain.forces);
+        assert_eq!(back.velocities, plain.velocities);
+        assert_eq!(back.energy.to_bits(), plain.energy.to_bits());
     }
 
     #[test]

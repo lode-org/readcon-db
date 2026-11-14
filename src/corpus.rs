@@ -157,6 +157,11 @@ pub struct TrajMeta {
     #[serde(default)]
     /// Fingerprint method recorded by the last topology annotation.
     pub topo_method: Option<String>,
+    #[serde(default)]
+    /// Cooked-column codec for this trajectory. Absent or `"raw"` keeps
+    /// one RCSO blob per frame. `"shuffle-zstd"` byte-shuffles the
+    /// coordinate columns and compresses them.
+    pub cooked_codec: Option<String>,
 }
 
 impl TrajMeta {
@@ -254,6 +259,53 @@ fn materialized_from_text(text: &str) -> Result<crate::cooked_soa::MaterializedF
         .ok_or_else(|| Error::Message("cooked frame is missing its arrays".into()))
 }
 
+fn assemble_frames(frames: Vec<crate::cooked_soa::MaterializedFrame>) -> Result<MaterializedRead> {
+    let mut out = MaterializedRead::default();
+    let mut n_atoms: Option<u32> = None;
+    let mut forces_set = true;
+    let mut velocities_set = true;
+    for cooked in frames {
+        match n_atoms {
+            None => n_atoms = Some(cooked.n_atoms),
+            Some(prev) if prev == cooked.n_atoms => {}
+            Some(prev) => {
+                return Err(Error::Message(format!(
+                    "trajectory mixes {prev} and {} atoms",
+                    cooked.n_atoms
+                )));
+            }
+        }
+        if cooked.forces.is_empty() {
+            forces_set = false;
+        }
+        if !cooked.velocities_set {
+            velocities_set = false;
+        }
+        out.positions.extend_from_slice(&cooked.positions);
+        out.forces.extend_from_slice(&cooked.forces);
+        out.velocities.extend_from_slice(&cooked.velocities);
+        out.masses.extend_from_slice(&cooked.masses);
+        out.numbers.extend_from_slice(&cooked.numbers);
+        out.constraints.extend_from_slice(&cooked.constraints);
+        out.cells.extend_from_slice(&cooked.cell);
+        out.energy.push(cooked.energy);
+        out.energy_set.push(cooked.energy_set);
+        out.frame_index.push(cooked.frame_index);
+        out.frame_index_set.push(cooked.frame_index_set);
+        out.pbc.extend_from_slice(&cooked.pbc);
+        out.pbc_set.push(cooked.pbc_set);
+        out.symbol_runs.push(cooked.symbol_runs);
+    }
+    if !forces_set {
+        out.forces.clear();
+    }
+    out.n_frames = out.energy.len() as u32;
+    out.n_atoms = n_atoms.unwrap_or(0);
+    out.forces_set = forces_set && out.n_frames > 0;
+    out.velocities_set = velocities_set && out.n_frames > 0;
+    Ok(out)
+}
+
 /// One trajectory of coordinates, row-major `n_frames * n_atoms * 3` f64.
 pub struct TrajectoryPositions {
     /// Frames in index order.
@@ -346,6 +398,21 @@ fn ingest_chunk_bounds(n: usize) -> Vec<(usize, usize)> {
         i = j;
     }
     bounds
+}
+
+/// Large cooked frames stay raw RCSO unless the caller opts in.
+///
+/// `READCON_DB_COOKED_CODEC=shuffle-zstd` byte-shuffles a frame of at least
+/// 64 KiB when the compressed bytes are smaller. Unset and `raw` store
+/// RCSO. Cooked groups are never rewritten.
+fn wants_shuffle(cooked: &[u8]) -> bool {
+    if cooked.len() < 64 * 1024 || crate::cooked_soa::is_cooked_group(cooked) {
+        return false;
+    }
+    matches!(
+        std::env::var("READCON_DB_COOKED_CODEC").as_deref(),
+        Ok("shuffle-zstd")
+    )
 }
 
 fn ingest_thread_count() -> usize {
@@ -1250,8 +1317,49 @@ impl ConCorpus {
             self.frame_by_hash.put(wtxn, &p.hash[..], &fk_b[..])?;
         }
         if !p.cooked.is_empty() {
-            self.frames_soa.put(wtxn, &fk_b[..], &p.cooked[..])?;
+            self.put_cooked_bytes(wtxn, &fk_b, &p.cooked)?;
         }
+        Ok(())
+    }
+
+    /// Store one cooked value. A large raw RCSO blob is byte-shuffled and
+    /// zstd-compressed when that is smaller and the corpus codec allows it.
+    /// Groups and raw blobs stay readable.
+    fn fill_cooked_codec(
+        &self,
+        wtxn: &mut RwTxn<'_>,
+        traj_id: TrajId,
+        meta: &mut TrajMeta,
+    ) -> Result<()> {
+        if meta.cooked_codec.is_some() {
+            return Ok(());
+        }
+        let prefix = traj_id.to_be_bytes();
+        let mut shuffle = false;
+        {
+            let mut iter = self.frames_soa.prefix_iter(wtxn, &prefix[..])?;
+            for item in iter.by_ref() {
+                let (_, value) = item?;
+                if crate::cooked_soa::is_shuffled_zstd(value) {
+                    shuffle = true;
+                    break;
+                }
+            }
+        }
+        meta.cooked_codec = Some(if shuffle { "shuffle-zstd" } else { "raw" }.to_string());
+        Ok(())
+    }
+
+    fn put_cooked_bytes(&self, wtxn: &mut RwTxn<'_>, key: &[u8], cooked: &[u8]) -> Result<()> {
+        if wants_shuffle(cooked) {
+            if let Ok(packed) = crate::cooked_soa::compress_shuffled(cooked) {
+                if packed.len() < cooked.len() {
+                    self.frames_soa.put(wtxn, key, &packed)?;
+                    return Ok(());
+                }
+            }
+        }
+        self.frames_soa.put(wtxn, key, cooked)?;
         Ok(())
     }
 
@@ -2002,6 +2110,7 @@ impl ConCorpus {
             let mut meta = existing.unwrap_or_default();
             meta.n_frames = n_frames;
             meta.source = source.clone();
+            self.fill_cooked_codec(wtxn, traj_id, &mut meta)?;
             self.traj_meta
                 .put(wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
             Ok(n_frames)
@@ -2190,11 +2299,12 @@ impl ConCorpus {
                 let meta: TrajMeta = serde_json::from_str(existing)?;
                 return Err(Error::TrajExists(traj_id, meta.n_frames));
             }
-            let meta = TrajMeta {
+            let mut meta = TrajMeta {
                 n_frames,
                 source: source.clone(),
                 ..TrajMeta::default()
             };
+            self.fill_cooked_codec(wtxn, traj_id, &mut meta)?;
             self.traj_meta
                 .put(wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
             self.merge_slots(wtxn, &slots)?;
@@ -2249,11 +2359,12 @@ impl ConCorpus {
             let meta: TrajMeta = serde_json::from_str(existing)?;
             return Err(Error::TrajExists(traj_id, meta.n_frames));
         }
-        let meta = TrajMeta {
+        let mut meta = TrajMeta {
             n_frames,
             source: source.to_string(),
             ..TrajMeta::default()
         };
+        self.fill_cooked_codec(wtxn, traj_id, &mut meta)?;
         self.traj_meta
             .put(wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
         Ok(())
@@ -2386,6 +2497,7 @@ impl ConCorpus {
                 ..Default::default()
             });
             meta.n_frames = n_frames;
+            self.fill_cooked_codec(wtxn, traj_id, &mut meta)?;
             self.traj_meta
                 .put(wtxn, &tid_key[..], &serde_json::to_string(&meta)?)?;
             Ok(n_frames)
@@ -3285,6 +3397,66 @@ impl ConCorpus {
         }
     }
 
+    fn shuffled_frame(
+        &self,
+        rtxn: &heed::RoTxn<'_>,
+        key: FrameKey,
+    ) -> Result<Option<crate::cooked_soa::MaterializedFrame>> {
+        let fk_b = key.to_bytes();
+        let Some(blob) = self.frames_soa.get(rtxn, &fk_b[..])? else {
+            return Ok(None);
+        };
+        if !crate::cooked_soa::is_shuffled_zstd(blob) {
+            return Ok(None);
+        }
+        Ok(Some(crate::cooked_soa::decompress_shuffled(blob)?))
+    }
+
+    /// Copy the compressed bytes out of the read transaction, then decode
+    /// them on `RAYON_NUM_THREADS` workers. `None` when any frame is raw.
+    fn decode_shuffled_parallel(
+        &self,
+        rtxn: &heed::RoTxn<'_>,
+        keys: &[FrameKey],
+    ) -> Result<Option<Vec<crate::cooked_soa::MaterializedFrame>>> {
+        let mut blobs = Vec::with_capacity(keys.len());
+        for key in keys {
+            let fk_b = key.to_bytes();
+            let Some(blob) = self.frames_soa.get(rtxn, &fk_b[..])? else {
+                return Ok(None);
+            };
+            if !crate::cooked_soa::is_shuffled_zstd(blob) {
+                return Ok(None);
+            }
+            blobs.push(blob.to_vec());
+        }
+        let n = blobs.len();
+        let threads = ingest_thread_count().min(n).max(1);
+        let mut frames: Vec<Option<Result<crate::cooked_soa::MaterializedFrame>>> =
+            (0..n).map(|_| None).collect();
+        if threads == 1 {
+            for (blob, slot) in blobs.iter().zip(frames.iter_mut()) {
+                *slot = Some(crate::cooked_soa::decompress_shuffled(blob));
+            }
+        } else {
+            let chunk = n.div_ceil(threads);
+            std::thread::scope(|scope| {
+                for (blobs, slots) in blobs.chunks(chunk).zip(frames.chunks_mut(chunk)) {
+                    scope.spawn(move || {
+                        for (blob, slot) in blobs.iter().zip(slots.iter_mut()) {
+                            *slot = Some(crate::cooked_soa::decompress_shuffled(blob));
+                        }
+                    });
+                }
+            });
+        }
+        let mut out = Vec::with_capacity(n);
+        for slot in frames {
+            out.push(slot.unwrap()?);
+        }
+        Ok(Some(out))
+    }
+
     /// Positions, velocities, masses, atomic numbers, constraints, and the cell.
     ///
     /// A current RCSO blob is copied out of the LMDB value. The CON text is
@@ -3343,12 +3515,20 @@ impl ConCorpus {
         let mut forces_set = true;
         let mut velocities_set = true;
         let mut cooked_cache = None;
+        if keys.len() > 1 {
+            if let Some(frames) = self.decode_shuffled_parallel(&rtxn, &keys)? {
+                return assemble_frames(frames);
+            }
+        }
         for key in &keys {
-            let cooked = self
-                .with_frame_cooked(&rtxn, *key, &mut cooked_cache, |blob| {
+            let cooked = if let Some(frame) = self.shuffled_frame(&rtxn, *key)? {
+                Some(frame)
+            } else {
+                self.with_frame_cooked(&rtxn, *key, &mut cooked_cache, |blob| {
                     crate::cooked_soa::MaterializedFrame::from_blob(blob)
                 })?
-                .flatten();
+                .flatten()
+            };
             let cooked = match cooked {
                 Some(frame) => frame,
                 None => {
@@ -4875,11 +5055,14 @@ impl<'a> IngestSession<'a> {
         n_frames: u32,
         source: String,
     ) -> Result<()> {
-        let meta = TrajMeta {
+        let mut meta = TrajMeta {
             n_frames,
             source,
             ..Default::default()
         };
+        let corpus = self.corpus;
+        let txn = self.txn()?;
+        corpus.fill_cooked_codec(txn, traj_id, &mut meta)?;
         let text = serde_json::to_string(&meta)?;
         let corpus = self.corpus;
         let txn = self.txn()?;
@@ -7416,5 +7599,91 @@ x
             .select(&Select::new().trajectory(1).require_symbol("Cu"))
             .unwrap();
         assert_eq!(keys.len(), 4);
+    }
+
+    fn wide_con(n: usize, z: f64) -> String {
+        let mut builder =
+            readcon_core::types::ConFrameBuilder::new([10.5, 12.25, 8.0], [90.0, 90.0, 90.0]);
+        for i in 0..n {
+            builder.add_atom(
+                "Cu",
+                i as f64 * 0.125,
+                0.5,
+                z,
+                [false, false, false],
+                i as u64,
+                63.546,
+            );
+        }
+        let mut fr = builder.build().unwrap();
+        for atom in &mut fr.atom_data {
+            atom.set_force(Some([atom.x() * 0.5, atom.y() * 0.5, atom.z() * 0.5]));
+        }
+        fr.header.set_energy(-42.5);
+        let mut buf = Cursor::new(Vec::new());
+        {
+            let mut writer = ConFrameWriter::new(&mut buf);
+            writer.write_frame(&fr).unwrap();
+        }
+        String::from_utf8(buf.into_inner()).unwrap()
+    }
+
+    struct CodecVar;
+    impl Drop for CodecVar {
+        fn drop(&mut self) {
+            std::env::remove_var("READCON_DB_COOKED_CODEC");
+        }
+    }
+
+    #[test]
+    fn shuffled_frames_round_trip_and_append() {
+        let _guard = CodecVar;
+        let text = wide_con(4096, 1.0);
+        let plain = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(plain.path()).unwrap();
+        db.append_trajectory_str(1, &text, "plain").unwrap();
+        let stored = raw_soa(&db, 0).unwrap();
+        assert!(
+            !crate::cooked_soa::is_shuffled_zstd(&stored),
+            "shuffle stays opt-in"
+        );
+        assert_eq!(frame_positions(&db, 1, 0)[2].to_bits(), 1.0f64.to_bits());
+        assert_eq!(
+            db.traj_meta(1).unwrap().unwrap().cooked_codec.as_deref(),
+            Some("raw")
+        );
+
+        std::env::set_var("READCON_DB_COOKED_CODEC", "shuffle-zstd");
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_str(1, &text, "wide").unwrap();
+        let stored = raw_soa(&db, 0).unwrap();
+        assert!(
+            crate::cooked_soa::is_shuffled_zstd(&stored),
+            "large frame should shuffle"
+        );
+        let got = db.read_materialized(1, Some(0)).unwrap();
+        assert_eq!(got.positions.len(), 4096 * 3);
+        assert_eq!(got.positions[2].to_bits(), 1.0f64.to_bits());
+        assert_eq!(got.forces.len(), 4096 * 3);
+        assert_eq!(got.forces[2].to_bits(), 0.5f64.to_bits());
+        let more = wide_con(4096, 2.0);
+        db.extend_trajectory_str(1, &more, "more").unwrap();
+        drop(db);
+        let db = reopen(dir.path());
+        assert_eq!(frame_positions(&db, 1, 0)[2].to_bits(), 1.0f64.to_bits());
+        assert_eq!(frame_positions(&db, 1, 1)[2].to_bits(), 2.0f64.to_bits());
+        assert_eq!(
+            db.traj_meta(1).unwrap().unwrap().cooked_codec.as_deref(),
+            Some("shuffle-zstd")
+        );
+
+        std::env::set_var("READCON_DB_COOKED_CODEC", "raw");
+        let raw_dir = tempfile::tempdir().unwrap();
+        let raw = ConCorpus::open(raw_dir.path()).unwrap();
+        raw.append_trajectory_str(1, &text, "raw").unwrap();
+        let stored = raw_soa(&raw, 0).unwrap();
+        assert!(!crate::cooked_soa::is_shuffled_zstd(&stored));
+        assert_eq!(frame_positions(&raw, 1, 0)[2].to_bits(), 1.0f64.to_bits());
     }
 }

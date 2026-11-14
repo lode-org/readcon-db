@@ -14,6 +14,7 @@ use mimalloc as _mimalloc_tls;
 
 pub mod archive;
 mod atom_coord;
+mod byte_shuffle;
 mod canonical;
 mod cooked_soa;
 mod corpus;
