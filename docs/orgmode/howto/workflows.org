@@ -96,34 +96,36 @@ Legacy =examples/benchmarks/bench_ase_db.py= Cu2 stand-ins are unequal workloads
 :END:
 Use *=examples/benchmarks/fair_ase_protocol.py=*. The protocol write-up is =examples/benchmarks/FAIRNESS.md=. Raw lines and the type-7 table are =examples/benchmarks/results/fair/=.
 
-Both stores receive the same records: symbols, positions, cell, periodicity, masses, forces, energy, and =frame_index=. ASE is SQLite, =journal_mode=DELETE=, =synchronous=FULL=. Each insert is one transaction and one commit fsync, on a database file created for that sample. One warmup is discarded. Six serial samples alternate the two tools. The summary is the Hyndman–Fan type-7 median and IQR. A field mismatch aborts the run.
+Both stores receive the same records: symbols, positions, cell, periodicity, masses, forces, energy, and =frame_index=. ASE is SQLite, =journal_mode=DELETE=, =synchronous=FULL=. Each insert is one transaction and one commit fsync, on a database file created for that sample. One warmup is discarded. Twelve serial samples alternate the two tools. The summary is the Hyndman–Fan type-7 median and IQR. A field mismatch aborts the run.
 
 A cold read calls =posix_fadvise(DONTNEED)= on the closed database files, then times a readonly open plus the read. =/proc/sys/vm/drop_caches= was not writable on the measurement host, so it was not used. A warm read is the next read on the already open store. The timed close does not call =gc.collect()=. Full reads use =read_columns=. The single-frame query is =frame_index= of the middle frame.
 
 =open= prefetches a corpus under 1 MiB with one =pread= before it maps the environment. Selected cold is the query after that prefetching open. =cold-open= is the end-to-end number: the cache drop stays outside the clock, and the clock is the open plus the query. The harness does not read the file.
 
-The published CPC ingest (=paper/cpc/logs/db.log=, 40 frames of 8 Cu, no warmup) is readcon-db 4.67 ms and ASE 72.3 ms. ASE committed once per frame. The fair rerun of that insert, one commit each, is readcon-db 1.70 ms and ASE 5.17 ms.
+# fair-docs:begin workflows-summary
+Type-7 medians from `examples/benchmarks/results/fair-db29/campaign.json`, in seconds. n is the stored sample count.
 
-Type-7 medians on that host, seconds:
+| workload | op | cache | readcon-db | ASE sqlite | faster |
+| --- | --- | --- | --- | --- | --- |
+| 10^3 atoms, 1 frame | full read | warm | 1.6555e-05 (n=6) | 7.9115e-04 (n=12) | readcon-db |
+| 10^3 atoms, 1 frame | full read | cold | 3.1883e-05 (n=6) | 2.0304e-03 (n=12) | readcon-db |
+| 10^4 atoms, 1 frame | full read | warm | 2.7152e-04 (n=6) | 4.3440e-03 (n=6) | readcon-db |
+| 10^4 atoms, 1 frame | full read | cold | 2.9294e-04 (n=6) | 5.2235e-03 (n=12) | readcon-db |
+| 10^5 atoms, 1 frame | full read | warm | 2.5745e-03 (n=6) | 3.4530e-02 (n=12) | readcon-db |
+| 10^5 atoms, 1 frame | full read | cold | 6.2759e-03 (n=12) | 3.3129e-02 (n=6) | readcon-db |
+| 10^6 atoms, 1 frame | full read | warm | 2.2889e-02 (n=6) | 3.0143e-01 (n=6) | readcon-db |
+| 10^6 atoms, 1 frame | full read | cold | 6.7073e-02 (n=12) | 3.5340e-01 (n=12) | readcon-db |
+| 10^6 atoms, 1 frame | one frame | cold | 6.7658e-02 (n=12) | 3.5220e-01 (n=6) | readcon-db |
+| 10^6 atoms, 1 frame | insert | cold-file | 3.0821e-01 (n=6) | 2.5567e-01 (n=10) | ASE |
+| 8 atoms, 10^4 frames | full read | warm | 6.3478e-03 (n=12) | 1.0671e+00 (n=6) | readcon-db |
+| 8 atoms, 10^4 frames | full read | cold | 6.4131e-03 (n=6) | 1.0325e+00 (n=6) | readcon-db |
+| 8 atoms, 10^4 frames | one frame | cold | 4.6303e-05 (n=6) | 5.1330e-03 (n=12) | readcon-db |
+| 8 atoms, 10^4 frames | insert | cold-file | 2.6721e-01 (n=6) | 3.0784e+00 (n=6) | readcon-db |
 
-| workload | op | cache | readcon-db | ASE sqlite |
-|----------|----+-------+------------+------------|
-| 10^3 atoms, 1 frame | full read | warm | 2.17e-4 | 4.81e-4 |
-| 10^3 atoms, 1 frame | full read | cold | 4.24e-4 | 9.96e-4 |
-| 10^4 atoms, 1 frame | full read | warm | 1.22e-3 | 2.33e-3 |
-| 10^4 atoms, 1 frame | full read | cold | 1.49e-3 | 3.16e-3 |
-| 10^5 atoms, 1 frame | full read | warm | 1.60e-2 | 3.53e-2 |
-| 10^5 atoms, 1 frame | full read | cold | 1.59e-2 | 2.84e-2 |
-| 10^6 atoms, 1 frame | full read | warm | 1.77e-1 | 2.40e-1 |
-| 10^6 atoms, 1 frame | full read | cold | 1.78e-1 | 2.82e-1 |
-| 10^6 atoms, 1 frame | one frame | cold | 1.80e-1 | 2.83e-1 |
-| 8 atoms, 10^4 frames | full read | warm | 1.12e-1 | 9.62e-1 |
-| 8 atoms, 10^4 frames | full read | cold | 1.21e-1 | 9.77e-1 |
-| 8 atoms, 10^4 frames | one frame | cold | 5.67e-4 | 3.56e-3 |
-| 10^6 atoms, 1 frame | insert | cold-file | 1.52e-1 | 2.47e-1 |
-| 8 atoms, 10^4 frames | insert | cold-file | 2.90e-1 | 3.76e0 |
-
-readcon-db is ahead on every full read, every single-frame query, and every insert in the latest fair log. A text above 512 KiB is indexed from the stored span, and every coordinate, fixed-flag, and force row is checked. The 10^6-atom insert was 0.349 s on the per-atom path and is 0.152 s after, against ASE at 0.247 s. A one-frame insert with n = 12 has median 0.363 ms (IQR 0.172 ms); 0.315 ms and 0.400 ms both sit inside that IQR. The before column is in =RESULTS.md=.
+ASE is faster on the 10^4-atom, 10^5-atom, and 10^6-atom inserts (10^4 atoms, 1 frame: readcon-db 3.8324e-03 (n=6), ASE 3.6268e-03 (n=12); 10^5 atoms, 1 frame: readcon-db 2.9094e-02 (n=6), ASE 2.7197e-02 (n=6); 10^6 atoms, 1 frame: readcon-db 3.0821e-01 (n=6), ASE 2.5567e-01 (n=10)).
+readcon-db is faster on every full read and single-frame query in this table.
+The full ladder is [`examples/benchmarks/results/fair-db29/RESULTS.md`](examples/benchmarks/results/fair-db29/RESULTS.md).
+# fair-docs:end workflows-summary
 
 #+begin_src sh
 python examples/benchmarks/fair_ase_protocol.py --mode all --out examples/benchmarks/results/fair

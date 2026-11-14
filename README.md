@@ -139,41 +139,32 @@ copy the same materialized columns. The single-frame query is
 
 The published CPC log (`paper/cpc/logs/db.log`, 40 frames of 8 Cu, no
 warmup) is readcon-db 4.67 ms and ASE 72.3 ms (IQR 37.7 ms). ASE
-committed and fsynced once per frame. On the fair harness that same
-40×8 insert, one commit each, is readcon-db 1.70 ms (IQR 0.42 ms) and
-ASE 5.17 ms (IQR 0.48 ms).
+committed and fsynced once per frame.
 
-Type-7 medians from the fair ladder on that host, in seconds:
+<!-- fair-docs:begin readme-fair -->
+Type-7 medians from `examples/benchmarks/results/fair-db29/campaign.json`, in seconds. n is the stored sample count.
 
-| workload | op | cache | readcon-db | ASE sqlite |
-| --- | --- | --- | --- | --- |
-| 10³ atoms, 1 frame | full read | warm | 2.17e-4 | 4.81e-4 |
-| 10³ atoms, 1 frame | full read | cold | 4.24e-4 | 9.96e-4 |
-| 10⁴ atoms, 1 frame | full read | warm | 1.22e-3 | 2.33e-3 |
-| 10⁴ atoms, 1 frame | full read | cold | 1.49e-3 | 3.16e-3 |
-| 10⁵ atoms, 1 frame | full read | warm | 1.60e-2 | 3.53e-2 |
-| 10⁵ atoms, 1 frame | full read | cold | 1.59e-2 | 2.84e-2 |
-| 10⁶ atoms, 1 frame | full read | warm | 1.77e-1 | 2.40e-1 |
-| 10⁶ atoms, 1 frame | full read | cold | 1.78e-1 | 2.82e-1 |
-| 10⁶ atoms, 1 frame | one frame | cold | 1.80e-1 | 2.83e-1 |
-| 8 atoms, 10⁴ frames | full read | warm | 1.12e-1 | 9.62e-1 |
-| 8 atoms, 10⁴ frames | full read | cold | 1.21e-1 | 9.77e-1 |
-| 8 atoms, 10⁴ frames | one frame | cold | 5.67e-4 | 3.56e-3 |
-| 10⁶ atoms, 1 frame | insert | cold-file | 1.52e-1 | 2.47e-1 |
-| 8 atoms, 10⁴ frames | insert | cold-file | 2.90e-1 | 3.76e0 |
+| workload | op | cache | readcon-db | ASE sqlite | faster |
+| --- | --- | --- | --- | --- | --- |
+| 10^3 atoms, 1 frame | full read | warm | 1.6555e-05 (n=6) | 7.9115e-04 (n=12) | readcon-db |
+| 10^3 atoms, 1 frame | full read | cold | 3.1883e-05 (n=6) | 2.0304e-03 (n=12) | readcon-db |
+| 10^4 atoms, 1 frame | full read | warm | 2.7152e-04 (n=6) | 4.3440e-03 (n=6) | readcon-db |
+| 10^4 atoms, 1 frame | full read | cold | 2.9294e-04 (n=6) | 5.2235e-03 (n=12) | readcon-db |
+| 10^5 atoms, 1 frame | full read | warm | 2.5745e-03 (n=6) | 3.4530e-02 (n=12) | readcon-db |
+| 10^5 atoms, 1 frame | full read | cold | 6.2759e-03 (n=12) | 3.3129e-02 (n=6) | readcon-db |
+| 10^6 atoms, 1 frame | full read | warm | 2.2889e-02 (n=6) | 3.0143e-01 (n=6) | readcon-db |
+| 10^6 atoms, 1 frame | full read | cold | 6.7073e-02 (n=12) | 3.5340e-01 (n=12) | readcon-db |
+| 10^6 atoms, 1 frame | one frame | cold | 6.7658e-02 (n=12) | 3.5220e-01 (n=6) | readcon-db |
+| 10^6 atoms, 1 frame | insert | cold-file | 3.0821e-01 (n=6) | 2.5567e-01 (n=10) | ASE |
+| 8 atoms, 10^4 frames | full read | warm | 6.3478e-03 (n=12) | 1.0671e+00 (n=6) | readcon-db |
+| 8 atoms, 10^4 frames | full read | cold | 6.4131e-03 (n=6) | 1.0325e+00 (n=6) | readcon-db |
+| 8 atoms, 10^4 frames | one frame | cold | 4.6303e-05 (n=6) | 5.1330e-03 (n=12) | readcon-db |
+| 8 atoms, 10^4 frames | insert | cold-file | 2.6721e-01 (n=6) | 3.0784e+00 (n=6) | readcon-db |
 
-readcon-db is ahead on every full read, every single-frame query, and
-every insert in that log, warm and cold. A text above 512 KiB is indexed
-from the stored span. Every coordinate, fixed-flag, and force row is
-checked, and no per-atom object is built. The 10⁶-atom insert was
-0.349 s on the per-atom path and is 0.152 s after, against ASE at
-0.247 s. Texts at or below 512 KiB still take the full parse. A
-one-frame insert with n = 12 has median 0.363 ms (IQR 0.172 ms); the
-earlier 0.315 ms and 0.400 ms medians both sit inside that IQR. The
-full ladder, including the before column, is
-[`examples/benchmarks/results/fair/RESULTS.md`](examples/benchmarks/results/fair/RESULTS.md).
-Select-count parity on a shared CON ladder remains
-`examples/benchmarks/fair_campaign.py`.
+ASE is faster on the 10^4-atom, 10^5-atom, and 10^6-atom inserts (10^4 atoms, 1 frame: readcon-db 3.8324e-03 (n=6), ASE 3.6268e-03 (n=12); 10^5 atoms, 1 frame: readcon-db 2.9094e-02 (n=6), ASE 2.7197e-02 (n=6); 10^6 atoms, 1 frame: readcon-db 3.0821e-01 (n=6), ASE 2.5567e-01 (n=10)).
+readcon-db is faster on every full read and single-frame query in this table.
+The full ladder is [`examples/benchmarks/results/fair-db29/RESULTS.md`](examples/benchmarks/results/fair-db29/RESULTS.md).
+<!-- fair-docs:end readme-fair -->
 
 ## Questions and bug reports
 

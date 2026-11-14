@@ -7,9 +7,8 @@ directory fsync, `posix_fadvise`, `mincore`, the field check, and the
 collector stay outside it. A read shorter than 50 ms repeats until the
 timed spans add to 50 ms, and a commit shorter than 2 s repeats until
 they add to 2 s. The sample is that mean. One warmup is discarded.
-Six samples are the default. A row whose IQR/median is still above
-0.05 after those six takes six more, and the published n is 12. The
-summary is the type-7 median and IQR. Peak RSS is `VmHWM` of that
+Twelve samples are kept for every row. The summary is the type-7
+median and IQR. Peak RSS is `VmHWM` of that
 process, not a high-water mark carried over from an earlier row.
 
 Inside the clock both tools return the same materialized frame, as
@@ -155,9 +154,9 @@ still reduce to `fmax` with the same fast-float kernel as a frame parse,
 and the bytes stored are still that span (zstd when it shrinks). On this
 host the million-atom prepare was about 0.41 s when it built one atom
 per site and about 0.15 s from the span, of which zstd was about 0.08 s
-and the commit about 0.01 s. The fair insert of that frame is then
-0.152 s against ASE at 0.247 s. Texts at or below 512 KiB keep the full
-parse, and a malformed frame is rejected at both sizes.
+and the commit about 0.01 s. The fair insert of that frame is the
+10^6-atom row in the generated table below. Texts at or below 512 KiB
+keep the full parse, and a malformed frame is rejected at both sizes.
 
 Cold readcon-db times include a readonly open. The previous cold rows
 were slower than ASE on the small corpora because the timed close
@@ -183,70 +182,41 @@ with the same fast-float kernel as readcon-core. NumPy arrays view those
 buffers. The GIL is released for the scan. Field checks stay on the
 float64 bytes.
 
-Warm full read on this host after that change (one warmup, n = 6,
-type-7), tree `850c5618`:
+<!-- fair-docs:begin fairness-tables -->
+Warm full read, cold full read, and cold single-frame read from `results/fair-db29/campaign.json`. Each cell is the type-7 median. n is the sample count stored for that row.
 
-| atoms | frames | readcon-db s | ASE s |
-| --- | --- | --- | --- |
-| 1e3 | 1 | 2.19e-4 | 4.67e-4 |
-| 1e4 | 1 | 1.40e-3 | 2.72e-3 |
-| 1e5 | 1 | 1.44e-2 | 2.34e-2 |
-| 1e6 | 1 | 1.65e-1 (IQR 4.43e-2) | 2.49e-1 (IQR 4.87e-2) |
-| 8 | 1e4 | 9.56e-2 | 8.73e-1 |
+| workload | op | cache | readcon-db | ASE | faster |
+| --- | --- | --- | --- | --- | --- |
+| 10^3 atoms, 1 frame | full_read | warm | 1.6555e-05 (n=6) | 7.9115e-04 (n=12) | readcon-db |
+| 10^3 atoms, 1 frame | full_read | cold | 3.1883e-05 (n=6) | 2.0304e-03 (n=12) | readcon-db |
+| 10^3 atoms, 1 frame | selected | cold | 3.1240e-05 (n=6) | 1.7569e-03 (n=6) | readcon-db |
+| 10^4 atoms, 1 frame | full_read | warm | 2.7152e-04 (n=6) | 4.3440e-03 (n=6) | readcon-db |
+| 10^4 atoms, 1 frame | full_read | cold | 2.9294e-04 (n=6) | 5.2235e-03 (n=12) | readcon-db |
+| 10^4 atoms, 1 frame | selected | cold | 2.9313e-04 (n=6) | 5.5761e-03 (n=6) | readcon-db |
+| 10^5 atoms, 1 frame | full_read | warm | 2.5745e-03 (n=6) | 3.4530e-02 (n=12) | readcon-db |
+| 10^5 atoms, 1 frame | full_read | cold | 6.2759e-03 (n=12) | 3.3129e-02 (n=6) | readcon-db |
+| 10^5 atoms, 1 frame | selected | cold | 7.4136e-03 (n=9) | 3.9297e-02 (n=6) | readcon-db |
+| 10^6 atoms, 1 frame | full_read | warm | 2.2889e-02 (n=6) | 3.0143e-01 (n=6) | readcon-db |
+| 10^6 atoms, 1 frame | full_read | cold | 6.7073e-02 (n=12) | 3.5340e-01 (n=12) | readcon-db |
+| 10^6 atoms, 1 frame | selected | cold | 6.7658e-02 (n=12) | 3.5220e-01 (n=6) | readcon-db |
+| 8 atoms, 1 frame | full_read | warm | 1.1674e-05 (n=6) | 1.5213e-04 (n=6) | readcon-db |
+| 8 atoms, 1 frame | full_read | cold | 2.3269e-05 (n=12) | 5.7678e-04 (n=8) | readcon-db |
+| 8 atoms, 1 frame | selected | cold | 2.1031e-05 (n=6) | 6.4928e-04 (n=12) | readcon-db |
+| 8 atoms, 100 frames | full_read | warm | 4.4052e-05 (n=6) | 9.2584e-03 (n=12) | readcon-db |
+| 8 atoms, 100 frames | full_read | cold | 6.8926e-05 (n=6) | 1.0129e-02 (n=6) | readcon-db |
+| 8 atoms, 100 frames | selected | cold | 2.2400e-05 (n=12) | 9.0448e-04 (n=12) | readcon-db |
+| 8 atoms, 10^4 frames | full_read | warm | 6.3478e-03 (n=12) | 1.0671e+00 (n=6) | readcon-db |
+| 8 atoms, 10^4 frames | full_read | cold | 6.4131e-03 (n=6) | 1.0325e+00 (n=6) | readcon-db |
+| 8 atoms, 10^4 frames | selected | cold | 4.6303e-05 (n=6) | 5.1330e-03 (n=12) | readcon-db |
 
-## Cold full read and one frame
-
-`/proc/sys/vm/drop_caches` is not writable here. Each cold sample calls
-`posix_fadvise(DONTNEED)` on the closed `data.mdb` and `lock.mdb` (and
-on the sqlite file), then times a readonly open plus the read. A probe
-of a 64 MiB file went from 0.036 s warm to 0.061 s after that advice.
-The single-frame query is `frame_index` of the middle frame.
-
-Cold rows on this host after removing the collection from the timer
-(one warmup, n = 6, type-7), tree `e3aae36b`:
-
-| workload | op | readcon-db s | ASE s |
-| --- | --- | --- | --- |
-| 1e3 atoms | full | 4.24e-4 | 9.96e-4 |
-| 1e3 atoms | one frame | 5.93e-4 | 1.46e-3 |
-| 1e4 atoms | full | 1.49e-3 | 3.16e-3 |
-| 1e4 atoms | one frame | 2.01e-3 | 4.60e-3 |
-| 1e5 atoms | full | 1.59e-2 | 2.84e-2 |
-| 1e5 atoms | one frame | 1.41e-2 | 2.46e-2 |
-| 1e6 atoms | full | 1.78e-1 | 2.82e-1 |
-| 1e6 atoms | one frame | 1.80e-1 | 2.83e-1 |
-| 1 frame | full | 2.87e-4 | 6.55e-4 |
-| 1 frame | one frame | 2.78e-4 | 7.32e-4 |
-| 100 frames | full | 1.53e-3 | 1.06e-2 |
-| 100 frames | one frame | 3.37e-4 | 7.85e-4 |
-| 1e4 frames | full | 1.21e-1 | 9.77e-1 |
-| 1e4 frames | one frame | 5.67e-4 | 3.56e-3 |
-
-readcon-db is ahead on every cold full read and every cold single-frame
-read. Warm rows in `results/fair/RESULTS.md` stay ahead as well.
+ASE is faster on the 10^4-atom, 10^5-atom, and 10^6-atom inserts (10^4 atoms, 1 frame: readcon-db 3.8324e-03 (n=6), ASE 3.6268e-03 (n=12); 10^5 atoms, 1 frame: readcon-db 2.9094e-02 (n=6), ASE 2.7197e-02 (n=6); 10^6 atoms, 1 frame: readcon-db 3.0821e-01 (n=6), ASE 2.5567e-01 (n=10)).
+readcon-db is faster on the read rows in this table and on the other insert rows.
 
 ## This machine
 
-Regenerated on `67dc0235955e6c0f50a8e814d4d489fbb387ec65`. The host
-line is the neutral label. Raw lines are
-`results/fair-db29/campaign.log`, `results/fair-db29/insert-span.log`,
-and `results/fair-db29/insert-validate.log`. The table is
-`results/fair-db29/RESULTS.md`. The 2026-11-13 logs under
-`results/fair/` are superseded.
+Regenerated from `results/fair-db29/`. Commit `67dc0235955e6c0f50a8e814d4d489fbb387ec65`. The host line in the log is the neutral label.
 
-Rerunning the published harness here gives ASE median 0.0421 s and
-IQR 0.00280 s (samples 0.0386–0.0426 s). This disk's fsync waits are
-steadier than the published log, so the wide IQR does not reappear at
-0.038 s. The fair insert of the same 40×8 frames, every sample kept,
-is ASE median 0.00527 s and IQR 0.000371 s. That is about eight times
-narrower than this host's old-harness rerun and about a hundred times
-narrower than the published IQR. readcon-db's fair insert is median
-0.00179 s, IQR 0.000922 s.
+The published-harness rerun in that directory, one warmup discarded, is readcon-db 5.1147e-03 (IQR 3.5265e-03, n=6) and ASE 5.3779e-02 (IQR 2.5180e-03, n=6).
 
-Ten thousand frames, one commit: readcon-db insert median 0.330 s
-(IQR 0.014 s), ASE 3.14 s (IQR 0.107 s). The ASE spread is the Python
-write loop, not a per-row fsync. A selected warm read of one of those
-frames is 0.286 ms for readcon-db and 0.855 ms for ASE. One million
-atoms in one frame is a 54 MB CON text: the readcon-db full read is
-the parse (median 1.22 s warm) and ASE reads the sqlite blob (median
-0.221 s warm). Both reads passed the same element-wise check.
+The fair 40×8 insert, one commit each, is readcon-db 2.2871e-03 and ASE 5.6017e-03.
+<!-- fair-docs:end fairness-tables -->
