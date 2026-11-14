@@ -36,13 +36,22 @@ def test_driver_writes_the_record_layout(tmp_path) -> None:
     assert host["hostname"] == "host"
 
 
+# Phase 2 regenerates these and deletes them in the records commit.
+# Until that commit, these paths are the only hits the tree may contain.
+LEGACY_HITS = {
+    *(f"bench/db{number}/campaign.log" for number in (*range(1, 17), 18)),
+    "bench/db17/ab.json",
+    "bench/db28/ab.json",
+    "bench/db28/host.json",
+}
+
+
 def test_fresh_fair_logs_use_the_neutral_label() -> None:
     fresh = drv.REPO / "examples" / "benchmarks" / "results" / "fair-db29"
     for name in ("campaign.log", "insert-span.log", "insert-validate.log"):
         assert (fresh / name).read_text().splitlines()[2] == "host host"
-    hits = drv.vm_host_hits(drv.REPO)
-    assert hits
-    assert all(hit.startswith("bench/") for hit in hits)
+    extra = set(drv.vm_host_hits(drv.REPO)) - LEGACY_HITS
+    assert not extra
 
 
 def test_vm_host_hits_reads_logs_notes_and_json(tmp_path) -> None:
@@ -57,11 +66,15 @@ def test_vm_host_hits_reads_logs_notes_and_json(tmp_path) -> None:
     bench = tmp_path / "bench" / "old"
     bench.mkdir(parents=True)
     (bench / "ab.json").write_text('{"corpus": "' + "/" + "tmp" + '/ab"}\n')
+    (bench / "home.json").write_text('{"path": "' + "/" + "home" + '/x"}\n')
+    (bench / "agent.json").write_text('{"path": "' + "/" + "agent" + '/x"}\n')
     assert drv.vm_host_hits(tmp_path) == [
         "examples/benchmarks/notes.md",
         "examples/benchmarks/results/fair/campaign.log",
         "examples/benchmarks/results/fair/host.json",
         "bench/old/ab.json",
+        "bench/old/agent.json",
+        "bench/old/home.json",
     ]
 
 

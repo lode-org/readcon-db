@@ -49,11 +49,13 @@ def _json_hostname(line: str) -> str | None:
 
 
 def vm_host_hits(root: Path) -> list[str]:
-    """Benchmark and bench files that name a VM host or a tmp path."""
+    """Benchmark and bench files that name a VM host or a local path."""
     hits = []
     host_line = "host " + "cursor"
     marked = "`" + "cursor" + "`"
     tmp_path = "/" + "tmp" + "/"
+    home_path = "/" + "home"
+    agent_path = "/" + "agent"
     for base in (root / "examples" / "benchmarks", root / "bench"):
         if not base.is_dir():
             continue
@@ -70,6 +72,8 @@ def vm_host_hits(root: Path) -> list[str]:
                     line.strip() == host_line
                     or marked in line
                     or tmp_path in line
+                    or home_path in line
+                    or agent_path in line
                     or (host is not None and host != NEUTRAL_HOST)
                 ):
                     named = True
