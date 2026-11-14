@@ -2,6 +2,7 @@
 
 ## Unreleased
 #### Features
+- (**cooked**) frames of at least 64 KiB default to byte-shuffled zstd columns. `READCON_DB_COOKED_CODEC=raw` keeps RCSO. A reader from before db20 cannot open a corpus written with this default
 - (**identity**) opt-in canonical hash for frames that differ by atom-id order
 #### Bug Fixes
 - (**tls**) cdylib and Python builds use mimalloc `local_dynamic_tls`, so dlopen does not fail once static TLS surplus is spent
