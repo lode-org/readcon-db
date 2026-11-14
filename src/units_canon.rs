@@ -294,21 +294,20 @@ pub fn rescale_frame_units(
             let m = fr.masses.get_f64(i);
             fr.masses.set_f64(i, m * mf);
         }
+        // Coordinates alias `positions`. Velocities and forces alias those
+        // columns when the column is present, so a second write would scale
+        // them again. Per-atom energy is a separate tail.
         if let Some(a) = fr.atom_data.get_mut(i) {
-            if lf != 1.0 {
-                let p = crate::atom_coord::atom_xyz(a);
-                crate::atom_coord::set_atom_xyz(a, [p[0] * lf, p[1] * lf, p[2] * lf]);
-            }
-            if let Some(mut v) = a.velocity() {
-                if vf != 1.0 {
+            if vf != 1.0 && fr.velocities.nrows() != n {
+                if let Some(mut v) = a.velocity() {
                     v[0] *= vf;
                     v[1] *= vf;
                     v[2] *= vf;
                     a.set_velocity(Some(v));
                 }
             }
-            if let Some(mut f) = a.force() {
-                if ff != 1.0 {
+            if ff != 1.0 && fr.forces.nrows() != n {
+                if let Some(mut f) = a.force() {
                     f[0] *= ff;
                     f[1] *= ff;
                     f[2] *= ff;

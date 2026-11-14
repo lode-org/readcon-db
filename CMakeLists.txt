@@ -223,7 +223,6 @@ endif()
 file(GLOB_RECURSE ALL_RUST_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml
     ${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock
-    ${CMAKE_CURRENT_SOURCE_DIR}/build.rs
     ${CMAKE_CURRENT_SOURCE_DIR}/src/*.rs
 )
 

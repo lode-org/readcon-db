@@ -1,45 +1,22 @@
 //! Coordinate access for `AtomDatum`.
 //!
-//! readcon-core 0.21 stores `x`, `y`, and `z` as fields. 0.23 stores one
-//! pointer and exposes `x()` / `set_x()`. The campaign build sets
-//! `READCON_DB_CORE_0_23=1`; the published pin does not.
+//! readcon-core 0.23 stores coordinates behind `x()` / `set_x()`.
 
 use readcon_core::types::AtomDatum;
 
 #[inline]
 pub(crate) fn atom_x(atom: &AtomDatum) -> f64 {
-    #[cfg(readcon_core_0_23)]
-    {
-        atom.x()
-    }
-    #[cfg(not(readcon_core_0_23))]
-    {
-        atom.x
-    }
+    atom.x()
 }
 
 #[inline]
 pub(crate) fn atom_y(atom: &AtomDatum) -> f64 {
-    #[cfg(readcon_core_0_23)]
-    {
-        atom.y()
-    }
-    #[cfg(not(readcon_core_0_23))]
-    {
-        atom.y
-    }
+    atom.y()
 }
 
 #[inline]
 pub(crate) fn atom_z(atom: &AtomDatum) -> f64 {
-    #[cfg(readcon_core_0_23)]
-    {
-        atom.z()
-    }
-    #[cfg(not(readcon_core_0_23))]
-    {
-        atom.z
-    }
+    atom.z()
 }
 
 #[inline]
@@ -49,38 +26,17 @@ pub(crate) fn atom_xyz(atom: &AtomDatum) -> [f64; 3] {
 
 #[inline]
 pub(crate) fn set_atom_x(atom: &mut AtomDatum, value: f64) {
-    #[cfg(readcon_core_0_23)]
-    {
-        atom.set_x(value);
-    }
-    #[cfg(not(readcon_core_0_23))]
-    {
-        atom.x = value;
-    }
+    atom.set_x(value);
 }
 
 #[inline]
 pub(crate) fn set_atom_y(atom: &mut AtomDatum, value: f64) {
-    #[cfg(readcon_core_0_23)]
-    {
-        atom.set_y(value);
-    }
-    #[cfg(not(readcon_core_0_23))]
-    {
-        atom.y = value;
-    }
+    atom.set_y(value);
 }
 
 #[inline]
 pub(crate) fn set_atom_z(atom: &mut AtomDatum, value: f64) {
-    #[cfg(readcon_core_0_23)]
-    {
-        atom.set_z(value);
-    }
-    #[cfg(not(readcon_core_0_23))]
-    {
-        atom.z = value;
-    }
+    atom.set_z(value);
 }
 
 #[inline]
