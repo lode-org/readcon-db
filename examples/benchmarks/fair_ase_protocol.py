@@ -443,122 +443,255 @@ def build_text_records(n_frames: int, n_atoms: int) -> tuple[str, list[dict]]:
     return buf.decode(), records
 
 
-# Alanine dipeptide, heavy atoms, frames 0..63 of replica 0.
-# Computational Molecular Biology group, Freie Universität Berlin, mdshare.
-# CC-BY 4.0. Coordinates from
-# http://ftp.imp.fu-berlin.de/pub/cmb-data/alanine-dipeptide-3x250ns-heavy-atom-positions.npz
-# (nm, converted to angstrom). Topology:
-# http://ftp.imp.fu-berlin.de/pub/cmb-data/alanine-dipeptide-nowater.pdb
-# Species order in the file is C, O, N (6, 2, 2), taken from the heavy-atom
-# PDB order C, C, O, N, C, C, C, O, N, C.
-MD_TRAJECTORY_SHA256 = (
-    "a5b598566de2cc35762499696c0d78c8b866e6c52ff0f8520d48c63545c17e88"
-)
-MD_TRAJECTORY_PATH = (
-    Path(__file__).resolve().parents[2] / "resources" / "traj" / "alanine-dipeptide-heavy-64.con"
-)
-MD_N_FRAMES = 64
-MD_SYMBOLS = ["C"] * 6 + ["O"] * 2 + ["N"] * 2
-MD_BOX = 100.0
+# Lattice coordinate payload: 64 frames of 100_000 atoms, positions and forces.
+LATTICE_FRAMES = 64
+LATTICE_ATOMS = 100_000
+LATTICE_COORD_BYTES = LATTICE_FRAMES * LATTICE_ATOMS * 2 * 3 * 8
+# `wants_shuffle` refuses a cooked blob shorter than 64 KiB.
+SHUFFLE_MIN_COOKED_BYTES = 64 * 1024
+
+# Condensed-phase MD: NhaA in a POPE:POPG 4:1 bilayer with ions.
+# Water was stripped by the authors; 60_702 protein, lipid, and ion atoms remain.
+# Ian Kenney and Shujie Fan, CC-BY 4.0.
+# https://doi.org/10.6084/m9.figshare.7185203.v2
+# CHARMM36, TIP3P solvent before stripping, 300 K, 1 bar, 500 ns, 100 ps spacing.
+# Checksums are the SHA-256 values published by MDAnalysisData.
+NHA_GRO_URL = "https://ndownloader.figshare.com/files/13222709"
+NHA_GRO_SHA256 = "ae42f4cfcfe312476f9e5121fe47764a11aff962197799671c0c5a8f83637420"
+NHA_XTC_URL = "https://ndownloader.figshare.com/files/13222712"
+NHA_XTC_SHA256 = "c9ab7ba8c9c271d535cfadebc33da1d90fbf00d9a01f48afedd0f7a703128eaf"
+NHA_SOURCE_FRAMES = 5000
+NHA_ATOMS = 60_702
 THERMAL_SEED = 0
 THERMAL_SIGMA_ANGSTROM = 0.08
 DATA_ARMS = ("lattice", "md", "thermal")
+_FETCH_DIR = Path(__file__).resolve().parents[2] / "build" / "md-src"
 
 
-def md_trajectory_text() -> str:
-    """The pinned trajectory. The sha256 is of these exact bytes."""
-    data = MD_TRAJECTORY_PATH.read_bytes()
-    digest = hashlib.sha256(data).hexdigest()
-    if digest != MD_TRAJECTORY_SHA256:
-        raise RuntimeError(
-            f"MD trajectory sha256 {digest} != {MD_TRAJECTORY_SHA256}"
+def frame_coord_bytes(n_atoms: int, has_forces: bool) -> int:
+    """Uncompressed coordinate payload of one frame, the shuffle-size floor."""
+    sets = 2 if has_forces else 1
+    return n_atoms * sets * 3 * 8
+
+
+def frames_matching_lattice(n_atoms: int, has_forces: bool) -> int:
+    """How many frames put this arm on the lattice arm's coordinate scale."""
+    per = frame_coord_bytes(n_atoms, has_forces)
+    return max(2, math.ceil(LATTICE_COORD_BYTES / per))
+
+
+def fetch_pinned(url: str, sha256: str, name: str) -> Path:
+    """Download ``name`` into ``build/`` and refuse a mismatched sha256.
+
+    A file already at that digest is reused. The trajectory is not committed.
+    """
+    dest = _FETCH_DIR / name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.is_file():
+        digest = hashlib.sha256(dest.read_bytes()).hexdigest()
+        if digest != sha256:
+            raise RuntimeError(f"{name} sha256 {digest} != {sha256}")
+        return dest
+    import urllib.request
+
+    urllib.request.urlretrieve(url, dest)
+    digest = hashlib.sha256(dest.read_bytes()).hexdigest()
+    if digest != sha256:
+        dest.unlink(missing_ok=True)
+        raise RuntimeError(f"{name} sha256 {digest} != {sha256}")
+    return dest
+
+
+_ELEMENT_MASS = {
+    "H": 1.008,
+    "C": 12.011,
+    "N": 14.007,
+    "O": 15.999,
+    "Na": 22.990,
+    "Mg": 24.305,
+    "P": 30.974,
+    "S": 32.065,
+    "Cl": 35.453,
+    "K": 39.098,
+    "Fe": 55.845,
+    "Zn": 65.38,
+}
+_ELEMENT_ALIAS = {
+    "CLA": "Cl",
+    "CL": "Cl",
+    "SOD": "Na",
+    "NA": "Na",
+    "POT": "K",
+    "MG": "Mg",
+    "ZN": "Zn",
+    "FE": "Fe",
+}
+
+
+def _element_of(atom_name: str) -> str:
+    name = atom_name.strip().upper()
+    if name in _ELEMENT_ALIAS:
+        return _ELEMENT_ALIAS[name]
+    return {"C": "C", "N": "N", "O": "O", "H": "H", "S": "S", "P": "P"}.get(
+        name[0], name[0]
+    )
+
+
+class _NhaTopology:
+    def __init__(self) -> None:
+        path = fetch_pinned(NHA_GRO_URL, NHA_GRO_SHA256, "NhaA_non_water.gro")
+        lines = path.read_text().splitlines()
+        n_atoms = int(lines[1])
+        if n_atoms != NHA_ATOMS:
+            raise RuntimeError(f"NhaA gro has {n_atoms} atoms, expected {NHA_ATOMS}")
+        names = []
+        xyz = np.empty((n_atoms, 3), dtype=np.float64)
+        for i, line in enumerate(lines[2 : 2 + n_atoms]):
+            names.append(line[10:15].strip())
+            xyz[i, 0] = float(line[20:28])
+            xyz[i, 1] = float(line[28:36])
+            xyz[i, 2] = float(line[36:44])
+        xyz *= 10.0
+        box = np.array([float(x) * 10.0 for x in lines[2 + n_atoms].split()[:3]])
+        elements = [_element_of(name) for name in names]
+        order_groups: list[tuple[str, np.ndarray]] = []
+        for symbol in ("C", "H", "N", "O", "P", "S", "Na", "Cl", "K", "Mg", "Fe", "Zn"):
+            idx = np.array(
+                [i for i, el in enumerate(elements) if el == symbol], dtype=np.int64
+            )
+            if idx.size:
+                order_groups.append((symbol, idx))
+        known = {i for _, idx in order_groups for i in idx.tolist()}
+        if len(known) != n_atoms:
+            missing = sorted({elements[i] for i in range(n_atoms) if i not in known})
+            raise RuntimeError(f"NhaA atoms have no mass: {missing}")
+        self.box = box
+        self.groups = order_groups
+        self.symbols = [symbol for symbol, idx in order_groups for _ in range(idx.size)]
+        self.order = np.concatenate([idx for _, idx in order_groups])
+        self.base = xyz[self.order]
+        self.masses = np.array(
+            [_ELEMENT_MASS[sym] for sym in self.symbols], dtype=np.float64
         )
-    return data.decode()
 
 
-_MD_CACHE: list[np.ndarray] | None = None
+_NHA: _NhaTopology | None = None
 
 
-def _md_positions() -> list[np.ndarray]:
-    global _MD_CACHE
-    if _MD_CACHE is not None:
-        return _MD_CACHE
-    md_trajectory_text()
-    parsed = __import__("readcon").read_con(str(MD_TRAJECTORY_PATH))
-    positions = [np.array(frame.coords_array(), dtype=np.float64) for frame in parsed]
-    refuse_identical_frames(positions)
-    _MD_CACHE = positions
-    return positions
+def nha_topology() -> _NhaTopology:
+    global _NHA
+    if _NHA is None:
+        _NHA = _NhaTopology()
+    return _NHA
+
+
+def _md_source_indices(n_frames: int) -> list[int]:
+    """Spread ``n_frames`` across the 5000-frame trajectory."""
+    if n_frames > NHA_SOURCE_FRAMES:
+        raise RuntimeError(f"NhaA has {NHA_SOURCE_FRAMES} frames, not {n_frames}")
+    if n_frames == NHA_SOURCE_FRAMES:
+        return list(range(n_frames))
+    stride = max(1, NHA_SOURCE_FRAMES // n_frames)
+    return [i * stride for i in range(n_frames)]
+
+
+def _load_md_positions(n_frames: int) -> list[np.ndarray]:
+    """Strided frames of the pinned XTC, angstrom, species-grouped."""
+    import mdtraj
+
+    topo = nha_topology()
+    gro = fetch_pinned(NHA_GRO_URL, NHA_GRO_SHA256, "NhaA_non_water.gro")
+    xtc = fetch_pinned(NHA_XTC_URL, NHA_XTC_SHA256, "NhaA_non_water.xtc")
+    indices = _md_source_indices(n_frames)
+    frames = []
+    for index in indices:
+        xyz = mdtraj.load_frame(str(xtc), index, top=str(gro)).xyz[0]
+        angstrom = np.asarray(xyz, dtype=np.float64) * 10.0
+        frames.append(angstrom[topo.order])
+    refuse_identical_frames(frames)
+    return frames
+
+
+_MD_CACHE: dict[tuple[int, int], np.ndarray] = {}
 
 
 def md_positions(frame_index: int) -> np.ndarray:
-    if not 0 <= frame_index < MD_N_FRAMES:
-        raise RuntimeError(f"MD trajectory has {MD_N_FRAMES} frames, not {frame_index}")
-    return _md_positions()[frame_index]
-
-
-def _heavy_con_frame(pos: np.ndarray, frame_index: int) -> str:
-    """One species-grouped heavy-atom frame, same layout as the pinned file."""
-    counts = {"C": 6, "O": 2, "N": 2}
-    masses = {"C": 12.011, "O": 15.999, "N": 14.007}
-    groups = ("C", "O", "N")
-    header = (
-        '{"con_spec_minor":1,"con_spec_version":3,"energy":0.0,"frame_index":'
-        + str(frame_index)
-        + ',"lattice_vectors":[[100.0,0.0,0.0],[0.0,100.0,0.0],[0.0,0.0,100.0]],'
-        + '"pbc":[true,true,true],"units":{"energy":"eV","length":"angstrom",'
-        + '"mass":"amu","time":"(amu*angstrom^2/eV)^0.5"}}'
-    )
-    lines = [
-        "Random Number Seed",
-        header,
-        f"{MD_BOX} {MD_BOX} {MD_BOX}",
-        "90.0 90.0 90.0",
-        "0 0",
-        "0 0 0",
-        "3",
-        " ".join(str(counts[s]) for s in groups),
-        " ".join(repr(float(masses[s])) for s in groups),
-    ]
-    cursor = 0
-    for component, symbol in enumerate(groups, start=1):
-        count = counts[symbol]
-        lines.append(symbol)
-        lines.append(f"Coordinates of Component {component}")
-        for row in pos[cursor : cursor + count]:
-            lines.append(
-                f"{repr(float(row[0]))} {repr(float(row[1]))} {repr(float(row[2]))} 0 {cursor}"
-            )
-            cursor += 1
-    if cursor != pos.shape[0]:
-        raise RuntimeError("heavy-atom frame has the wrong atom count")
-    return "\n".join(lines) + "\n"
+    n_frames = arm_n_frames("md")
+    if not 0 <= frame_index < n_frames:
+        raise RuntimeError(f"MD arm has {n_frames} frames, not {frame_index}")
+    key = (n_frames, frame_index)
+    if key not in _MD_CACHE:
+        for i, pos in enumerate(_load_md_positions(n_frames)):
+            _MD_CACHE[(n_frames, i)] = pos
+    return _MD_CACHE[key]
 
 
 def thermal_positions(frame_index: int) -> np.ndarray:
-    """Seeded Gaussian noise on the first frame of the real trajectory."""
-    base = md_positions(0)
+    """Seeded Gaussian noise on the NhaA structure, not on the lattice."""
+    base = nha_topology().base
     rng = np.random.default_rng(THERMAL_SEED + frame_index * 1_000_003)
     noise = rng.normal(0.0, THERMAL_SIGMA_ANGSTROM, size=base.shape)
     return np.asarray(base + noise, dtype=np.float64)
 
 
-def _md_records(positions: list[np.ndarray]) -> list[dict]:
-    cell = np.diag(np.array([MD_BOX, MD_BOX, MD_BOX], dtype=np.float64))
-    masses = np.array(
-        [{"C": 12.011, "O": 15.999, "N": 14.007}[sym] for sym in MD_SYMBOLS],
-        dtype=np.float64,
+def _coord_block(pos: np.ndarray, id0: int) -> str:
+    n = pos.shape[0]
+    lines = [
+        f"{pos[i, 0]:.17g} {pos[i, 1]:.17g} {pos[i, 2]:.17g} 0 {id0 + i}"
+        for i in range(n)
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _nha_frame(pos: np.ndarray, frame_index: int) -> str:
+    topo = nha_topology()
+    box = [float(x) for x in topo.box]
+
+    def _axis(i: int) -> str:
+        vals = [0.0, 0.0, 0.0]
+        vals[i] = box[i]
+        return "[" + ",".join(repr(v) for v in vals) + "]"
+
+    vectors = ",".join(_axis(i) for i in range(3))
+    header = (
+        '{"con_spec_minor":1,"con_spec_version":3,"energy":0.0,"frame_index":'
+        + str(frame_index)
+        + f',"lattice_vectors":[{vectors}],'
+        + '"pbc":[true,true,true],"units":{"energy":"eV","length":"angstrom",'
+        + '"mass":"amu","time":"(amu*angstrom^2/eV)^0.5"}}'
     )
+    counts = " ".join(str(idx.size) for _, idx in topo.groups)
+    masses = " ".join(repr(float(_ELEMENT_MASS[sym])) for sym, _ in topo.groups)
+    parts = [
+        "Random Number Seed\n",
+        header,
+        "\n",
+        f"{box[0]} {box[1]} {box[2]}\n",
+        "90.0 90.0 90.0\n0 0\n0 0 0\n",
+        f"{len(topo.groups)}\n{counts}\n{masses}\n",
+    ]
+    cursor = 0
+    for component, (symbol, idx) in enumerate(topo.groups, start=1):
+        count = int(idx.size)
+        parts.append(f"{symbol}\nCoordinates of Component {component}\n")
+        parts.append(_coord_block(pos[cursor : cursor + count], cursor))
+        cursor += count
+    return "".join(parts)
+
+
+def _nha_records(positions: list[np.ndarray]) -> list[dict]:
+    topo = nha_topology()
+    cell = np.diag(np.asarray(topo.box, dtype=np.float64))
     records = []
     for i, pos in enumerate(positions):
         records.append(
             {
-                "symbols": list(MD_SYMBOLS),
-                "symbol_runs": _symbol_runs(list(MD_SYMBOLS)),
+                "symbols": list(topo.symbols),
+                "symbol_runs": _symbol_runs(list(topo.symbols)),
                 "positions": pos,
                 "cell": cell,
                 "pbc": (True, True, True),
-                "masses": masses.copy(),
+                "masses": topo.masses.copy(),
                 "energy": 0.0,
                 "frame_index": i,
             }
@@ -567,37 +700,36 @@ def _md_records(positions: list[np.ndarray]) -> list[dict]:
 
 
 def build_md_records(n_frames: int | None = None) -> tuple[str, list[dict]]:
-    """Real MD frames. ``n_frames`` defaults to the whole pinned trajectory."""
-    positions = _md_positions()
+    """Strided NhaA frames. The default count matches the lattice byte scale."""
     if n_frames is None:
-        n_frames = len(positions)
-    if n_frames > len(positions):
-        raise RuntimeError(f"MD trajectory has {len(positions)} frames")
-    positions = positions[:n_frames]
-    refuse_identical_frames(positions)
-    text = "".join(_heavy_con_frame(pos, i) for i, pos in enumerate(positions))
-    # The committed file is the pin. A prefix is the same frames, rewritten
-    # with the same tokens, so a full read of the file is authoritative.
-    if n_frames == MD_N_FRAMES:
-        text = md_trajectory_text()
-        positions = _md_positions()
-    return text, _md_records(positions)
+        n_frames = arm_n_frames("md")
+    positions = _load_md_positions(n_frames)
+    for i, pos in enumerate(positions):
+        _MD_CACHE[(n_frames, i)] = pos
+    text = "".join(_nha_frame(pos, i) for i, pos in enumerate(positions))
+    return text, _nha_records(positions)
 
 
-def build_thermal_records(n_frames: int = 64) -> tuple[str, list[dict]]:
-    """Thermal noise on the real structure. Frames are seeded and distinct."""
+def build_thermal_records(n_frames: int | None = None) -> tuple[str, list[dict]]:
+    """Seeded thermal noise on the NhaA structure, at the lattice byte scale."""
+    if n_frames is None:
+        n_frames = arm_n_frames("thermal")
     positions = [thermal_positions(i) for i in range(n_frames)]
     refuse_identical_frames(positions)
-    text = "".join(_heavy_con_frame(pos, i) for i, pos in enumerate(positions))
-    return text, _md_records(positions)
+    text = "".join(_nha_frame(pos, i) for i, pos in enumerate(positions))
+    return text, _nha_records(positions)
 
 
 def build_arm(
-    arm: str, n_frames: int = 64, n_atoms: int | None = None
+    arm: str, n_frames: int | None = None, n_atoms: int | None = None
 ) -> tuple[str, list[dict]]:
     """One data arm. ``lattice`` is the best case. Quote ``md`` or ``thermal``."""
+    if n_frames is None:
+        n_frames = arm_n_frames(arm)
     if arm == "lattice":
-        return build_text_records(n_frames, 100_000 if n_atoms is None else n_atoms)
+        return build_text_records(
+            n_frames, LATTICE_ATOMS if n_atoms is None else n_atoms
+        )
     if arm == "md":
         return build_md_records(n_frames)
     if arm == "thermal":
@@ -607,16 +739,24 @@ def build_arm(
 
 def arm_natoms(arm: str) -> int:
     if arm == "lattice":
-        return 100_000
+        return LATTICE_ATOMS
     if arm in ("md", "thermal"):
-        return len(MD_SYMBOLS)
+        return NHA_ATOMS
+    raise RuntimeError(f"unknown data arm {arm!r}")
+
+
+def arm_n_frames(arm: str) -> int:
+    if arm == "lattice":
+        return LATTICE_FRAMES
+    if arm in ("md", "thermal"):
+        return frames_matching_lattice(NHA_ATOMS, has_forces=False)
     raise RuntimeError(f"unknown data arm {arm!r}")
 
 
 def arm_positions(arm: str, frame_index: int, n_atoms: int | None = None) -> np.ndarray:
     if arm == "lattice":
         pos, _forces, _masses, _energy, _cell = synthetic_arrays(
-            frame_index, 100_000 if n_atoms is None else n_atoms
+            frame_index, LATTICE_ATOMS if n_atoms is None else n_atoms
         )
         return pos
     if arm == "md":
@@ -624,6 +764,41 @@ def arm_positions(arm: str, frame_index: int, n_atoms: int | None = None) -> np.
     if arm == "thermal":
         return thermal_positions(frame_index)
     raise RuntimeError(f"unknown data arm {arm!r}")
+
+
+def arm_profile(arm: str) -> dict:
+    """Atoms, coordinate bytes, and whether this arm is large enough to shuffle."""
+    has_forces = arm == "lattice"
+    n_atoms = arm_natoms(arm)
+    coord = frame_coord_bytes(n_atoms, has_forces)
+    return {
+        "arm": arm,
+        "role": "best case" if arm == "lattice" else "realistic",
+        "atoms_per_frame": n_atoms,
+        "n_frames": arm_n_frames(arm),
+        "frame_coord_bytes": coord,
+        "expects_shuffle": coord >= SHUFFLE_MIN_COOKED_BYTES,
+    }
+
+
+def corpus_arm_record(corpus: Path, n_frames: int) -> dict:
+    """Corpus bytes and whether the stored frames took the shuffle path."""
+    db = ConCorpus(str(corpus), readonly=True)
+    rows = {row["name"]: row for row in db.table_usage()}
+    soa = rows["frames_soa"]
+    codec = db.cooked_codec(1)
+    file_bytes = (corpus / "data.mdb").stat().st_size
+    entries = int(soa["entries"])
+    value_bytes = int(soa["value_bytes"])
+    return {
+        "corpus_bytes": file_bytes,
+        "frames_soa_entries": entries,
+        "frames_soa_value_bytes": value_bytes,
+        "stored_frame_bytes": (value_bytes / entries) if entries else 0,
+        "cooked_codec": codec,
+        "hit_shuffle": codec == "shuffle-zstd" and entries == n_frames,
+        "n_frames": n_frames,
+    }
 
 
 def build_atom_records(n_frames: int, n_atoms: int) -> tuple[list[Atoms], list[dict]]:

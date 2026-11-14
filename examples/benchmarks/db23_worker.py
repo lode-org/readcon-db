@@ -2,6 +2,7 @@
 
 import gc
 import json
+import math
 import os
 import sys
 import time
@@ -15,10 +16,13 @@ import numpy as np
 DEST = Path(sys.argv[1])
 KIND = sys.argv[2]
 ARM = os.environ.get("READCON_BENCH_ARM", "lattice")
-N_FRAMES = int(os.environ.get("READCON_BENCH_NFRAMES", "64"))
+N_FRAMES = int(os.environ.get("READCON_BENCH_NFRAMES", str(fair.arm_n_frames(ARM))))
 N_ATOMS = int(os.environ.get("READCON_BENCH_NATOMS", str(fair.arm_natoms(ARM))))
-# 17 is coprime to 64, so this is one permutation of every frame.
-FRAME_SEQUENCE = tuple((i * 17) % N_FRAMES for i in range(N_FRAMES))
+# A step coprime to the frame count visits every frame once.
+_step = 17
+while math.gcd(_step, N_FRAMES) != 1:
+    _step += 2
+FRAME_SEQUENCE = tuple((i * _step) % N_FRAMES for i in range(N_FRAMES))
 HOLDER = {}
 PAYLOAD = {}
 
@@ -31,7 +35,10 @@ def check(op: str, got, frame: int | None = None) -> None:
     pos = np.asarray(got["positions"])
     assert pos.shape[1:] == (N_ATOMS, 3), pos.shape
     if ARM == "lattice":
-        assert pos.reshape(-1, N_ATOMS, 3)[0, 0, 1].tobytes() == np.float64(np.pi).tobytes()
+        assert (
+            pos.reshape(-1, N_ATOMS, 3)[0, 0, 1].tobytes()
+            == np.float64(np.pi).tobytes()
+        )
         energy = np.asarray(got["energy"], dtype=np.float64)
         if op == "selected":
             mid = N_FRAMES // 2 if frame is None else frame
@@ -124,22 +131,33 @@ def warm_selected_distinct() -> dict:
 
     def run() -> None:
         energies = []
+        coords = []
         last = None
         for idx in FRAME_SEQUENCE:
             got = fair.fetch_materialized(KIND, HOLDER["db"], "selected", idx, N_FRAMES)
             energies.append(np.asarray(got["energy"], dtype=np.float64).reshape(-1)[0])
+            coords.append(np.asarray(got["positions"])[0].copy())
             last = got
         state["energies"] = energies
+        state["coords"] = coords
         state["last"] = last
 
     def teardown() -> None:
         got = state["energies"]
         if len(set(FRAME_SEQUENCE)) != len(FRAME_SEQUENCE):
             raise AssertionError("sequence repeats a frame")
-        for idx, energy in zip(FRAME_SEQUENCE, got):
-            expect = np.float64(-42.5) + np.float64(idx)
-            if energy.tobytes() != expect.tobytes():
-                raise AssertionError((idx, float(energy), float(expect)))
+        for idx, energy, coord in zip(FRAME_SEQUENCE, got, state["coords"]):
+            if ARM == "lattice":
+                expect = np.float64(-42.5) + np.float64(idx)
+                if energy.tobytes() != expect.tobytes():
+                    raise AssertionError((idx, float(energy), float(expect)))
+            else:
+                expect = fair.arm_positions(ARM, idx, N_ATOMS)
+                if (
+                    np.asarray(coord).tobytes()
+                    != np.asarray(expect, dtype=np.float64).tobytes()
+                ):
+                    raise AssertionError((ARM, idx, "coordinates"))
         check("selected", state["last"], FRAME_SEQUENCE[-1])
         state.clear()
 

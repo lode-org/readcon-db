@@ -60,6 +60,15 @@ impl PyConCorpus {
         Ok(out.unbind())
     }
 
+    /// `shuffle-zstd` when a stored frame took the byte-shuffle path, else `raw`.
+    fn cooked_codec(&self, traj_id: u64) -> PyResult<Option<String>> {
+        let meta = self
+            .inner
+            .traj_meta(traj_id)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(meta.and_then(|row| row.cooked_codec))
+    }
+
     /// RCSO bytes for a unidirectional broadcast on the *caller* communicator.
     /// Rank 0 packs; workers call :func:`unpack_positions` on the copy.
     fn pack_frame(&self, traj_id: u64, frame_idx: u32) -> PyResult<Vec<u8>> {
