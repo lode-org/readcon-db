@@ -1348,7 +1348,7 @@ pub fn unpack_cooked_group(stored: &[u8]) -> Result<CookedGroup> {
     Ok(CookedGroup { buf, ranges })
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 fn resident_bytes() -> usize {
     let status = std::fs::read_to_string("/proc/self/status").expect("status");
     for line in status.lines() {
@@ -1529,6 +1529,8 @@ mod tests {
         assert!(decode_batch(&enc[..8]).is_err());
     }
 
+    // Resident memory is read from /proc/self/status.
+    #[cfg(target_os = "linux")]
     #[test]
     fn declared_batch_count_does_not_allocate() {
         let mut bytes = Vec::new();

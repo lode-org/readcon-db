@@ -8227,6 +8227,7 @@ x
 
     #[test]
     fn shuffled_frames_round_trip_and_append() {
+        let _token = lock_codec();
         let _guard = CodecVar;
         let text = wide_con(4096, 1.0);
         let plain = tempfile::tempdir().unwrap();

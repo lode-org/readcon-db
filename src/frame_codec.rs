@@ -300,7 +300,7 @@ pub(crate) fn is_single_zstd_frame(stored: &[u8]) -> bool {
         && stored[FRAME_TAG.len()..].starts_with(&ZSTD_MAGIC)
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 fn resident_bytes() -> usize {
     let status = std::fs::read_to_string("/proc/self/status").expect("status");
     for line in status.lines() {
@@ -372,6 +372,8 @@ mod tests {
         assert_eq!(again, packed);
     }
 
+    // Resident memory is read from /proc/self/status.
+    #[cfg(target_os = "linux")]
     #[test]
     fn declared_group_count_does_not_allocate() {
         let compressed = zstd::stream::encode_all(&b"abcd"[..], 1).unwrap();
