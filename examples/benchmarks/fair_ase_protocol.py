@@ -62,6 +62,8 @@ from readcon_db import ConCorpus
 REPO = Path(__file__).resolve().parents[2]
 WARMUP = 1
 N_SAMPLES = int(os.environ.get("READCON_DB_N_SAMPLES", "12"))
+if N_SAMPLES < 12:
+    raise ValueError(f"a fair row needs n>=12, not {N_SAMPLES}")
 # A single sub-millisecond fsync or query is mostly timer noise. Repeat it
 # until the timed spans cover this long, and publish the mean as one sample.
 # Reads repeat until the timed spans cover this. A 50 ms mean is enough
@@ -998,7 +1000,7 @@ def header_lines() -> list[str]:
         f"samples {N_SAMPLES}",
         "quantile type-7 (numpy percentile method=linear)",
         "order serial, tools alternate each sample index, no parallel samples",
-        "threads: the paired rows set RAYON_NUM_THREADS=1 for readcon-db and run ASE in one process; readcon-db is also recorded with RAYON_NUM_THREADS unset",
+        "threads: the paired rows set RAYON_NUM_THREADS=1 for readcon-db and run ASE in one process; readcon-db is also recorded with RAYON_NUM_THREADS unset; OMP, OpenBLAS, and MKL threads are 1 on every row",
         "timer: directory fsync, fadvise, mincore, the element-wise check, and the collector stay outside; the clock covers the commit, or the query; cold-open also times the open",
         "gc: automatic collection is off for every read row, for both tools, and restored when the row returns",
         "timer_short: a read shorter than 50 ms is repeated until the timed spans add to 50 ms; the sample is that mean",
@@ -2074,12 +2076,22 @@ def thread_fields() -> dict:
     """What this process was pinned to. Unset means the library default."""
     raw = os.environ.get("RAYON_NUM_THREADS")
     if raw is None or raw == "":
-        return {"rayon_num_threads": "unset", "threads": os.cpu_count() or 1}
-    return {"rayon_num_threads": raw, "threads": int(raw)}
+        fields = {"rayon_num_threads": "unset", "threads": os.cpu_count() or 1}
+    else:
+        fields = {"rayon_num_threads": raw, "threads": int(raw)}
+    for name in BLAS_THREAD_VARS:
+        fields[name.lower()] = os.environ.get(name, "unset")
+    return fields
+
+
+# NumPy's BLAS pool is one thread on every row, so only RAYON_NUM_THREADS varies.
+BLAS_THREAD_VARS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS")
 
 
 def apply_rayon(env: dict, mode: str) -> dict:
     env = dict(env)
+    for name in BLAS_THREAD_VARS:
+        env[name] = "1"
     if mode == "unset":
         env.pop("RAYON_NUM_THREADS", None)
     else:
