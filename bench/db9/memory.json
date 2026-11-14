@@ -1,0 +1,12 @@
+{
+  "frames_10000": {
+    "note": "VmHWM of one process, one commit. readcon puts one 64-frame group at a time inside that single transaction and drops the group's cooked blob and decompressed text after the put. ASE holds the atoms for the whole trajectory. The fair campaign row repeats the commit for 2 s, so its peak is higher: readcon 189 MB, ASE 194 MB.",
+    "readcon_db_mb": {"built": 120.6, "done": 176.6},
+    "ase_db_mb": {"built": 153.0, "done": 189.8}
+  },
+  "atoms_1000000": {
+    "note": "readcon streams the CON text from the column arrays and never builds a ConFrame. One frame, so the insert is already one transaction. Stages are VmHWM with the text still alive. The fair campaign row repeats the commit for 2 s: readcon 602 MB, ASE 1102 MB.",
+    "readcon_db_mb": {"text": 284.5, "done": 556.8},
+    "ase_db_mb": {"done": 561.7}
+  }
+}
