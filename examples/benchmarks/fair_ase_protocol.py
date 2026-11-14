@@ -37,6 +37,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -52,6 +53,15 @@ from readcon_db import ConCorpus
 REPO = Path(__file__).resolve().parents[2]
 WARMUP = 1
 N_SAMPLES = 6
+# A single sub-millisecond fsync or query is mostly timer noise. Repeat it
+# until the timed spans cover this long, and publish the mean as one sample.
+# Reads repeat until the timed spans cover this. A 50 ms mean is enough
+# once open, advice, and the field check are outside the clock.
+SAMPLE_S = 0.050
+# Commit fsyncs are correlated (lag-1 about 0.37 on a one-frame insert).
+# A 50 ms or 250 ms mean of those commits still has IQR/median above 0.15.
+# Means of about 2000 commits, roughly two seconds, fall under that line.
+INSERT_SPAN_S = 2.0
 PUBLISHED_READCON = [
     0.006240564998734044,
     0.005746310998802073,
@@ -123,7 +133,8 @@ def summarize(values: list[float]) -> dict:
     np_q = np.percentile(
         np.asarray(values, dtype=np.float64), [25, 50, 75], method="linear"
     )
-    if not np.allclose([q1, mid, q3], np_q, rtol=0, atol=0):
+    # One ulp between the hand-rolled type-7 and NumPy is the same quantile.
+    if not np.allclose([q1, mid, q3], np_q, rtol=1e-12, atol=1e-15):
         raise AssertionError(([q1, mid, q3], np_q.tolist()))
     return {
         "n": len(values),
@@ -492,8 +503,11 @@ def header_lines() -> list[str]:
         f"samples {N_SAMPLES}",
         "quantile type-7 (numpy percentile method=linear)",
         "order serial, tools alternate each sample index, no parallel samples",
-        "page_cache insert: unlink and create the database file each sample",
-        "page_cache read_cold: posix_fadvise DONTNEED, then mincore; retry until resident fraction is 0",
+        "timer: open, directory fsync, fadvise, mincore, the element-wise check, and the collector stay outside; the clock covers the commit or the query",
+        "timer_short: a read shorter than 50 ms is repeated until the timed spans add to 50 ms; the sample is that mean",
+        "timer_insert: a commit shorter than 2 s is repeated until the timed spans add to 2 s, because commit fsyncs stay correlated past 250 ms",
+        "page_cache insert: unlink and create the database file outside the timer, one commit fsync inside",
+        "page_cache read_cold: posix_fadvise DONTNEED, then mincore, outside the timer; retry until resident fraction is 0",
         "page_cache read_cold_label: a sample that stays resident is labeled and omitted from the cold median",
         "page_cache drop_caches: /proc/sys/vm/drop_caches is not writable here, so it is not used",
         "page_cache read_warm: one warmup read on the open store, then time the read",
@@ -517,6 +531,80 @@ def time_call(fn):
     t0 = time.perf_counter()
     out = fn()
     return time.perf_counter() - t0, out
+
+
+def vm_rss() -> int:
+    """Current resident set, in bytes."""
+    try:
+        for line in Path("/proc/self/status").read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) * 1024
+    except OSError:
+        return 0
+    return 0
+
+
+def sample_operation(run, setup=None, teardown=None, span: float | None = None) -> dict:
+    """Time ``run`` only. ``setup`` and ``teardown`` stay outside the clock.
+
+    The variance on a sub-millisecond row was the LMDB or sqlite open, the
+    directory fsync, and a single commit fsync. A collection during the
+    call is the same kind of noise, so the collector is disabled for the
+    clock and enabled again before teardown. A call that already covers
+    ``span`` is the sample. A shorter call is repeated until the timed
+    spans add up to it (reads use 50 ms, inserts use two seconds), and the
+    sample is their mean. A single commit that spikes past 5 ms does not
+    end the insert early: that spike stays in the mean. Both tools use this.
+    """
+    peak = vm_rss()
+    stop = threading.Event()
+
+    def poll() -> None:
+        nonlocal peak
+        while not stop.wait(0.002):
+            peak = max(peak, vm_rss())
+
+    thread = threading.Thread(target=poll, daemon=True)
+    thread.start()
+    total = 0.0
+    count = 0
+    collect = gc.isenabled()
+    limit = SAMPLE_S if span is None else span
+    try:
+        while True:
+            if setup is not None:
+                setup()
+            try:
+                peak = max(peak, vm_rss())
+                if collect:
+                    gc.disable()
+                t0 = time.perf_counter()
+                run()
+                dt = time.perf_counter() - t0
+                peak = max(peak, vm_rss())
+            finally:
+                if collect:
+                    gc.enable()
+                if teardown is not None:
+                    teardown()
+            total += dt
+            count += 1
+            # One slow commit inside a stream of short commits stays in the
+            # mean. The loop ends when the spans cover the budget, or when a
+            # single call was already longer than that budget.
+            if count >= 100_000 or total >= limit:
+                break
+    finally:
+        if collect:
+            gc.enable()
+        stop.set()
+        thread.join()
+    return {
+        "seconds": total / count,
+        "inner_n": count,
+        "timed_span_s": total,
+        "peak_rss_bytes": peak,
+    }
 
 
 def paper_protocol(log: Log, work: Path) -> dict:
@@ -598,6 +686,65 @@ def check_stored(kind: str, got, rec: dict, geometry_only: bool) -> None:
         assert_ase_matches(got, rec)
 
 
+def timed_insert(kind: str, name: str, payload: dict, work: Path) -> dict:
+    """One sample: create the database outside the clock, time the commit."""
+    holder: dict = {}
+    disk = {"n": None}
+
+    def setup() -> None:
+        dest = fresh_dir(work, f"{name}-{kind}")
+        holder["dest"] = dest
+        if kind == "readcon-db":
+            holder["db"] = ConCorpus(str(dest / "corpus"))
+        else:
+            dest.mkdir(parents=True, exist_ok=True)
+            db, _settings = connect_fair(dest / "atoms.db")
+            db.connection = db._connect()
+            db.change_count = 0
+            reset_commits(db)
+            holder["db"] = db
+
+    def run() -> None:
+        db = holder["db"]
+        if kind == "readcon-db":
+            n = db.append_trajectory_str(1, payload["text"], source="traj.con")
+            if int(n) != payload["n_frames"]:
+                raise AssertionError(n)
+        else:
+            for atoms in payload["atoms"]:
+                db.write(atoms, frame_index=int(atoms.info["frame_index"]))
+            db.connection.commit()
+
+    def teardown() -> None:
+        dest = holder["dest"]
+        db = holder["db"]
+        if disk["n"] is None:
+            disk["n"] = disk_bytes(kind, dest)
+        geometry_only = bool(payload.get("geometry_only"))
+        if kind == "readcon-db":
+            frames = read_con_frames(db, payload["n_frames"])
+            for frame, rec in zip(frames, payload["records"]):
+                check_stored(kind, frame, rec, geometry_only)
+            close_lmdb(db)
+        else:
+            assert_one_commit(db)
+            got = read_ase_rows(db, payload["n_frames"])
+            for row, rec in zip(got, payload["records"]):
+                check_stored(kind, row, rec, geometry_only)
+            close_ase(db)
+        holder["db"] = None
+        # The LMDB env stays mapped until the last Python reference is
+        # collected. That has to happen before the next open, and it is
+        # outside the clock.
+        if kind == "readcon-db":
+            gc.collect()
+        shutil.rmtree(dest, ignore_errors=True)
+
+    stat = sample_operation(run, setup, teardown, span=INSERT_SPAN_S)
+    stat["disk_bytes"] = disk["n"]
+    return stat
+
+
 def insert_fair(kind: str, payload: dict, dest: Path) -> float:
     geometry_only = bool(payload.get("geometry_only"))
     if kind == "readcon-db":
@@ -614,6 +761,7 @@ def insert_fair(kind: str, payload: dict, dest: Path) -> float:
         for frame, rec in zip(frames, payload["records"]):
             check_stored(kind, frame, rec, geometry_only)
         close_lmdb(db)
+        gc.collect()
         return seconds
     dest.mkdir(parents=True, exist_ok=True)
     path = dest / "atoms.db"
@@ -805,6 +953,14 @@ def lmdb_files(corpus: Path) -> list[Path]:
     return [p for p in (corpus / "data.mdb", corpus / "lock.mdb") if p.is_file()]
 
 
+def disk_bytes(kind: str, dest: Path) -> int:
+    if kind == "readcon-db":
+        path = dest / "corpus" / "data.mdb"
+    else:
+        path = dest / "atoms.db"
+    return path.stat().st_size if path.is_file() else 0
+
+
 def ase_files(path: Path) -> list[Path]:
     extra = [path]
     for suffix in ("-journal", "-wal", "-shm"):
@@ -896,28 +1052,25 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
         log.line(f"workload {name} bytes={len(text)} build_done")
         # Insert: unlink+create each sample, one warmup, six serial samples.
         insert_samples = {"readcon-db": [], "ase.db": []}
-
-        def do_insert(kind: str, keep: bool, name=name, payload=payload):
-            dest = fresh_dir(work, f"{name}-{kind}")
-            seconds = insert_fair(kind, payload, dest)
-            if not keep:
-                shutil.rmtree(dest, ignore_errors=True)
-            return seconds, dest
+        insert_meta = {"readcon-db": [], "ase.db": []}
 
         for kind in ("readcon-db", "ase.db"):
-            do_insert(kind, keep=False)
+            timed_insert(kind, name, payload, work)
             log.line(f"warmup protocol=fair workload={name} op=insert tool={kind}")
         for i in range(N_SAMPLES):
             order = ("readcon-db", "ase.db") if i % 2 == 0 else ("ase.db", "readcon-db")
             for kind in order:
-                seconds, dest = do_insert(kind, keep=False)
-                insert_samples[kind].append(seconds)
+                stat = timed_insert(kind, name, payload, work)
+                insert_samples[kind].append(stat["seconds"])
+                insert_meta[kind].append(stat)
                 log.line(
                     f"sample protocol=fair workload={name} op=insert tool={kind} "
-                    f"cache=cold-file i={i} seconds={seconds}"
+                    f"cache=cold-file i={i} seconds={stat['seconds']} "
+                    f"inner_n={stat['inner_n']} timed_span_s={stat['timed_span_s']:.6f} "
+                    f"disk_bytes={stat['disk_bytes']} peak_rss_bytes={stat['peak_rss_bytes']}"
                 )
-                shutil.rmtree(dest, ignore_errors=True)
         for kind, values in insert_samples.items():
+            meta = insert_meta[kind]
             rows.append(
                 {
                     "protocol": "fair",
@@ -929,6 +1082,10 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
                     "cache": "cold-file",
                     "tool": kind,
                     "fidelity": "exact",
+                    "disk_bytes": meta[0]["disk_bytes"],
+                    "peak_rss_bytes": max(item["peak_rss_bytes"] for item in meta),
+                    "inner_n": [item["inner_n"] for item in meta],
+                    "span_s": INSERT_SPAN_S,
                     **summarize(values),
                 }
             )
@@ -939,11 +1096,11 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
         for kind in ("readcon-db", "ase.db"):
             dest = fresh_dir(work, f"{name}-read-{kind}")
             insert_fair(kind, payload, dest)
+            gc.collect()
             stored[kind] = dest
         mid = spec["n_frames"] // 2
-        # Full read and the selected frame share one sample index. A separate
-        # series made the one-frame selected median look slower: the column
-        # scan is the same, and the cold timer is the readonly open.
+        # Full read and the selected frame share one sample index. The column
+        # scan is the same once the readonly open is outside the clock.
         ops = ("full_read", "selected")
         for cache in ("cold", "warm"):
             samples = {op: {"readcon-db": [], "ase.db": []} for op in ops}
@@ -979,6 +1136,56 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
                     return selected_readcon(db, mid, rec)
                 return selected_ase(db, mid, rec)
 
+            def fetch(kind: str, db, op: str, mid=mid):
+                """The query only. The element-wise check stays outside the clock."""
+                if kind == "readcon-db":
+                    if op == "full_read":
+                        return db.read_columns(1)
+                    return db.read_columns(1, mid)
+                if op == "full_read":
+                    return list(db.select())
+                return list(db.select(f"frame_index={int(mid)}"))
+
+            def check_fetched(
+                kind: str,
+                got,
+                op: str,
+                n_frames=spec["n_frames"],
+                records=payload["records"],
+                mid=mid,
+            ) -> None:
+                if kind == "readcon-db":
+                    if op == "full_read":
+                        if int(got["n_frames"]) != n_frames:
+                            raise AssertionError(got["n_frames"])
+                        geometry_only = (
+                            records[0].get("geometry_only", False)
+                            or records[0].get("forces") is None
+                        )
+                        _check_columns(got, records, geometry_only)
+                        return
+                    if int(got["n_frames"]) != 1:
+                        raise AssertionError(got["n_frames"])
+                    rec = records[mid]
+                    geometry_only = (
+                        rec.get("geometry_only", False) or rec.get("forces") is None
+                    )
+                    _check_columns(got, [rec], geometry_only)
+                    return
+                if op == "full_read":
+                    rows = sorted(
+                        got,
+                        key=lambda row: int(row.key_value_pairs["frame_index"]),
+                    )
+                    if len(rows) != n_frames:
+                        raise AssertionError(len(rows))
+                    for row, rec in zip(rows, records):
+                        assert_ase_matches(row, rec)
+                    return
+                if len(got) != 1:
+                    raise AssertionError(len(got))
+                assert_ase_matches(got[0], records[mid])
+
             if cache == "warm":
                 for kind in ("readcon-db", "ase.db"):
                     holders[kind] = open_kind(kind)
@@ -1008,41 +1215,69 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
                     for op in op_order:
                         resident = None
                         cold_label = None
+                        state: dict = {}
+                        labels: list[tuple[float, str]] = []
+
+                        def setup(kind=kind, labels=labels, state=state) -> None:
+                            frac, label = prepare_cold(kind)
+                            labels.append((frac, label))
+                            state["db"] = open_kind(kind)
+
+                        def teardown(kind=kind, op=op, state=state) -> None:
+                            check_fetched(kind, state["got"], op)
+                            close_reader(kind, state["db"])
+                            state["db"] = None
+                            state["got"] = None
+                            if kind == "readcon-db":
+                                gc.collect()
+
+                        def run_timed(kind=kind, op=op, state=state) -> None:
+                            state["got"] = fetch(kind, state["db"], op)
+
                         if cache == "cold":
-                            resident, cold_label = prepare_cold(kind)
-                            seconds, _ = time_call(
-                                lambda kind=kind, op=op, stored=stored, n_frames=spec["n_frames"], records=payload["records"], mid=mid: (
-                                    measure_read(
-                                        kind,
-                                        stored[kind],
-                                        op,
-                                        n_frames,
-                                        records,
-                                        mid,
-                                    )
-                                )
+                            stat = sample_operation(run_timed, setup, teardown)
+                            resident = max(frac for frac, _label in labels)
+                            cold_label = (
+                                "verified"
+                                if all(label == "verified" for _frac, label in labels)
+                                else "resident"
                             )
                             cold_meta[op][kind].append(
                                 {
                                     "resident_fraction": resident,
                                     "cold_label": cold_label,
-                                    "seconds": seconds,
+                                    "seconds": stat["seconds"],
+                                    "inner_n": stat["inner_n"],
                                 }
                             )
                             if cold_label == "verified":
-                                samples[op][kind].append(seconds)
+                                samples[op][kind].append(stat["seconds"])
                         else:
                             db = holders[kind]
-                            seconds, _ = time_call(
-                                lambda kind=kind, db=db, op=op: run_op(kind, db, op)
-                            )
-                            samples[op][kind].append(seconds)
-                        extra = ""
+
+                            def run_warm(kind=kind, db=db, op=op, state=state) -> None:
+                                state["got"] = fetch(kind, db, op)
+
+                            def check_warm(kind=kind, op=op, state=state) -> None:
+                                check_fetched(kind, state["got"], op)
+                                state["got"] = None
+
+                            stat = sample_operation(run_warm, teardown=check_warm)
+                            resident = None
+                            cold_label = None
+                            samples[op][kind].append(stat["seconds"])
+                        extra = (
+                            f" inner_n={stat['inner_n']} timed_span_s={stat['timed_span_s']:.6f} "
+                            f"peak_rss_bytes={stat['peak_rss_bytes']}"
+                        )
                         if resident is not None:
-                            extra = f" resident_fraction={resident:.6f} cold_label={cold_label}"
+                            extra += f" resident_fraction={resident:.6f} cold_label={cold_label}"
                         log.line(
                             f"sample protocol=fair workload={name} op={op} tool={kind} "
-                            f"cache={cache} i={i} seconds={seconds}{extra}"
+                            f"cache={cache} i={i} seconds={stat['seconds']}{extra}"
+                        )
+                        samples[op][kind + ":peak"] = max(
+                            samples[op].get(kind + ":peak", 0), stat["peak_rss_bytes"]
                         )
             for kind in list(holders):
                 close_reader(kind, holders.pop(kind))
@@ -1062,11 +1297,17 @@ def fair_campaign(log: Log, work: Path, workloads: list[dict]) -> list[dict]:
                         "cache": cache,
                         "tool": kind,
                         "fidelity": "exact",
+                        "disk_bytes": disk_bytes(kind, stored[kind]),
+                        "peak_rss_bytes": samples[op].get(kind + ":peak", 0),
+                        "span_s": SAMPLE_S,
                         **summarize(used),
                     }
                     if cache == "cold":
                         row["cold_verified_n"] = len(samples[op][kind])
                         row["cold_samples"] = cold_meta[op][kind]
+                        row["inner_n"] = [
+                            item["inner_n"] for item in cold_meta[op][kind]
+                        ]
                     rows.append(row)
         for dest in stored.values():
             shutil.rmtree(dest, ignore_errors=True)
@@ -1120,18 +1361,26 @@ def write_markdown(
         "",
         "## This machine, fair harness",
         "",
-        "Insert unlinks and creates the database file, then times one",
-        "transaction and one commit fsync. Full read and the selected-row",
-        "query (`frame_index` of the middle frame) are cold and warm.",
+        "Insert creates the database outside the clock and times the commit.",
+        "A full read and the selected-row query (`frame_index` of the middle",
+        "frame) time the query only: open, directory fsync, fadvise,",
+        "mincore, the field check, and the collector stay outside. A read",
+        "shorter than 50 ms repeats until the timed spans add to 50 ms. A",
+        "commit shorter than 2 s repeats until they add to 2 s, because",
+        "those fsyncs stay correlated well past 250 ms. The sample is that",
+        "mean. A row that stayed above an IQR/median of 0.15 was measured",
+        "again at a longer span; that budget is `span_s` on the row.",
         "",
-        "| workload | frames | atoms | op | cache | tool | n | median s | IQR s | fidelity |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| workload | op | cache | tool | n | median s | IQR s | IQR/median | disk B | peak RSS B | fidelity |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in fair_rows:
+        ratio = row["iqr_s"] / row["median_s"] if row["median_s"] else 0.0
         lines.append(
-            f"| {row['workload']} | {row['n_frames']} | {row['n_atoms']} | {row['op']} | "
-            f"{row['cache']} | {row['tool']} | {row['n']} | {fmt(row['median_s'])} | "
-            f"{fmt(row['iqr_s'])} | {row.get('fidelity', 'exact')} |"
+            f"| {row['workload']} | {row['op']} | {row['cache']} | {row['tool']} | {row['n']} | "
+            f"{fmt(row['median_s'])} | {fmt(row['iqr_s'])} | {ratio:.3f} | "
+            f"{row.get('disk_bytes', 0)} | {row.get('peak_rss_bytes', 0)} | "
+            f"{row.get('fidelity', 'exact')} |"
         )
     lines.append("")
     path.write_text("\n".join(lines) + "\n")

@@ -3,6 +3,7 @@
 import gc
 import os
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -64,6 +65,78 @@ def test_one_frame_selected_columns_match_the_full_read(tmp_path):
     assert bytes(np.asarray(one["forces"])) == bytes(np.asarray(full["forces"]))
     assert bytes(np.asarray(one["masses"])) == bytes(np.asarray(full["masses"]))
     assert bytes(np.asarray(one["cell"])) == bytes(np.asarray(full["cell"]))
+
+
+def test_short_call_is_repeated_until_the_timed_span_covers_the_sample():
+    calls = {"n": 0}
+
+    def run() -> None:
+        calls["n"] += 1
+        time.sleep(0.001)
+
+    stat = fair.sample_operation(run)
+    assert stat["inner_n"] >= 40
+    assert stat["timed_span_s"] >= fair.SAMPLE_S
+    assert stat["seconds"] < 0.005
+
+
+def test_setup_stays_outside_the_timer():
+    def setup() -> None:
+        time.sleep(0.01)
+
+    def run() -> None:
+        time.sleep(0.001)
+
+    stat = fair.sample_operation(run, setup)
+    # The per-call figure is the 1 ms body, not the 10 ms setup.
+    assert stat["seconds"] < 0.005
+    assert stat["timed_span_s"] >= fair.SAMPLE_S
+
+
+def test_collector_stays_disabled_during_the_timed_call():
+    seen = []
+
+    def run() -> None:
+        seen.append(gc.isenabled())
+        time.sleep(0.006)
+
+    stat = fair.sample_operation(run)
+    assert seen
+    assert seen == [False] * len(seen)
+    assert stat["inner_n"] == len(seen)
+    assert stat["timed_span_s"] >= fair.SAMPLE_S
+    assert gc.isenabled()
+
+
+def test_caller_can_ask_for_a_longer_span():
+    def run() -> None:
+        time.sleep(0.001)
+
+    stat = fair.sample_operation(run, span=0.020)
+    assert stat["timed_span_s"] >= 0.020
+    assert stat["timed_span_s"] < fair.SAMPLE_S
+    assert fair.INSERT_SPAN_S > fair.SAMPLE_S
+
+
+def test_a_later_slow_call_stays_inside_the_mean():
+    seen = {"n": 0}
+
+    def run() -> None:
+        seen["n"] += 1
+        time.sleep(0.006 if seen["n"] == 3 else 0.001)
+
+    stat = fair.sample_operation(run, span=0.020)
+    assert stat["inner_n"] > 3
+    assert stat["timed_span_s"] >= 0.020
+
+
+def test_slow_call_is_one_shot():
+    def run() -> None:
+        time.sleep(fair.SAMPLE_S + 0.01)
+
+    stat = fair.sample_operation(run)
+    assert stat["inner_n"] == 1
+    assert stat["seconds"] >= fair.SAMPLE_S
 
 
 def test_mincore_sees_a_resident_file_and_labels_advice(tmp_path):
