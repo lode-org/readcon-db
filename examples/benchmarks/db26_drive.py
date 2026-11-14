@@ -60,8 +60,8 @@ def ensure_tree_prefix(kind: str, commit: str) -> str:
     if kind == "tip":
         fair.pip_install(prefix, REPO / "python", env)
     else:
-        src = REPO / "build" / "src-aedcbda4"
-        env["CARGO_TARGET_DIR"] = str(REPO / "build" / "target-aedcbda4")
+        src = REPO / "build" / f"src-{commit[:12]}"
+        env["CARGO_TARGET_DIR"] = str(REPO / "build" / f"target-{commit[:12]}")
         if not (src / "python" / "pyproject.toml").is_file():
             if src.exists():
                 subprocess.check_call(
