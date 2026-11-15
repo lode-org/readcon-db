@@ -240,6 +240,7 @@ pub fn append_span(cols: &mut Columns, bytes: &[u8]) -> Result<()> {
 }
 
 fn parse_frame(cur: &mut Cur<'_>, cols: &mut Columns) -> Result<()> {
+    let start = cur.i;
     let header = read_header(cur)?;
     meta_of(header.prebox_header.metadata_line().as_bytes(), cols)?;
     cols.cells.extend_from_slice(&header.boxl);
@@ -279,18 +280,19 @@ fn parse_frame(cur: &mut Cur<'_>, cols: &mut Columns) -> Result<()> {
     if header.sections.is_empty() {
         while legacy_section_opens(cur) {
             let _blank = cur.take()?;
-            parse_section(cur, &counts, cols, &mut saw_forces)?;
+            parse_section(cur, &counts, cols, &mut saw_forces, None)?;
         }
     } else {
         for name in &header.sections {
             begin_declared_section(cur, name)?;
-            parse_section(cur, &counts, cols, &mut saw_forces)?;
+            parse_section(cur, &counts, cols, &mut saw_forces, Some(name))?;
         }
     }
     if !saw_forces {
         cols.forces_uniform = false;
         cols.forces.truncate(force_at);
     }
+    confirm_with_parser(&cur.bytes[start..cur.i])?;
     Ok(())
 }
 
@@ -299,11 +301,15 @@ fn parse_section(
     counts: &[usize],
     cols: &mut Columns,
     saw_forces: &mut bool,
+    expected: Option<&str>,
 ) -> Result<()> {
     for count in counts {
         let _symbol = cur.take()?;
         let label = as_str(cur.take()?)?;
         let kind = label.split_whitespace().next().unwrap_or("");
+        if let Some(name) = expected {
+            require_section_label(name, kind)?;
+        }
         let is_force = kind == "Forces";
         if is_force {
             *saw_forces = true;
@@ -409,7 +415,8 @@ pub(crate) fn project_frame_parts(
 ) -> Result<(SpanFacts, Option<CookAcc>)> {
     let mut cur = Cur { bytes, i: 0 };
     if cur.rest_blank() {
-        return Err(Error::Parse("empty frame".into()));
+        let (facts, _) = facts_from_meta(b"")?;
+        return Ok((facts, cook.then(CookAcc::empty)));
     }
     let header = read_header(&mut cur)?;
     let (mut facts, mut gate) = facts_from_meta(header.prebox_header.metadata_line().as_bytes())?;
@@ -492,6 +499,7 @@ pub(crate) fn project_frame_parts(
                 &mut facts,
                 &mut fmax,
                 acc.as_mut(),
+                None,
             )?;
         }
     } else {
@@ -504,6 +512,7 @@ pub(crate) fn project_frame_parts(
                 &mut facts,
                 &mut fmax,
                 acc.as_mut(),
+                Some(name),
             )?;
         }
     }
@@ -513,7 +522,19 @@ pub(crate) fn project_frame_parts(
             "minor >= 1 requires units.time when a velocities section is present".into(),
         ));
     }
+    confirm_with_parser(bytes)?;
     Ok((facts, acc))
+}
+
+/// Every frame the span walk accepts is checked again by the core parser,
+/// so a per-section rule the walk does not implement still rejects the frame.
+fn confirm_with_parser(bytes: &[u8]) -> Result<()> {
+    let text =
+        std::str::from_utf8(bytes).map_err(|_| Error::Parse("CON line is not UTF-8".into()))?;
+    match readcon_core::iterators::ConFrameIterator::new(text).next() {
+        Some(Err(err)) => Err(Error::Parse(err.to_string())),
+        _ => Ok(()),
+    }
 }
 
 pub(crate) fn finish_cook(facts: &SpanFacts, mut acc: CookAcc) -> Result<Vec<u8>> {
@@ -640,6 +661,30 @@ fn legacy_section_opens(cur: &Cur<'_>) -> bool {
     )
 }
 
+fn section_label_word(name: &str) -> &str {
+    match name {
+        "velocities" => "Velocities",
+        "forces" => "Forces",
+        "energies" => "Energies",
+        "charges" => "Charges",
+        "spins" => "Spins",
+        "magmoms" => "Magmoms",
+        "displacements" => "Displacements",
+        "spreads" => "Spreads",
+        _ => "",
+    }
+}
+
+fn require_section_label(name: &str, kind: &str) -> Result<()> {
+    if kind.eq_ignore_ascii_case(section_label_word(name)) {
+        Ok(())
+    } else {
+        Err(Error::Parse(format!(
+            "file ended unexpectedly while reading {name} section"
+        )))
+    }
+}
+
 fn begin_declared_section(cur: &mut Cur<'_>, name: &str) -> Result<()> {
     if !known_section(name) {
         return Err(Error::Parse(format!(
@@ -662,16 +707,30 @@ fn note_section(
     facts: &mut SpanFacts,
     fmax: &mut Option<f64>,
     mut cook: Option<&mut CookAcc>,
+    expected: Option<&str>,
 ) -> Result<()> {
+    let mut atom_base = 0usize;
     for count in counts {
-        let _symbol = cur
-            .take()
-            .map_err(|_| Error::Parse("file ended unexpectedly while reading atom data".into()))?;
-        let label = as_str(cur.take()?)?;
+        let missing = || {
+            expected
+                .map(|name| {
+                    Error::Parse(format!(
+                        "file ended unexpectedly while reading {name} section"
+                    ))
+                })
+                .unwrap_or_else(|| {
+                    Error::Parse("file ended unexpectedly while reading atom data".into())
+                })
+        };
+        let _symbol = cur.take().map_err(|_| missing())?;
+        let label = as_str(cur.take().map_err(|_| missing())?)?;
         let kind = label.split_whitespace().next().unwrap_or("");
+        if let Some(name) = expected {
+            require_section_label(name, kind)?;
+        }
         let where_ = match kind {
-            "Forces" => "force section",
-            "Velocities" => "velocity section",
+            "Forces" => "forces section",
+            "Velocities" => "velocities section",
             "Energies" => "energies section",
             _ => "atom data",
         };
@@ -745,11 +804,37 @@ fn note_section(
                     "Displacements" => "displacements section",
                     _ => "spreads section",
                 };
-                check_vector_block(cur, *count, where_, spec, true, false, None, None)?;
+                let n = *count;
+                if kind == "Spreads" {
+                    let mut xyz = vec![0.0; n * 3];
+                    check_vector_block(cur, n, where_, spec, true, false, Some(&mut xyz), None)?;
+                    reject_negative_spreads(&xyz, atom_base)?;
+                } else {
+                    check_vector_block(cur, n, where_, spec, true, false, None, None)?;
+                }
             }
             _ => {
                 check_vector_block(cur, *count, where_, spec, true, false, None, None)?;
             }
+        }
+        atom_base += *count;
+    }
+    Ok(())
+}
+
+fn reject_negative_spreads(xyz: &[f64], atom_base: usize) -> Result<()> {
+    for (i, row) in xyz.as_chunks::<3>().0.iter().enumerate() {
+        if row.iter().any(|v| !v.is_finite()) {
+            return Err(Error::Parse(format!(
+                "non-finite value: spreads atom {}",
+                atom_base + i
+            )));
+        }
+        if row.iter().any(|v| *v < 0.0) {
+            return Err(Error::Parse(format!(
+                "CON validation failed: spreads: atom {} has a negative or non-finite spread",
+                atom_base + i
+            )));
         }
     }
     Ok(())
@@ -1613,5 +1698,195 @@ mod tests {
             plain.len(),
             cols.positions.len()
         );
+    }
+
+    #[test]
+    fn span_and_parser_agree_on_generated_frames() {
+        let mut rng = Lcg(0x5eed_0c0f_u64);
+        let mut mismatches = Vec::new();
+        let n = 2_048usize;
+        for i in 0..n {
+            let body = mutate_frame(&mut rng, i);
+            let text = pad_span(&body);
+            let span = frame_message(project_frame(text.as_bytes()));
+            let parsed = parser_frame_message(&text);
+            if span != parsed {
+                mismatches.push(format!(
+                    "case {i}\nspan:   {span}\nparser: {parsed}\n{body}"
+                ));
+                if mismatches.len() == 12 {
+                    break;
+                }
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "{} mismatches in {n}\n{}",
+            mismatches.len(),
+            mismatches.join("\n---\n")
+        );
+    }
+
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next_u64(&mut self) -> u64 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1);
+            self.0
+        }
+
+        fn pick<'a>(&mut self, items: &'a [&'a str]) -> &'a str {
+            items[(self.next_u64() as usize) % items.len()]
+        }
+    }
+
+    fn pad_span(body: &str) -> String {
+        let min = 512 * 1024 + 1;
+        if body.len() >= min {
+            return body.to_string();
+        }
+        let mut text = " ".repeat(min - body.len());
+        text.push_str(body);
+        text
+    }
+
+    fn frame_message<T>(result: Result<T>) -> String {
+        match result {
+            Ok(_) => "accepted".into(),
+            Err(err) => match err {
+                Error::Parse(msg) => msg,
+                other => other.to_string(),
+            },
+        }
+    }
+
+    fn parser_frame_message(text: &str) -> String {
+        match ConFrameIterator::new(text).next() {
+            Some(Ok(_)) | None => "accepted".into(),
+            Some(Err(err)) => err.to_string(),
+        }
+    }
+
+    fn mutate_frame(rng: &mut Lcg, index: usize) -> String {
+        let spec = ["2", "3", "1", "0", "4", "-1", "01"][index % 7];
+        let units = if index.is_multiple_of(5) {
+            ""
+        } else if index.is_multiple_of(11) {
+            r#","units":{"length":"","energy":"eV"}"#
+        } else {
+            r#","units":{"length":"angstrom","energy":"eV"}"#
+        };
+        let sections = [
+            "",
+            r#","sections":["energies"]"#,
+            r#","sections":["forces"]"#,
+            r#","sections":["velocities"]"#,
+            r#","sections":["forces","energies"]"#,
+            r#","sections":["energies","forces"]"#,
+            r#","sections":["spreads"]"#,
+            r#","sections":["charges"]"#,
+            r#","sections":["spins"]"#,
+            r#","sections":["magmoms"]"#,
+            r#","sections":["displacements"]"#,
+            r#","sections":["widgets"]"#,
+            r#","sections":[]"#,
+        ][index % 13];
+        let count = [
+            "1",
+            "0",
+            "-1",
+            "+1",
+            "2",
+            "01",
+            "18446744073709551616",
+            "00",
+        ][index % 8];
+        let per = if count == "2" { "1 1" } else { "1" };
+        let row = rng.pick(&[
+            "0.1 0.2 0.3 0 0",
+            "-1.5 0 0 0 0",
+            "0.1 0.2 0 0",
+            "0.1 0.2 0.3 0 0 9",
+            "",
+            "+1.0 0.2 0.3 0 0",
+            "nan 0.2 0.3 0 0",
+            "inf 0.2 0.3 0 0",
+            "0.1 0.2 0.3 +0 0",
+            "0.1 0.2 0.3 0 00",
+            "1e999 0 0 0 0",
+            "-0.1 0.2 0.3 0 0",
+        ]);
+        let energy = rng.pick(&[
+            "-1.0 0 0",
+            "0.25 0 0 4",
+            "0.25 zz 0",
+            "",
+            "nan 0 0",
+            "+1 0 0",
+        ]);
+        let order = index.is_multiple_of(17);
+        let mut body = format!(
+            "\n{{\"con_spec_version\":{spec}{units}{sections}}}\n10.5 12.25 8.0\n90 90 90\n\n\n{count}\n"
+        );
+        if count == "0" {
+            body.push_str("\n\n");
+            if index.is_multiple_of(19) {
+                return body[..body.len().saturating_sub(index % 7)].to_string();
+            }
+            return body;
+        }
+        if count == "-1" || count == "+1" || count == "18446744073709551616" {
+            return body;
+        }
+        body.push_str(per);
+        body.push('\n');
+        body.push_str("63.546");
+        if count == "2" {
+            body.push_str(" 1.0");
+        }
+        body.push_str("\nCu\nCoordinates of Component 1\n");
+        body.push_str(row);
+        body.push('\n');
+        if count == "2" {
+            body.push_str("H\nCoordinates of Component 2\n0.4 0.5 0.6 0 1\n");
+        }
+        let force = "\nCu\nForces of Component 1\n0.0 0.1 0.2 0 0\n";
+        let energy_block = format!("\nCu\nEnergies of Component 1\n{energy}\n");
+        let spread = "\nCu\nSpreads of Component 1\n-0.1 0.2 0.3 0 0\n";
+        let charge = "\nCu\nCharges of Component 1\n0.5 0 0\n";
+        let spin = "\nCu\nSpins of Component 1\n1 0 0\n";
+        let mag = "\nCu\nMagmoms of Component 1\n0.1 0.0 0.0 0 0\n";
+        let disp = "\nCu\nDisplacements of Component 1\n0.1 0.0 0.0 0 0\n";
+        let vel = "\nCu\nVelocities of Component 1\n0.1 0.0 0.0 0 0\n";
+        if sections.contains("forces") && sections.contains("energies") {
+            if order {
+                body.push_str(&energy_block);
+                body.push_str(force);
+            } else {
+                body.push_str(force);
+                body.push_str(&energy_block);
+            }
+        } else if sections.contains("spreads") {
+            body.push_str(spread);
+        } else if sections.contains("charges") {
+            body.push_str(charge);
+        } else if sections.contains("spins") {
+            body.push_str(spin);
+        } else if sections.contains("magmoms") {
+            body.push_str(mag);
+        } else if sections.contains("displacements") {
+            body.push_str(disp);
+        } else if sections.contains("velocities") {
+            body.push_str(vel);
+        } else if sections.contains("energies") {
+            body.push_str(&energy_block);
+        } else if sections.contains("forces") {
+            body.push_str(force);
+        }
+        if index.is_multiple_of(23) {
+            let cut = (index * 17) % body.len().max(1);
+            body.truncate(cut);
+        }
+        body
     }
 }

@@ -8879,4 +8879,32 @@ x
         assert!(text.len() > 512 * 1024);
         assert_append_matches_parsed(&text, true);
     }
+
+    #[test]
+    fn negative_spread_matches_the_parser() {
+        let body = "\n{\"con_spec_version\":3,\"con_spec_minor\":1,\"units\":{\"length\":\"angstrom\",\"energy\":\"eV\"},\"sections\":[\"spreads\"]}\n10.5 12.25 8.0\n90 90 90\n\n\n1\n1\n63.546\nCu\nCoordinates of Component 1\n0.1 0.2 0.3 0 0\n\nCu\nSpreads of Component 1\n-0.1 0.2 0.3 0 0\n";
+        let text = pad_past_span_gate(body);
+        assert!(text.len() > 512 * 1024);
+        let (appended, parsed) = span_and_parser(&text);
+        assert_eq!(appended, parsed);
+        assert!(
+            parsed.contains(
+                "CON validation failed: spreads: atom 0 has a negative or non-finite spread"
+            ),
+            "{parsed}"
+        );
+    }
+
+    #[test]
+    fn declared_section_order_matches_the_parser() {
+        let body = "\n{\"con_spec_version\":3,\"con_spec_minor\":1,\"units\":{\"length\":\"angstrom\",\"energy\":\"eV\"},\"sections\":[\"forces\",\"energies\"]}\n10.5 12.25 8.0\n90 90 90\n\n\n1\n1\n63.546\nCu\nCoordinates of Component 1\n0.1 0.2 0.3 0 0\n\nCu\nEnergies of Component 1\n-1.0 0 0\n\nCu\nForces of Component 1\n0.0 0.1 0.2 0 0\n";
+        let text = pad_past_span_gate(body);
+        assert!(text.len() > 512 * 1024);
+        let (appended, parsed) = span_and_parser(&text);
+        assert_eq!(appended, parsed);
+        assert!(
+            parsed.contains("file ended unexpectedly while reading forces section"),
+            "{parsed}"
+        );
+    }
 }
