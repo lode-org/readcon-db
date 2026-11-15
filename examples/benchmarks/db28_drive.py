@@ -48,10 +48,21 @@ def _json_hostname(line: str) -> str | None:
     return after[1:end]
 
 
-def replacement_directory(record_dir: Path, root: Path) -> Path | None:
-    """The directory named by ``SUPERSEDED.md``, when that directory exists.
+def _finished_record(directory: Path) -> bool:
+    """A finished record has its own log and result file, both non-empty."""
+    for name in ("campaign.log", "RESULTS.md"):
+        path = directory / name
+        if not path.is_file() or path.stat().st_size == 0:
+            return False
+    return True
 
-    A note that names a missing path does not hide the record.
+
+def replacement_directory(record_dir: Path, root: Path) -> Path | None:
+    """The finished directory named by this record's own ``SUPERSEDED.md``.
+
+    A missing path, an empty directory, or a directory that holds only a
+    result note does not hide the record. A replacement equal to the record
+    or nested inside it does not hide it either.
     """
     note = record_dir / "SUPERSEDED.md"
     if not note.is_file():
@@ -65,30 +76,37 @@ def replacement_directory(record_dir: Path, root: Path) -> Path | None:
             break
     if not named:
         return None
+    root_abs = root.resolve()
+    record_abs = record_dir.resolve()
     dest = (root / named).resolve()
     try:
-        dest.relative_to(root.resolve())
+        dest.relative_to(root_abs)
     except ValueError:
         return None
-    if not dest.is_dir():
+    try:
+        dest.relative_to(record_abs)
+    except ValueError:
+        pass
+    else:
+        return None
+    if not _finished_record(dest):
         return None
     return dest
 
 
 def _superseded(path: Path, root: Path) -> bool:
-    for parent in path.parents:
-        if parent == root:
-            break
-        if replacement_directory(parent, root) is not None:
-            return True
-    return False
+    record = path.parent
+    if record == root:
+        return False
+    return replacement_directory(record, root) is not None
 
 
 def vm_host_hits(root: Path) -> list[str]:
     """Benchmark and bench files that name a VM host or a local path.
 
-    A record directory is skipped only when its ``SUPERSEDED.md`` names a
-    replacement directory that exists.
+    A record directory is skipped only when its own ``SUPERSEDED.md`` names
+    a finished replacement outside that directory. An ancestor note does
+    not hide the record.
     """
     hits = []
     host_line = "host " + "cursor"

@@ -42,6 +42,12 @@ def test_fresh_fair_logs_use_the_neutral_label() -> None:
         assert (fresh / name).read_text().splitlines()[2] == "host host"
 
 
+def _finished_replacement(directory) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "campaign.log").write_text("done\n")
+    (directory / "RESULTS.md").write_text("# results\n")
+
+
 def test_superseded_directory_needs_a_real_replacement(tmp_path) -> None:
     old = tmp_path / "bench" / "db1"
     old.mkdir(parents=True)
@@ -50,6 +56,48 @@ def test_superseded_directory_needs_a_real_replacement(tmp_path) -> None:
     assert drv.vm_host_hits(tmp_path) == ["bench/db1/campaign.log"]
     (tmp_path / "bench" / "db30" / "db1-rerun").mkdir(parents=True)
     (old / "SUPERSEDED.md").write_text("Replacement: bench/db30/db1-rerun\n")
+    assert drv.vm_host_hits(tmp_path) == ["bench/db1/campaign.log"]
+
+
+def test_partial_replacement_does_not_hide_the_record(tmp_path) -> None:
+    old = tmp_path / "bench" / "db1"
+    old.mkdir(parents=True)
+    (old / "campaign.log").write_text('{"corpus": "' + "/" + "tmp" + '/ab"}\n')
+    (old / "SUPERSEDED.md").write_text("Replacement: bench/db30\n")
+    dest = tmp_path / "bench" / "db30"
+    dest.mkdir(parents=True)
+    assert drv.vm_host_hits(tmp_path) == ["bench/db1/campaign.log"]
+    (dest / "RESULTS.md").write_text("# only\n")
+    assert drv.vm_host_hits(tmp_path) == ["bench/db1/campaign.log"]
+    (dest / "campaign.log").write_text("")
+    (dest / "RESULTS.md").write_text("# results\n")
+    assert drv.vm_host_hits(tmp_path) == ["bench/db1/campaign.log"]
+    (dest / "campaign.log").write_text("done\n")
+    (dest / "RESULTS.md").write_text("")
+    assert drv.vm_host_hits(tmp_path) == ["bench/db1/campaign.log"]
+    _finished_replacement(dest)
+    assert drv.vm_host_hits(tmp_path) == []
+
+
+def test_replacement_equal_to_or_inside_the_record_is_refused(tmp_path) -> None:
+    record = tmp_path / "bench" / "db1"
+    _finished_replacement(record)
+    (record / "campaign.log").write_text('{"corpus": "' + "/" + "tmp" + '/ab"}\n')
+    for named in ("bench/db1", "bench/db1/../db1", "bench/db1/nested"):
+        if named.endswith("nested"):
+            _finished_replacement(record / "nested")
+        (record / "SUPERSEDED.md").write_text("Replacement: " + named + "\n")
+        assert drv.vm_host_hits(tmp_path) == ["bench/db1/campaign.log"]
+
+
+def test_ancestor_note_does_not_hide_the_record(tmp_path) -> None:
+    record = tmp_path / "bench" / "db1"
+    record.mkdir(parents=True)
+    (record / "campaign.log").write_text('{"corpus": "' + "/" + "tmp" + '/ab"}\n')
+    _finished_replacement(tmp_path / "bench" / "db30")
+    (tmp_path / "bench" / "SUPERSEDED.md").write_text("Replacement: bench/db30\n")
+    assert drv.vm_host_hits(tmp_path) == ["bench/db1/campaign.log"]
+    (record / "SUPERSEDED.md").write_text("Replacement: bench/db30\n")
     assert drv.vm_host_hits(tmp_path) == []
 
 
