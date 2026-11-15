@@ -4,6 +4,8 @@
 #### Features
 - (**identity**) opt-in canonical hash for frames that differ by atom-id order
 - `rkrdb_extend_trajectory_str` appends CON text after the live frame count. A span that does not parse is not written, and earlier frames stay as stored.
+#### Bug Fixes
+- Python ingest writes one `units.time` for a v3.1 frame's clock and velocities. A pre-3.1 clock stays in its own unit (or `fs`) and velocities are converted into that unit. A clock with no velocities still gets `units.time`. A v3.1 frame that already names `units.time` is unchanged.
 #### Build system
 - (**reader**) require readcon-core 0.21.0 for atom-id correspondence
 
@@ -13,10 +15,6 @@
 #### Documentation
 - document streaming append and publish the API reference - (e43f6f8) - *HaoZeke*
 - rebuild the tutorial on recorded output and fix stale install, C, and link defects (#26) - (9cf3abf) - *HaoZeke*
-
-### Fixed
-
-- Python ingest writes one `units.time` for a v3.1 frame's clock and velocities. A pre-3.1 clock stays in its own unit (or `fs`) and velocities are converted into that unit. A clock with no velocities still gets `units.time`. A v3.1 frame that already names `units.time` is unchanged.
 
 ## v0.2.0 - 2026-10-15
 #### Features
