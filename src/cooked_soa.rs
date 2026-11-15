@@ -115,11 +115,18 @@ impl CookedSoa {
             return Err(Error::Message("cooked masses length".into()));
         }
         let mass_slice = frame.masses.f64_slice();
-        let uniform_mass = mass_slice
-            .filter(|xs| xs.len() == n && xs.iter().all(|m| m.to_bits() == xs[0].to_bits()));
-        if let Some(xs) = uniform_mass {
+        // An empty frame has no mass to sample. One shared mass is still
+        // the uniform encoding, with the value 0.
+        let uniform_mass = if n == 0 {
+            Some(0.0)
+        } else {
+            mass_slice
+                .filter(|xs| xs.len() == n && xs.iter().all(|m| m.to_bits() == xs[0].to_bits()))
+                .map(|xs| xs[0])
+        };
+        if let Some(mass) = uniform_mass {
             out.push(1);
-            push_f64s(&mut out, &xs[..1]);
+            push_f64s(&mut out, &[mass]);
         } else {
             out.push(0);
             if let Some(xs) = mass_slice {

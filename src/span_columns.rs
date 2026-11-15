@@ -141,7 +141,7 @@ fn xyz_prefix(line: &[u8]) -> Result<[f64; 3]> {
     Ok(out)
 }
 
-/// Header lines from the byte cursor, in the order [`parse_frame_header`] reads them.
+/// Header lines from the byte offset, in the order [`parse_frame_header`] reads them.
 struct HeaderLines<'a> {
     bytes: &'a [u8],
     i: usize,
@@ -246,6 +246,7 @@ fn parse_frame(cur: &mut Cur<'_>, cols: &mut Columns) -> Result<()> {
     cols.cells.extend_from_slice(&header.angles);
     let n_types = header.natm_types;
     if n_types == 0 {
+        reject_zero_atom_sections(&header.sections)?;
         cols.n_atoms.push(0);
         cols.symbol_runs.push(Vec::new());
         cols.forces_uniform = false;
@@ -275,25 +276,16 @@ fn parse_frame(cur: &mut Cur<'_>, cols: &mut Columns) -> Result<()> {
     cols.n_atoms.push(natoms);
     cols.symbol_runs.push(runs);
     let mut saw_forces = false;
-    loop {
-        if cur.i >= cur.bytes.len() || cur.rest_blank() {
-            break;
+    if header.sections.is_empty() {
+        while legacy_section_opens(cur) {
+            let _blank = cur.take()?;
+            parse_section(cur, &counts, cols, &mut saw_forces)?;
         }
-        let Some(peek) = cur.peek() else { break };
-        if !is_blank(peek) {
-            break;
+    } else {
+        for name in &header.sections {
+            begin_declared_section(cur, name)?;
+            parse_section(cur, &counts, cols, &mut saw_forces)?;
         }
-        let after_blank = split_line(cur.bytes, cur.i)
-            .map(|(_, n)| n)
-            .unwrap_or(cur.i);
-        let Some(next) = line_at(cur.bytes, after_blank) else {
-            break;
-        };
-        if next.first() == Some(&b'{') || is_blank(next) {
-            break;
-        }
-        let _blank = cur.take()?;
-        parse_section(cur, &counts, cols, &mut saw_forces)?;
     }
     if !saw_forces {
         cols.forces_uniform = false;
@@ -433,6 +425,7 @@ pub(crate) fn project_frame_parts(
         acc.cell = cell_row_major(gate.lattice, &boxl, &angles);
     }
     if n_types == 0 {
+        reject_zero_atom_sections(&header.sections)?;
         return Ok((facts, acc));
     }
     let counts = header.natms_per_type;
@@ -489,32 +482,30 @@ pub(crate) fn project_frame_parts(
     facts.n_atoms = natoms;
     facts.species = species.into_iter().collect();
     let mut fmax = None;
-    loop {
-        if cur.i >= cur.bytes.len() || cur.rest_blank() {
-            break;
+    if header.sections.is_empty() {
+        while legacy_section_opens(&cur) {
+            let _blank = cur.take()?;
+            note_section(
+                &mut cur,
+                &counts,
+                gate.spec as u32,
+                &mut facts,
+                &mut fmax,
+                acc.as_mut(),
+            )?;
         }
-        let Some(peek) = cur.peek() else { break };
-        if !is_blank(peek) {
-            break;
+    } else {
+        for name in &header.sections {
+            begin_declared_section(&mut cur, name)?;
+            note_section(
+                &mut cur,
+                &counts,
+                gate.spec as u32,
+                &mut facts,
+                &mut fmax,
+                acc.as_mut(),
+            )?;
         }
-        let after_blank = split_line(cur.bytes, cur.i)
-            .map(|(_, n)| n)
-            .unwrap_or(cur.i);
-        let Some(next) = line_at(cur.bytes, after_blank) else {
-            break;
-        };
-        if next.first() == Some(&b'{') || is_blank(next) {
-            break;
-        }
-        let _blank = cur.take()?;
-        note_section(
-            &mut cur,
-            &counts,
-            gate.spec as u32,
-            &mut facts,
-            &mut fmax,
-            acc.as_mut(),
-        )?;
     }
     facts.fmax = fmax;
     if facts.has_velocities && gate.spec >= 3 && gate.minor >= 1 && !gate.units_time {
@@ -607,6 +598,63 @@ fn cell_row_major(lattice: Option<[[f64; 3]; 3]>, boxl: &[f64], angles: &[f64]) 
     ]
 }
 
+fn reject_zero_atom_sections(sections: &[String]) -> Result<()> {
+    if sections.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::Parse(
+            "invalid count: a zero-atom frame cannot declare sections".into(),
+        ))
+    }
+}
+
+fn known_section(name: &str) -> bool {
+    matches!(
+        name,
+        readcon_core::types::SECTION_VELOCITIES
+            | readcon_core::types::SECTION_FORCES
+            | readcon_core::types::SECTION_ENERGIES
+            | readcon_core::types::SECTION_CHARGES
+            | readcon_core::types::SECTION_SPINS
+            | readcon_core::types::SECTION_MAGMOMS
+            | readcon_core::types::SECTION_DISPLACEMENTS
+            | readcon_core::types::SECTION_SPREADS
+    )
+}
+
+/// A blank line opens a section when the next line is a component symbol.
+/// A blank tail, or the blank line 1 of the next frame, does not.
+fn legacy_section_opens(cur: &Cur<'_>) -> bool {
+    let Some(line) = cur.peek() else {
+        return false;
+    };
+    if !is_blank(line) || cur.rest_blank() {
+        return false;
+    }
+    let after = split_line(cur.bytes, cur.i)
+        .map(|(_, n)| n)
+        .unwrap_or(cur.i);
+    matches!(
+        line_at(cur.bytes, after),
+        Some(next) if next.first() != Some(&b'{') && !is_blank(next)
+    )
+}
+
+fn begin_declared_section(cur: &mut Cur<'_>, name: &str) -> Result<()> {
+    if !known_section(name) {
+        return Err(Error::Parse(format!(
+            "unknown section type in metadata: {name}"
+        )));
+    }
+    if !legacy_section_opens(cur) {
+        return Err(Error::Parse(format!(
+            "file ended unexpectedly while reading {name} section"
+        )));
+    }
+    let _blank = cur.take()?;
+    Ok(())
+}
+
 fn note_section(
     cur: &mut Cur<'_>,
     counts: &[usize],
@@ -678,6 +726,26 @@ fn note_section(
                 if !complete {
                     return Err(short_read(where_));
                 }
+            }
+            "Charges" | "Spins" => {
+                let where_ = if kind == "Charges" {
+                    "charges section"
+                } else {
+                    "spins section"
+                };
+                let (ranges, complete) = take_present_rows(cur, *count);
+                check_scalar_rows(cur.bytes, &ranges, spec)?;
+                if !complete {
+                    return Err(short_read(where_));
+                }
+            }
+            "Magmoms" | "Displacements" | "Spreads" => {
+                let where_ = match kind {
+                    "Magmoms" => "magmoms section",
+                    "Displacements" => "displacements section",
+                    _ => "spreads section",
+                };
+                check_vector_block(cur, *count, where_, spec, true, false, None, None)?;
             }
             _ => {
                 check_vector_block(cur, *count, where_, spec, true, false, None, None)?;
