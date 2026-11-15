@@ -1,11 +1,8 @@
 //! Column scan of a CON span.
 //!
 //! The bytes are the stored frame (or a decompressed group member). Numeric
-//! tokens go through [`readcon_core::parser::parse_line_of_range_f64_stack`],
-//! the same fast-float kernel the core column reader uses, so the bits match
+//! tokens go through the same fast-float kernel the core column reader uses, so the bits match
 //! a frame parse. No per-atom object is built.
-
-use readcon_core::parser::parse_line_of_range_f64_stack;
 
 use crate::error::{Error, Result};
 
@@ -144,28 +141,48 @@ fn xyz_prefix(line: &[u8]) -> Result<[f64; 3]> {
     Ok(out)
 }
 
-fn f64s(line: &[u8], n: usize) -> Result<Vec<f64>> {
-    let text = as_str(line)?;
-    if n <= 5 {
-        let mut buf = [0.0f64; 5];
-        parse_line_of_range_f64_stack(text.trim(), n, n, &[0.0; 5], &mut buf)
-            .map_err(|e| Error::Parse(e.to_string()))?;
-        return Ok(buf[..n].to_vec());
-    }
-    readcon_core::parser::parse_line_of_n_f64(text.trim(), n)
-        .map_err(|e| Error::Parse(e.to_string()))
+/// Header lines from the byte cursor, in the order [`parse_frame_header`] reads them.
+struct HeaderLines<'a> {
+    bytes: &'a [u8],
+    i: usize,
+    utf8_bad: bool,
 }
 
-fn uints(line: &[u8]) -> Result<Vec<usize>> {
-    let text = as_str(line)?;
-    let mut out = Vec::new();
-    for tok in text.split_whitespace() {
-        let n: usize = tok
-            .parse()
-            .map_err(|_| Error::Parse(format!("bad count {tok}")))?;
-        out.push(n);
+impl<'a> Iterator for HeaderLines<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<&'a str> {
+        if self.utf8_bad {
+            return None;
+        }
+        let (line, next) = split_line(self.bytes, self.i)?;
+        match std::str::from_utf8(line) {
+            Ok(text) => {
+                self.i = next;
+                Some(text)
+            }
+            Err(_) => {
+                self.utf8_bad = true;
+                None
+            }
+        }
     }
-    Ok(out)
+}
+
+/// The core header parser owns spec, units, and count checks.
+fn read_header(cur: &mut Cur<'_>) -> Result<readcon_core::types::FrameHeader> {
+    let mut lines = HeaderLines {
+        bytes: cur.bytes,
+        i: cur.i,
+        utf8_bad: false,
+    };
+    let header = readcon_core::parser::parse_frame_header(&mut lines);
+    if lines.utf8_bad {
+        return Err(Error::Parse("CON line is not UTF-8".into()));
+    }
+    let header = header.map_err(|err| Error::Parse(err.to_string()))?;
+    cur.i = lines.i;
+    Ok(header)
 }
 
 fn meta_of(line: &[u8], cols: &mut Columns) -> Result<()> {
@@ -181,7 +198,6 @@ fn meta_of(line: &[u8], cols: &mut Columns) -> Result<()> {
     }
     let v: serde_json::Value =
         serde_json::from_str(text).map_err(|e| Error::Parse(e.to_string()))?;
-    reject_unsupported_spec(&v)?;
     if let Some(e) = v.get("energy").and_then(serde_json::Value::as_f64) {
         cols.energy.push(e);
         cols.energy_set.push(true);
@@ -224,31 +240,19 @@ pub fn append_span(cols: &mut Columns, bytes: &[u8]) -> Result<()> {
 }
 
 fn parse_frame(cur: &mut Cur<'_>, cols: &mut Columns) -> Result<()> {
-    let _preamble = cur.take()?;
-    let meta = cur.take()?;
-    meta_of(meta, cols)?;
-    let boxl = f64s(cur.take()?, 3)?;
-    let angles = f64s(cur.take()?, 3)?;
-    cols.cells.extend_from_slice(&boxl);
-    cols.cells.extend_from_slice(&angles);
-    let _post_a = cur.take()?;
-    let _post_b = cur.take()?;
-    let n_types = uints(cur.take()?)?;
-    if n_types.len() != 1 {
-        return Err(Error::Parse("type-count line must be one integer".into()));
-    }
-    let n_types = n_types[0];
+    let header = read_header(cur)?;
+    meta_of(header.prebox_header.metadata_line().as_bytes(), cols)?;
+    cols.cells.extend_from_slice(&header.boxl);
+    cols.cells.extend_from_slice(&header.angles);
+    let n_types = header.natm_types;
     if n_types == 0 {
         cols.n_atoms.push(0);
         cols.symbol_runs.push(Vec::new());
         cols.forces_uniform = false;
         return Ok(());
     }
-    let counts = uints(cur.take()?)?;
-    if counts.len() != n_types {
-        return Err(Error::Parse("per-type counts do not match".into()));
-    }
-    let masses = f64s(cur.take()?, n_types)?;
+    let counts = header.natms_per_type;
+    let masses = header.masses_per_type;
     let mut runs = Vec::with_capacity(n_types);
     let mut natoms = 0u32;
     let force_at = cols.forces.len();
@@ -415,21 +419,15 @@ pub(crate) fn project_frame_parts(
     if cur.rest_blank() {
         return Err(Error::Parse("empty frame".into()));
     }
-    let _preamble = cur.take()?;
-    let meta = cur.take()?;
-    let (mut facts, gate) = facts_from_meta(meta)?;
-    let boxl = f64s(cur.take()?, 3)?;
-    let angles = f64s(cur.take()?, 3)?;
+    let header = read_header(&mut cur)?;
+    let (mut facts, mut gate) = facts_from_meta(header.prebox_header.metadata_line().as_bytes())?;
+    gate.spec = u64::from(header.spec_version);
+    let boxl = header.boxl;
+    let angles = header.angles;
     if facts.cell_volume.is_none() {
         facts.cell_volume = volume_from_box(&boxl, &angles);
     }
-    let _post_a = cur.take()?;
-    let _post_b = cur.take()?;
-    let n_types_line = uints(cur.take()?)?;
-    if n_types_line.len() != 1 {
-        return Err(Error::Parse("type-count line must be one integer".into()));
-    }
-    let n_types = n_types_line[0];
+    let n_types = header.natm_types;
     let mut acc = cook.then(CookAcc::empty);
     if let Some(acc) = acc.as_mut() {
         acc.cell = cell_row_major(gate.lattice, &boxl, &angles);
@@ -437,19 +435,8 @@ pub(crate) fn project_frame_parts(
     if n_types == 0 {
         return Ok((facts, acc));
     }
-    let counts = uints(cur.take()?)?;
-    if counts.len() != n_types {
-        return Err(Error::Parse(format!(
-            "expected {n_types} values on line, found {}",
-            counts.len()
-        )));
-    }
-    if counts.contains(&0) {
-        return Err(Error::Parse(
-            "invalid count: each per-type count must be >= 1".into(),
-        ));
-    }
-    let masses = f64s(cur.take()?, n_types)?;
+    let counts = header.natms_per_type;
+    let masses = header.masses_per_type;
     facts.total_mass = total_mass(&counts, &masses);
     let natoms_sum: usize = counts.iter().sum();
     if let Some(acc) = acc.as_mut() {
@@ -1029,21 +1016,6 @@ fn parse_id(tok: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// JSON majors 0 and 1, and a major past the supported spec, are rejected
-/// before any row is read. A line that is not JSON stays a legacy frame.
-fn reject_unsupported_spec(v: &serde_json::Value) -> Result<()> {
-    let Some(spec) = v.get("con_spec_version").and_then(json_u64) else {
-        return Ok(());
-    };
-    if spec == 0 || spec == 1 || spec > u64::from(readcon_core::CON_SPEC_VERSION) {
-        let shown = u32::try_from(spec).unwrap_or(u32::MAX);
-        return Err(Error::Parse(format!(
-            "unsupported con_spec_version: {shown}"
-        )));
-    }
-    Ok(())
-}
-
 struct MetaGate {
     spec: u64,
     minor: u64,
@@ -1085,7 +1057,6 @@ fn facts_from_meta(line: &[u8]) -> Result<(SpanFacts, MetaGate)> {
     }
     let v: serde_json::Value =
         serde_json::from_str(text).map_err(|e| Error::Parse(e.to_string()))?;
-    reject_unsupported_spec(&v)?;
     let gate = MetaGate {
         spec: v.get("con_spec_version").and_then(json_u64).unwrap_or(0),
         minor: v.get("con_spec_minor").and_then(json_u64).unwrap_or(0),
@@ -1445,6 +1416,44 @@ mod tests {
             parsed.contains("unsupported con_spec_version: 1"),
             "{parsed}"
         );
+        let headers = [
+            (
+                r#"{"energy":-1.0}"#,
+                "1",
+                "line 2 must be a JSON object containing \"con_spec_version\"",
+            ),
+            (
+                r#"{"con_spec_version":-1}"#,
+                "1",
+                "invalid JSON metadata on line 2: con_spec_version must be a JSON integer, the major version",
+            ),
+            (
+                r#"{"con_spec_version":3}"#,
+                "1",
+                "invalid units: con_spec_version >= 3 requires metadata \"units\" with length and energy",
+            ),
+            (
+                r#"{"con_spec_version":3,"con_spec_minor":1,"units":{"length":"angstrom","energy":"eV"}}"#,
+                "-1",
+                "invalid count: count field is not an unsigned integer: -1",
+            ),
+            (
+                r#"{"con_spec_version":3,"con_spec_minor":1,"units":{"length":"angstrom","energy":"eV"}}"#,
+                "+1",
+                "invalid count: count field is not an unsigned integer: +1",
+            ),
+            (
+                r#"{"con_spec_version":3,"con_spec_minor":1,"units":{"length":"angstrom","energy":"eV"}}"#,
+                "18446744073709551616",
+                "invalid count: count field is out of range: 18446744073709551616",
+            ),
+        ];
+        for (meta, ntypes, needle) in headers {
+            let text = format!("\n{meta}\n10.5 12.25 8.0\n90 90 90\n\n\n{ntypes}\n");
+            let parsed = parser_message(&text);
+            assert_eq!(span_message(&text), parsed, "{meta} count={ntypes}");
+            assert!(parsed.contains(needle), "{parsed}");
+        }
     }
 
     #[test]
