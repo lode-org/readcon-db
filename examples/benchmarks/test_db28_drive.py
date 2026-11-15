@@ -7,9 +7,6 @@ import socket
 
 import pytest
 
-pytest.importorskip("readcon")
-pytest.importorskip("readcon_db")
-
 import db28_drive as drv
 
 
@@ -88,6 +85,18 @@ def test_replacement_equal_to_or_inside_the_record_is_refused(tmp_path) -> None:
             _finished_replacement(record / "nested")
         (record / "SUPERSEDED.md").write_text("Replacement: " + named + "\n")
         assert drv.vm_host_hits(tmp_path) == ["bench/db1/campaign.log"]
+
+
+def test_record_note_hides_a_nested_file(tmp_path) -> None:
+    record = tmp_path / "bench" / "db1"
+    nested = record / "sub"
+    nested.mkdir(parents=True)
+    (nested / "hit.json").write_text('{"corpus": "' + "/" + "tmp" + '/ab"}\n')
+    _finished_replacement(tmp_path / "bench" / "db30")
+    (tmp_path / "bench" / "SUPERSEDED.md").write_text("Replacement: bench/db30\n")
+    assert drv.vm_host_hits(tmp_path) == ["bench/db1/sub/hit.json"]
+    (record / "SUPERSEDED.md").write_text("Replacement: bench/db30\n")
+    assert drv.vm_host_hits(tmp_path) == []
 
 
 def test_ancestor_note_does_not_hide_the_record(tmp_path) -> None:

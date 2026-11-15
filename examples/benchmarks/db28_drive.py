@@ -17,7 +17,6 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import db26_drive as drv
-import fair_ase_protocol as fair
 
 REPO = Path(__file__).resolve().parents[2]
 BENCH = REPO / "bench" / "db28"
@@ -94,19 +93,42 @@ def replacement_directory(record_dir: Path, root: Path) -> Path | None:
     return dest
 
 
+def _record_root(path: Path, root: Path) -> Path | None:
+    """The top ``bench/<record>`` or ``examples/benchmarks/<record>`` directory."""
+    for parts in (("bench",), ("examples", "benchmarks")):
+        base = root.joinpath(*parts)
+        try:
+            rel = path.relative_to(base)
+        except ValueError:
+            continue
+        if len(rel.parts) < 2:
+            return None
+        return base / rel.parts[0]
+    return None
+
+
 def _superseded(path: Path, root: Path) -> bool:
-    record = path.parent
-    if record == root:
+    record_root = _record_root(path, root)
+    if record_root is None:
         return False
-    return replacement_directory(record, root) is not None
+    current = path.parent
+    while True:
+        if replacement_directory(current, root) is not None:
+            return True
+        if current == record_root:
+            return False
+        parent = current.parent
+        if parent == current:
+            return False
+        current = parent
 
 
 def vm_host_hits(root: Path) -> list[str]:
     """Benchmark and bench files that name a VM host or a local path.
 
-    A record directory is skipped only when its own ``SUPERSEDED.md`` names
-    a finished replacement outside that directory. An ancestor note does
-    not hide the record.
+    A record is skipped when its own ``SUPERSEDED.md`` names a finished
+    replacement outside that directory. The note covers files nested under
+    the record. A note above the record directory does not hide it.
     """
     hits = []
     host_line = "host " + "cursor"
@@ -163,6 +185,8 @@ def fast_md_positions(n_frames: int) -> list[np.ndarray]:
     """One strided read of the same frame indices ``_load_md_positions`` uses."""
     import mdtraj
 
+    import fair_ase_protocol as fair
+
     topo = fair.nha_topology()
     gro = fair.fetch_pinned(fair.NHA_GRO_URL, fair.NHA_GRO_SHA256, "NhaA_non_water.gro")
     xtc = fair.fetch_pinned(fair.NHA_XTC_URL, fair.NHA_XTC_SHA256, "NhaA_non_water.xtc")
@@ -201,6 +225,8 @@ def hwm(pid: int) -> int:
 def write_corpus(
     arm: str, codec_name: str, py_note: str, root: Path
 ) -> tuple[dict, list]:
+    import fair_ase_protocol as fair
+
     dest = root / arm / codec_name
     corpus = dest / "corpus"
     if corpus.exists():
@@ -496,6 +522,8 @@ def example_record() -> dict:
 
 
 def main() -> None:
+    import fair_ase_protocol as fair
+
     os.environ.update(drv.env_base())
     os.environ.pop("READCON_DB_COOKED_CODEC", None)
     require_recorded_n(N)

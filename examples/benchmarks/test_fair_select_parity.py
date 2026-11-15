@@ -5,8 +5,12 @@ from pathlib import Path
 import tempfile
 import sys
 
-# allow running without pytest
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+pytest.importorskip("readcon")
+pytest.importorskip("readcon_db")
+pytest.importorskip("ase")
 from fair_campaign import (
     DEFAULT_FIXTURE,
     write_ladder_con,
