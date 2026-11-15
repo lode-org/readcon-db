@@ -2088,8 +2088,19 @@ impl ConCorpus {
     ) -> Result<Vec<PreparedIndexPuts>> {
         let spans = readcon_core::index_proj::frame_byte_spans_skip(file_contents)
             .map_err(|e| Error::Parse(e.to_string()))?;
+        Self::prepare_sliced(traj_id, file_contents, &spans, start_idx, compress)
+    }
+
+    /// [`Self::prepare_trajectory_str_span`] when the span table is already known.
+    fn prepare_sliced(
+        traj_id: TrajId,
+        file_contents: &str,
+        spans: &[readcon_core::index_proj::FrameByteSpan],
+        start_idx: u32,
+        compress: bool,
+    ) -> Result<Vec<PreparedIndexPuts>> {
         let mut texts = Vec::with_capacity(spans.len());
-        for span in &spans {
+        for span in spans {
             texts.push(
                 span.slice(file_contents)
                     .ok_or_else(|| Error::Parse("frame span is not valid UTF-8".into()))?,
@@ -2097,12 +2108,12 @@ impl ConCorpus {
         }
         let mut out = Vec::with_capacity(texts.len());
         let heavy = texts.iter().any(|text| text.len() >= 256 * 1024);
-        // One large frame: compress the CON text while the coordinate walk
-        // fills the RCSO blob. Both only read the span. Several large frames
-        // are projected together below, and the group compressor is the only
+        // One frame: compress the CON text while the coordinate walk fills
+        // the RCSO blob. Both only read the span. Several large frames are
+        // projected together below, and the group compressor is the only
         // zstd pass. Compressing each frame first made `group_prepared`
         // decompress that work and compress it again.
-        if texts.len() < 32 && !heavy {
+        if texts.len() == 1 || (texts.len() < 32 && !heavy) {
             for (i, text) in texts.iter().enumerate() {
                 let fk = FrameKey {
                     traj_id,
@@ -2111,19 +2122,22 @@ impl ConCorpus {
                 };
                 let (facts, cooked, stored) = if compress && text.len() >= 256 * 1024 {
                     // Compress while the coordinate walk fills column scratch.
-                    // The RCSO blob is encoded after that thread exits, so the
-                    // compressor context and the blob are not resident together.
+                    // The RCSO blob is encoded before that thread is joined, so
+                    // the copy overlaps the tail of compression.
                     std::thread::scope(|scope| {
                         let job = scope.spawn(|| crate::frame_codec::store_frame(text, true));
                         let scanned =
                             crate::span_columns::project_frame_parts(text.as_bytes(), true);
-                        let stored = job.join().expect("frame compression");
-                        scanned.and_then(|(facts, acc)| {
+                        let cooked = scanned.and_then(|(facts, acc)| {
                             let cooked = crate::span_columns::finish_cook(
                                 &facts,
                                 acc.unwrap_or_else(crate::span_columns::CookAcc::empty),
                             )?;
-                            stored.map(|bytes| (facts, cooked, Some(bytes)))
+                            Ok((facts, cooked))
+                        });
+                        let stored = job.join().expect("frame compression");
+                        cooked.and_then(|(facts, blob)| {
+                            stored.map(|bytes| (facts, blob, Some(bytes)))
                         })
                     })?
                 } else {
@@ -2691,18 +2705,33 @@ impl ConCorpus {
     ) -> Result<u32> {
         let source = source.into();
         let result = (|| {
-            Self::species_counts_fit(file_contents)?;
             // A long trajectory is put one zstd group at a time inside one write
             // transaction. The group's cooked blob and decompressed text are
             // dropped after the put. LMDB's dirty pages are the copy that
             // survives until the single commit. A failed insert aborts that
             // transaction, so no frame is visible.
+            //
+            // A single large frame used to scan the species counts and the
+            // span table here, then `prepare_trajectory_str` scanned both
+            // again before the coordinate walk. The batch decision is the
+            // only reason to look at the spans first, and that result is
+            // reused.
             if file_contents.len() > 512 * 1024 {
+                Self::species_counts_fit(file_contents)?;
                 let spans = readcon_core::index_proj::frame_byte_spans_skip(file_contents)
                     .map_err(|e| Error::Parse(e.to_string()))?;
                 if spans.len() > crate::frame_codec::GROUP_LEN as usize {
                     return self.append_spans_batched(traj_id, file_contents, &spans, source);
                 }
+                let mut prepared =
+                    Self::prepare_sliced(traj_id, file_contents, &spans, 0, self.compress_on())?;
+                return self.commit_prepared(
+                    traj_id,
+                    &mut prepared,
+                    source,
+                    false,
+                    self.compress_on(),
+                );
             }
             // Prepare outside exclusive write section (parallel writers can parse concurrently).
             let mut prepared =
@@ -8517,5 +8546,49 @@ x
             rewritten.to_string().contains("index-canonical"),
             "{rewritten}"
         );
+    }
+
+    /// A frame above 512 KiB takes the span path. Its database bytes have to
+    /// match a commit built by the full parser, including the LMDB file.
+    #[test]
+    fn large_frame_insert_matches_parsed_database_bytes() {
+        let n = 20_000u32;
+        let mut text = String::from(
+            "\n{\"con_spec_version\":3,\"con_spec_minor\":1,\"energy\":-42.5,\"frame_index\":0,\"pbc\":[true,true,false],\"sections\":[\"forces\"],\"units\":{\"length\":\"angstrom\",\"energy\":\"eV\"}}\n10.5 12.25 8.0\n90 90 90\n\n\n1\n",
+        );
+        use std::fmt::Write as _;
+        let _ = writeln!(text, "{n}");
+        text.push_str("63.546\nCu\nCoordinates of Component 1\n");
+        for i in 0..n {
+            let _ = writeln!(text, "{i}.125 0.5 1.0 0 {i}");
+        }
+        text.push_str("\nCu\nForces of Component 1\n");
+        for i in 0..n {
+            let _ = writeln!(text, "0.1 0.2 {i}.0 0 {i}");
+        }
+        assert!(
+            text.len() > 512 * 1024,
+            "fixture is {} bytes and would not take the span path",
+            text.len()
+        );
+
+        let parsed_dir = tempfile::tempdir().unwrap();
+        let parsed = ConCorpus::open(parsed_dir.path()).unwrap();
+        let mut rows = ConCorpus::prepare_trajectory_str_parsed(1, &text, 0, true).unwrap();
+        parsed
+            .commit_prepared(1, &mut rows, "lattice".into(), false, true)
+            .unwrap();
+        let parsed_dump = parsed.canonical_dump().unwrap();
+        let parsed_file = std::fs::read(parsed_dir.path().join("data.mdb")).unwrap();
+        drop(parsed);
+
+        let fast_dir = tempfile::tempdir().unwrap();
+        let fast = ConCorpus::open(fast_dir.path()).unwrap();
+        fast.append_trajectory_str(1, &text, "lattice").unwrap();
+        let fast_dump = fast.canonical_dump().unwrap();
+        let fast_file = std::fs::read(fast_dir.path().join("data.mdb")).unwrap();
+
+        assert_eq!(fast_dump, parsed_dump);
+        assert_eq!(fast_file, parsed_file);
     }
 }

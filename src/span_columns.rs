@@ -733,45 +733,20 @@ fn check_vector_block(
         }
         return Ok(max_mag);
     }
-    // A million coordinate lines is 16 MiB of ranges. Walk them in
-    // bounded pieces so that scratch does not sit next to the columns.
-    let mut max_mag = None;
-    let mut done = 0usize;
-    let mut xyz_out = xyz_out;
-    let mut mask_out = mask_out;
-    while done < n {
-        let take = (n - done).min(16_384);
-        let ranges = take_row_ranges(cur, take, where_)?;
-        let xyz_piece = match xyz_out {
-            Some(buf) => {
-                let (head, tail) = buf.split_at_mut(take * 3);
-                xyz_out = Some(tail);
-                Some(head)
-            }
-            None => None,
-        };
-        let mask_piece = match mask_out {
-            Some(buf) => {
-                let (head, tail) = buf.split_at_mut(take * 3);
-                mask_out = Some(tail);
-                Some(head)
-            }
-            None => None,
-        };
-        if let Some(mag) = check_vector_rows(
-            cur.bytes,
-            &ranges,
-            spec,
-            id_required,
-            fmax,
-            xyz_piece,
-            mask_piece,
-        )? {
-            max_mag = Some(max_mag.map_or(mag, |cur: f64| cur.max(mag)));
-        }
-        done += take;
-    }
-    Ok(max_mag)
+    // One region for the whole block. Restarting a thread set every 16,384
+    // rows spent the launch on the check: a million-atom block was slower in
+    // those pieces than as one pass. The range list is dropped before the
+    // cooked blob is encoded.
+    let ranges = take_row_ranges(cur, n, where_)?;
+    check_vector_rows(
+        cur.bytes,
+        &ranges,
+        spec,
+        id_required,
+        fmax,
+        xyz_out,
+        mask_out,
+    )
 }
 
 fn take_row_ranges(cur: &mut Cur<'_>, n: usize, where_: &str) -> Result<Vec<(usize, usize)>> {
