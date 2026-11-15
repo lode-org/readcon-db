@@ -110,6 +110,15 @@ Full ABI table, logo, Sphinx docs, and site: see `docs/`, `website/`, `assets/lo
 
 ## Benchmarks
 
+The checks in `examples/benchmarks/` import `readcon_db` from this
+repository and `readcon` from readcon-core. The core package is pinned
+to the same release as the crate:
+
+```bash
+pip install -r examples/benchmarks/requirements.txt
+pytest examples/benchmarks
+```
+
 ASE sqlite is a measurement target, not a storage path. The fair
 comparison is
 [`examples/benchmarks/fair_ase_protocol.py`](examples/benchmarks/fair_ase_protocol.py).
