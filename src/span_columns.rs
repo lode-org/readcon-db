@@ -181,6 +181,7 @@ fn meta_of(line: &[u8], cols: &mut Columns) -> Result<()> {
     }
     let v: serde_json::Value =
         serde_json::from_str(text).map_err(|e| Error::Parse(e.to_string()))?;
+    reject_unsupported_spec(&v)?;
     if let Some(e) = v.get("energy").and_then(serde_json::Value::as_f64) {
         cols.energy.push(e);
         cols.energy_set.push(true);
@@ -973,37 +974,30 @@ fn parse_f64_token(tok: &[u8]) -> Result<f64> {
     Ok(val)
 }
 
+fn bad_fixed_flag(tok: &[u8], spec: u32) -> Error {
+    let shown = String::from_utf8_lossy(tok);
+    Error::Parse(format!(
+        "invalid fixed flag: column 4 flag {shown:?} is not a legal integer for spec {spec}"
+    ))
+}
+
 fn fixed_axes(tok: &[u8], spec: u32) -> Result<[u8; 3]> {
     if tok.is_empty() || !tok.iter().all(|b| b.is_ascii_digit()) {
-        return Err(Error::Parse(format!(
-            "invalid fixed flag: {}",
-            String::from_utf8_lossy(tok)
-        )));
+        return Err(bad_fixed_flag(tok, spec));
     }
     let val: u64 = std::str::from_utf8(tok)
         .ok()
         .and_then(|s| s.parse().ok())
-        .ok_or_else(|| {
-            Error::Parse(format!(
-                "invalid fixed flag: {}",
-                String::from_utf8_lossy(tok)
-            ))
-        })?;
+        .ok_or_else(|| bad_fixed_flag(tok, spec))?;
     if spec < 2 {
         return match val {
             0 => Ok([0, 0, 0]),
             1 => Ok([1, 1, 1]),
-            _ => Err(Error::Parse(format!(
-                "invalid fixed flag: {}",
-                String::from_utf8_lossy(tok)
-            ))),
+            _ => Err(bad_fixed_flag(tok, spec)),
         };
     }
     if val > 7 {
-        let shown = String::from_utf8_lossy(tok);
-        return Err(Error::Parse(format!(
-            "invalid fixed flag: column 4 flag {shown:?} is not a legal integer for spec {spec}"
-        )));
+        return Err(bad_fixed_flag(tok, spec));
     }
     Ok([
         u8::from(val & 1 != 0),
@@ -1017,10 +1011,34 @@ fn parse_flag(tok: &[u8], spec: u32) -> Result<()> {
 }
 
 fn parse_id(tok: &[u8]) -> Result<()> {
+    let shown = String::from_utf8_lossy(tok);
     if tok.is_empty() || !tok.iter().all(|b| b.is_ascii_digit()) {
         return Err(Error::Parse(format!(
-            "invalid number format: invalid integer: {}",
-            String::from_utf8_lossy(tok)
+            "invalid number format: invalid integer: {shown}"
+        )));
+    }
+    if std::str::from_utf8(tok)
+        .ok()
+        .and_then(|text| text.parse::<u64>().ok())
+        .is_none()
+    {
+        return Err(Error::Parse(format!(
+            "invalid number format: integer out of range 0..=2^64-1: {shown}"
+        )));
+    }
+    Ok(())
+}
+
+/// JSON majors 0 and 1, and a major past the supported spec, are rejected
+/// before any row is read. A line that is not JSON stays a legacy frame.
+fn reject_unsupported_spec(v: &serde_json::Value) -> Result<()> {
+    let Some(spec) = v.get("con_spec_version").and_then(json_u64) else {
+        return Ok(());
+    };
+    if spec == 0 || spec == 1 || spec > u64::from(readcon_core::CON_SPEC_VERSION) {
+        let shown = u32::try_from(spec).unwrap_or(u32::MAX);
+        return Err(Error::Parse(format!(
+            "unsupported con_spec_version: {shown}"
         )));
     }
     Ok(())
@@ -1067,6 +1085,7 @@ fn facts_from_meta(line: &[u8]) -> Result<(SpanFacts, MetaGate)> {
     }
     let v: serde_json::Value =
         serde_json::from_str(text).map_err(|e| Error::Parse(e.to_string()))?;
+    reject_unsupported_spec(&v)?;
     let gate = MetaGate {
         spec: v.get("con_spec_version").and_then(json_u64).unwrap_or(0),
         minor: v.get("con_spec_minor").and_then(json_u64).unwrap_or(0),
@@ -1342,8 +1361,12 @@ mod tests {
     }
 
     fn energies_text(row: Option<&str>) -> String {
-        let mut text = String::from(
-            "\n{\"con_spec_version\":3,\"con_spec_minor\":1,\"energy\":-42.5,\"frame_index\":0,\"pbc\":[true,true,false],\"sections\":[\"energies\"],\"units\":{\"length\":\"angstrom\",\"energy\":\"eV\"}}\n10.5 12.25 8.0\n90 90 90\n\n\n1\n1\n63.546\nCu\nCoordinates of Component 1\n0.125 0.5 1.0 0 0\n\nCu\nEnergies of Component 1\n",
+        energies_at(3, row)
+    }
+
+    fn energies_at(spec: u32, row: Option<&str>) -> String {
+        let mut text = format!(
+            "\n{{\"con_spec_version\":{spec},\"con_spec_minor\":1,\"energy\":-42.5,\"frame_index\":0,\"pbc\":[true,true,false],\"sections\":[\"energies\"],\"units\":{{\"length\":\"angstrom\",\"energy\":\"eV\"}}}}\n10.5 12.25 8.0\n90 90 90\n\n\n1\n1\n63.546\nCu\nCoordinates of Component 1\n0.125 0.5 1.0 0 0\n\nCu\nEnergies of Component 1\n"
         );
         if let Some(row) = row {
             text.push_str(row);
@@ -1385,6 +1408,26 @@ mod tests {
                 "invalid number format: invalid integer: zz",
             ),
             (
+                Some("0.25 zz 0"),
+                "invalid fixed flag: column 4 flag \"zz\" is not a legal integer for spec 3",
+            ),
+            (
+                Some("0.25 -1 0"),
+                "invalid fixed flag: column 4 flag \"-1\" is not a legal integer for spec 3",
+            ),
+            (
+                Some("0.25 +1 0"),
+                "invalid fixed flag: column 4 flag \"+1\" is not a legal integer for spec 3",
+            ),
+            (
+                Some("0.25 18446744073709551616 0"),
+                "invalid fixed flag: column 4 flag \"18446744073709551616\" is not a legal integer for spec 3",
+            ),
+            (
+                Some("0.25 0 18446744073709551616"),
+                "invalid number format: integer out of range 0..=2^64-1: 18446744073709551616",
+            ),
+            (
                 None,
                 "file ended unexpectedly while reading energies section",
             ),
@@ -1395,6 +1438,13 @@ mod tests {
             assert_eq!(span_message(&text), parsed, "row={row:?}");
             assert!(parsed.contains(needle), "{parsed}");
         }
+        let spec1 = energies_at(1, Some("0.25 9 0"));
+        let parsed = parser_message(&spec1);
+        assert_eq!(span_message(&spec1), parsed);
+        assert!(
+            parsed.contains("unsupported con_spec_version: 1"),
+            "{parsed}"
+        );
     }
 
     #[test]
