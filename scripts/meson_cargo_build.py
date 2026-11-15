@@ -55,12 +55,21 @@ def main(argv: list[str]) -> int:
     elif sys.platform == "darwin":
         link_args.append(f"-Clink-arg=-Wl,-install_name,@rpath/{shared_name}")
     # The cdylib uses mimalloc local-dynamic TLS so a later dlopen does not
-    # need static TLS surplus. The staticlib keeps initial-exec.
+    # need static TLS surplus. The staticlib asks readcon-core for the
+    # system allocator. This archive and readcon-core's are linked into
+    # one C binary, and mimalloc in one std copy is freed with glibc by
+    # the other.
     for crate_type in ("cdylib", "staticlib"):
         crate_features = features.strip()
         if crate_type == "cdylib":
             crate_features = ",".join(
                 part for part in (crate_features, "local_dynamic_tls") if part
+            )
+        else:
+            crate_features = ",".join(
+                part
+                for part in (crate_features, "readcon-core/static_system_alloc")
+                if part
             )
         crate_cmd = list(cmd)
         if crate_features:

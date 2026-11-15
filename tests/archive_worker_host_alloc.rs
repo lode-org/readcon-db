@@ -85,8 +85,8 @@ fn archive_worker_frees_with_the_host_allocator() {
     });
     // The staticlib feature is what scripts/meson_cargo_build.py passes.
     // Before that change these strings are empty and mimalloc is installed.
-    let core_features = "";
-    let db_features = "";
+    let core_features = "static_system_alloc";
+    let db_features = "readcon-core/static_system_alloc";
     let core = staticlib(
         &PathBuf::from(core_src).join("Cargo.toml"),
         &work.join("core"),
