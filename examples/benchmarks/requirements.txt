@@ -1,2 +1,4 @@
 # readcon-core's Python package. The crate pins readcon-core 0.23.2.
 readcon==0.23.2
+ase==3.29.0
+mdtraj==1.11.2

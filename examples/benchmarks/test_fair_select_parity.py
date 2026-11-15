@@ -19,6 +19,10 @@ from fair_campaign import (
 )
 
 
+def test_select_counts_match() -> None:
+    main()
+
+
 def main():
     assert DEFAULT_FIXTURE.is_file(), DEFAULT_FIXTURE
     with tempfile.TemporaryDirectory() as td:
