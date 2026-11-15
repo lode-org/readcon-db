@@ -60,8 +60,8 @@ def replacement_directory(record_dir: Path, root: Path) -> Path | None:
     """The finished directory named by this record's own ``SUPERSEDED.md``.
 
     A missing path, an empty directory, or a directory that holds only a
-    result note does not hide the record. A replacement equal to the record
-    or nested inside it does not hide it either.
+    result note does not hide the record. A replacement equal to the
+    record root, or nested inside that root, does not hide it either.
     """
     note = record_dir / "SUPERSEDED.md"
     if not note.is_file():
@@ -76,14 +76,18 @@ def replacement_directory(record_dir: Path, root: Path) -> Path | None:
     if not named:
         return None
     root_abs = root.resolve()
-    record_abs = record_dir.resolve()
     dest = (root / named).resolve()
     try:
         dest.relative_to(root_abs)
     except ValueError:
         return None
+    # Outside means outside the record root (bench/<record>), including
+    # when the note itself sits in a subdirectory of that record.
+    bound = _record_root(note, root)
+    if bound is None:
+        bound = record_dir
     try:
-        dest.relative_to(record_abs)
+        dest.relative_to(bound.resolve())
     except ValueError:
         pass
     else:

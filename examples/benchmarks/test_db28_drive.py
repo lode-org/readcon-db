@@ -87,6 +87,22 @@ def test_replacement_equal_to_or_inside_the_record_is_refused(tmp_path) -> None:
         assert drv.vm_host_hits(tmp_path) == ["bench/db1/campaign.log"]
 
 
+def test_note_inside_the_record_cannot_name_the_record(tmp_path) -> None:
+    record = tmp_path / "bench" / "db1"
+    _finished_replacement(record)
+    nested = record / "sub"
+    nested.mkdir()
+    (nested / "hit.json").write_text('{"corpus": "' + "/" + "tmp" + '/ab"}\n')
+    deeper = nested / "sub2"
+    deeper.mkdir()
+    (deeper / "hit.json").write_text('{"corpus": "' + "/" + "tmp" + '/ab"}\n')
+    (nested / "SUPERSEDED.md").write_text("Replacement: bench/db1\n")
+    assert drv.vm_host_hits(tmp_path) == [
+        "bench/db1/sub/hit.json",
+        "bench/db1/sub/sub2/hit.json",
+    ]
+
+
 def test_record_note_hides_a_nested_file(tmp_path) -> None:
     record = tmp_path / "bench" / "db1"
     nested = record / "sub"
