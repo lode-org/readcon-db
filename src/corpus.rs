@@ -8769,4 +8769,56 @@ x
         assert!(appended.contains("aaa"), "{appended}");
         assert!(!appended.contains("ended unexpectedly"), "{appended}");
     }
+
+    /// Padded past 512 KiB so append takes the span path. The energy block
+    /// declares `n` rows, writes through row 150, and puts `aaa` on row 100.
+    fn truncated_energies(n: u32) -> String {
+        let mut body = String::from(
+            "\n{\"con_spec_version\":3,\"con_spec_minor\":1,\"energy\":-42.5,\"frame_index\":0,\"pbc\":[true,true,false],\"sections\":[\"energies\"],\"units\":{\"length\":\"angstrom\",\"energy\":\"eV\"}}\n10.5 12.25 8.0\n90 90 90\n\n\n1\n",
+        );
+        use std::fmt::Write as _;
+        let _ = writeln!(body, "{n}");
+        body.push_str("63.546\nCu\nCoordinates of Component 1\n");
+        for i in 0..n {
+            let _ = writeln!(body, "{i}.125 0.5 1.0 0 {i}");
+        }
+        body.push_str("\nCu\nEnergies of Component 1\n");
+        for i in 0..=150 {
+            if i == 100 {
+                let _ = writeln!(body, "aaa 0 {i}");
+            } else {
+                let _ = writeln!(body, "0.25 0 {i}");
+            }
+        }
+        let min = 512 * 1024 + 1;
+        if body.len() >= min {
+            return body;
+        }
+        let mut text = " ".repeat(min - body.len());
+        text.push_str(&body);
+        text
+    }
+
+    #[test]
+    fn truncated_energy_matches_the_parser() {
+        for n in [20_000u32, 5_000] {
+            let text = truncated_energies(n);
+            assert!(text.len() > 512 * 1024, "{n} atoms is {} bytes", text.len());
+            let parsed = match ConCorpus::prepare_trajectory_str_parsed(1, &text, 0, true) {
+                Err(err) => err.to_string(),
+                Ok(_) => panic!("parser accepted truncated energies at {n} atoms"),
+            };
+            let dir = tempfile::tempdir().unwrap();
+            let db = ConCorpus::open(dir.path()).unwrap();
+            let appended = match db.append_trajectory_str(1, &text, "lattice") {
+                Err(err) => err.to_string(),
+                Ok(_) => panic!("append accepted truncated energies at {n} atoms"),
+            };
+            assert_eq!(appended, parsed, "n={n}");
+            assert!(
+                parsed.contains("invalid float: aaa"),
+                "n={n} parser: {parsed}"
+            );
+        }
+    }
 }

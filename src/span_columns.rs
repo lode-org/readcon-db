@@ -685,8 +685,11 @@ fn note_section(
             }
             "Energies" => {
                 facts.has_energy = true;
-                let ranges = take_row_ranges(cur, *count, where_)?;
+                let (ranges, complete) = take_present_rows(cur, *count);
                 check_scalar_rows(cur.bytes, &ranges, spec)?;
+                if !complete {
+                    return Err(short_read(where_));
+                }
             }
             _ => {
                 check_vector_block(cur, *count, where_, spec, true, false, None, None)?;
@@ -714,9 +717,7 @@ fn check_vector_block(
         let mut xyz_out = xyz_out;
         let mut mask_out = mask_out;
         for i in 0..n {
-            let line = cur.take().map_err(|_| {
-                Error::Parse(format!("file ended unexpectedly while reading {where_}"))
-            })?;
+            let line = cur.take().map_err(|_| short_read(where_))?;
             let (xyz, mask) = check_vector_line(line, spec, id_required)?;
             if let Some(buf) = xyz_out.as_mut() {
                 buf[i * 3..i * 3 + 3].copy_from_slice(&xyz);
@@ -740,16 +741,7 @@ fn check_vector_block(
     //
     // A short file still checks the lines that were present. The bad row is
     // reported ahead of the missing tail.
-    let base = cur.bytes.as_ptr() as usize;
-    let mut ranges = Vec::with_capacity(n);
-    for _ in 0..n {
-        let Ok(line) = cur.take() else {
-            break;
-        };
-        let start = line.as_ptr() as usize - base;
-        ranges.push((start, start + line.len()));
-    }
-    let complete = ranges.len() == n;
+    let (ranges, complete) = take_present_rows(cur, n);
     let mag = check_vector_rows(
         cur.bytes,
         &ranges,
@@ -760,24 +752,27 @@ fn check_vector_block(
         mask_out,
     )?;
     if !complete {
-        return Err(Error::Parse(format!(
-            "file ended unexpectedly while reading {where_}"
-        )));
+        return Err(short_read(where_));
     }
     Ok(mag)
 }
 
-fn take_row_ranges(cur: &mut Cur<'_>, n: usize, where_: &str) -> Result<Vec<(usize, usize)>> {
+fn short_read(where_: &str) -> Error {
+    Error::Parse(format!("file ended unexpectedly while reading {where_}"))
+}
+
+/// Line ranges that are actually in the file, and whether all `n` were present.
+fn take_present_rows(cur: &mut Cur<'_>, n: usize) -> (Vec<(usize, usize)>, bool) {
     let mut ranges = Vec::with_capacity(n);
     let base = cur.bytes.as_ptr() as usize;
     for _ in 0..n {
-        let line = cur
-            .take()
-            .map_err(|_| Error::Parse(format!("file ended unexpectedly while reading {where_}")))?;
+        let Ok(line) = cur.take() else {
+            return (ranges, false);
+        };
         let start = line.as_ptr() as usize - base;
         ranges.push((start, start + line.len()));
     }
-    Ok(ranges)
+    (ranges, true)
 }
 
 /// `id_required` is false for coordinate rows, where the id may be omitted.
