@@ -636,7 +636,7 @@ fn note_section(
         let where_ = match kind {
             "Forces" => "force section",
             "Velocities" => "velocity section",
-            "Energies" => "energy section",
+            "Energies" => "energies section",
             _ => "atom data",
         };
         match kind {
@@ -925,23 +925,33 @@ fn check_vector_line(line: &[u8], spec: u32, id_required: bool) -> Result<([f64;
 fn check_scalar_line(line: &[u8], spec: u32) -> Result<()> {
     let mut i = 0usize;
     let Some((start, end)) = next_token(line, i) else {
-        return Err(width_err(0));
+        return Err(scalar_width(0));
     };
     parse_f64_token(&line[start..end])?;
     i = end;
     let Some((start, end)) = next_token(line, i) else {
-        return Err(Error::Parse("expected 3 values on line, found 1".into()));
+        return Err(scalar_width(1));
     };
     parse_flag(&line[start..end], spec)?;
     i = end;
     let Some((start, end)) = next_token(line, i) else {
-        return Err(Error::Parse("expected 3 values on line, found 2".into()));
+        return Err(scalar_width(2));
     };
     parse_id(&line[start..end])?;
     if next_token(line, end).is_some() {
-        return Err(Error::Parse("expected 3 values on line, found more".into()));
+        let mut found = 3usize;
+        let mut at = end;
+        while let Some((_, next)) = next_token(line, at) {
+            found += 1;
+            at = next;
+        }
+        return Err(scalar_width(found));
     }
     Ok(())
+}
+
+fn scalar_width(found: usize) -> Error {
+    Error::Parse(format!("expected 3 values on line, found {found}"))
 }
 
 fn width_err(found: usize) -> Error {
@@ -1329,6 +1339,54 @@ mod tests {
         assert_eq!(got.frame_index[0], 3.0);
         assert_eq!(&got.pbc[..3], &[true, true, false]);
         assert_eq!(got.symbol_runs[0], vec![("Cu".into(), 1)]);
+    }
+
+    fn energies_text(row: Option<&str>) -> String {
+        let mut text = String::from(
+            "\n{\"con_spec_version\":3,\"con_spec_minor\":1,\"energy\":-42.5,\"frame_index\":0,\"pbc\":[true,true,false],\"sections\":[\"energies\"],\"units\":{\"length\":\"angstrom\",\"energy\":\"eV\"}}\n10.5 12.25 8.0\n90 90 90\n\n\n1\n1\n63.546\nCu\nCoordinates of Component 1\n0.125 0.5 1.0 0 0\n\nCu\nEnergies of Component 1\n",
+        );
+        if let Some(row) = row {
+            text.push_str(row);
+            text.push('\n');
+        }
+        text
+    }
+
+    fn parser_message(text: &str) -> String {
+        match ConFrameIterator::new(text).next() {
+            Some(Err(err)) => err.to_string(),
+            Some(Ok(_)) => panic!("parser accepted the frame"),
+            None => panic!("parser saw no frame"),
+        }
+    }
+
+    fn span_message(text: &str) -> String {
+        match project_frame(text.as_bytes()) {
+            Err(Error::Parse(msg)) => msg,
+            Err(err) => panic!("span failed with {err}"),
+            Ok(_) => panic!("span accepted the frame"),
+        }
+    }
+
+    /// An empty energies row, a wide row, and a missing row use the parser's words.
+    #[test]
+    fn energy_row_errors_match_the_parser() {
+        let cases = [
+            (Some(""), "expected 3 values on line, found 0"),
+            (Some("   "), "expected 3 values on line, found 0"),
+            (Some("0.25 0 0 4"), "expected 3 values on line, found 4"),
+            (Some("0.25 0 0 4 5 6"), "expected 3 values on line, found 6"),
+            (
+                None,
+                "file ended unexpectedly while reading energies section",
+            ),
+        ];
+        for (row, needle) in cases {
+            let text = energies_text(row);
+            let parsed = parser_message(&text);
+            assert_eq!(span_message(&text), parsed, "row={row:?}");
+            assert!(parsed.contains(needle), "{parsed}");
+        }
     }
 
     #[test]
