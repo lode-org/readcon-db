@@ -2123,7 +2123,8 @@ impl ConCorpus {
                 let (facts, cooked, stored) = if compress && text.len() >= 256 * 1024 {
                     // Compress while the coordinate walk fills column scratch.
                     // The RCSO blob is encoded before that thread is joined, so
-                    // the copy overlaps the tail of compression.
+                    // the compressor and the blob are both in memory while the
+                    // copy overlaps the tail of compression.
                     std::thread::scope(|scope| {
                         let job = scope.spawn(|| crate::frame_codec::store_frame(text, true));
                         let scanned =
@@ -8590,5 +8591,182 @@ x
 
         assert_eq!(fast_dump, parsed_dump);
         assert_eq!(fast_file, parsed_file);
+    }
+
+    /// Two bad rows in one large block. The message has to name the earlier
+    /// row. A later chunk must not replace it.
+    #[test]
+    fn large_frame_reports_the_first_bad_row() {
+        let n = 20_000u32;
+        let mut text = String::from(
+            "\n{\"con_spec_version\":3,\"con_spec_minor\":1,\"energy\":-42.5,\"frame_index\":0,\"pbc\":[true,true,false],\"sections\":[\"forces\"],\"units\":{\"length\":\"angstrom\",\"energy\":\"eV\"}}\n10.5 12.25 8.0\n90 90 90\n\n\n1\n",
+        );
+        use std::fmt::Write as _;
+        let _ = writeln!(text, "{n}");
+        text.push_str("63.546\nCu\nCoordinates of Component 1\n");
+        for i in 0..n {
+            if i == 100 {
+                let _ = writeln!(text, "aaa 0.5 1.0 0 {i}");
+            } else if i == 19_900 {
+                let _ = writeln!(text, "zzz 0.5 1.0 0 {i}");
+            } else {
+                let _ = writeln!(text, "{i}.125 0.5 1.0 0 {i}");
+            }
+        }
+        text.push_str("\nCu\nForces of Component 1\n");
+        for i in 0..n {
+            let _ = writeln!(text, "0.1 0.2 {i}.0 0 {i}");
+        }
+        assert!(
+            text.len() > 512 * 1024,
+            "fixture is {} bytes and would not take the span path",
+            text.len()
+        );
+        let parsed = match ConCorpus::prepare_trajectory_str_parsed(1, &text, 0, true) {
+            Err(err) => err.to_string(),
+            Ok(_) => panic!("parsed path accepted a bad row"),
+        };
+        assert!(parsed.contains("aaa"), "{parsed}");
+        assert!(!parsed.contains("zzz"), "{parsed}");
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let appended = match db.append_trajectory_str(1, &text, "lattice") {
+            Err(err) => err.to_string(),
+            Ok(_) => panic!("append accepted a bad row"),
+        };
+        assert!(appended.contains("aaa"), "{appended}");
+        assert!(!appended.contains("zzz"), "{appended}");
+    }
+
+    fn lattice_body(n: u32) -> String {
+        let mut text = String::from(
+            "\n{\"con_spec_version\":3,\"con_spec_minor\":1,\"energy\":-42.5,\"frame_index\":0,\"pbc\":[true,true,false],\"sections\":[\"forces\"],\"units\":{\"length\":\"angstrom\",\"energy\":\"eV\"}}\n10.5 12.25 8.0\n90 90 90\n\n\n1\n",
+        );
+        use std::fmt::Write as _;
+        let _ = writeln!(text, "{n}");
+        text.push_str("63.546\nCu\nCoordinates of Component 1\n");
+        for i in 0..n {
+            let _ = writeln!(text, "{i}.125 0.5 1.0 0 {i}");
+        }
+        text.push_str("\nCu\nForces of Component 1\n");
+        for i in 0..n {
+            let _ = writeln!(text, "0.1 0.2 {i}.0 0 {i}");
+        }
+        text
+    }
+
+    fn frame_of_len(target: usize) -> String {
+        let mut n = 64u32;
+        let mut body = lattice_body(n);
+        while body.len() < target {
+            let next = n.saturating_mul(2);
+            let grown = lattice_body(next);
+            if grown.len() > target {
+                break;
+            }
+            n = next;
+            body = grown;
+        }
+        assert!(
+            body.len() <= target,
+            "frame of {n} atoms is {} bytes, past {target}",
+            body.len()
+        );
+        let mut text = " ".repeat(target - body.len());
+        text.push_str(&body);
+        assert_eq!(text.len(), target);
+        text
+    }
+
+    fn assert_append_matches_parsed(text: &str, compress: bool) {
+        let parsed_dir = tempfile::tempdir().unwrap();
+        let parsed = ConCorpus::open(parsed_dir.path()).unwrap();
+        let mut rows = ConCorpus::prepare_trajectory_str_parsed(1, text, 0, compress).unwrap();
+        parsed
+            .commit_prepared(1, &mut rows, "lattice".into(), false, compress)
+            .unwrap();
+        let parsed_dump = parsed.canonical_dump().unwrap();
+        let parsed_file = std::fs::read(parsed_dir.path().join("data.mdb")).unwrap();
+        drop(parsed);
+
+        let fast_dir = tempfile::tempdir().unwrap();
+        let fast = ConCorpus::open(fast_dir.path()).unwrap();
+        fast.set_compress_frames(compress);
+        fast.append_trajectory_str(1, text, "lattice").unwrap();
+        assert_eq!(fast.canonical_dump().unwrap(), parsed_dump);
+        assert_eq!(
+            std::fs::read(fast_dir.path().join("data.mdb")).unwrap(),
+            parsed_file
+        );
+        if !compress {
+            let rtxn = fast.read_txn().unwrap();
+            let stored = fast
+                .stored_in(
+                    &rtxn,
+                    FrameKey {
+                        traj_id: 1,
+                        frame_idx: 0,
+                    },
+                )
+                .unwrap();
+            assert!(
+                !crate::frame_codec::is_tagged(&stored),
+                "compression off still stored a tagged frame"
+            );
+        }
+    }
+
+    #[test]
+    fn frame_at_the_span_boundary_matches_the_parsed_bytes() {
+        let exact = 512 * 1024;
+        let at = frame_of_len(exact);
+        let over = frame_of_len(exact + 1);
+        assert_eq!(at.len(), exact);
+        assert_eq!(over.len(), exact + 1);
+        assert_append_matches_parsed(&at, true);
+        assert_append_matches_parsed(&over, true);
+    }
+
+    #[test]
+    fn large_frame_without_compression_matches_the_parsed_bytes() {
+        let text = lattice_body(20_000);
+        assert!(text.len() > 512 * 1024, "{}", text.len());
+        assert_append_matches_parsed(&text, false);
+    }
+
+    /// The bad row is in the file. The declared block continues past EOF.
+    /// The float error is the one returned, and the short read does not panic.
+    #[test]
+    fn truncated_block_after_a_bad_value_reports_the_first_error() {
+        let n = 20_000u32;
+        let mut body = String::from(
+            "\n{\"con_spec_version\":3,\"con_spec_minor\":1,\"energy\":-42.5,\"frame_index\":0,\"pbc\":[true,true,false],\"units\":{\"length\":\"angstrom\",\"energy\":\"eV\"}}\n10.5 12.25 8.0\n90 90 90\n\n\n1\n",
+        );
+        use std::fmt::Write as _;
+        let _ = writeln!(body, "{n}");
+        body.push_str("63.546\nCu\nCoordinates of Component 1\n");
+        for i in 0..150 {
+            if i == 100 {
+                let _ = writeln!(body, "aaa 0.5 1.0 0 {i}");
+            } else {
+                let _ = writeln!(body, "{i}.125 0.5 1.0 0 {i}");
+            }
+        }
+        let mut text = " ".repeat((512 * 1024 + 1usize).saturating_sub(body.len()));
+        text.push_str(&body);
+        assert!(text.len() > 512 * 1024, "{}", text.len());
+        let parsed = match ConCorpus::prepare_trajectory_str_parsed(1, &text, 0, true) {
+            Err(err) => err.to_string(),
+            Ok(_) => panic!("parsed path accepted a truncated bad row"),
+        };
+        assert!(parsed.contains("aaa"), "{parsed}");
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        let appended = match db.append_trajectory_str(1, &text, "lattice") {
+            Err(err) => err.to_string(),
+            Ok(_) => panic!("append accepted a truncated bad row"),
+        };
+        assert!(appended.contains("aaa"), "{appended}");
+        assert!(!appended.contains("ended unexpectedly"), "{appended}");
     }
 }

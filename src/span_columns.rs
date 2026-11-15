@@ -737,8 +737,20 @@ fn check_vector_block(
     // rows spent the launch on the check: a million-atom block was slower in
     // those pieces than as one pass. The range list is dropped before the
     // cooked blob is encoded.
-    let ranges = take_row_ranges(cur, n, where_)?;
-    check_vector_rows(
+    //
+    // A short file still checks the lines that were present. The bad row is
+    // reported ahead of the missing tail.
+    let base = cur.bytes.as_ptr() as usize;
+    let mut ranges = Vec::with_capacity(n);
+    for _ in 0..n {
+        let Ok(line) = cur.take() else {
+            break;
+        };
+        let start = line.as_ptr() as usize - base;
+        ranges.push((start, start + line.len()));
+    }
+    let complete = ranges.len() == n;
+    let mag = check_vector_rows(
         cur.bytes,
         &ranges,
         spec,
@@ -746,7 +758,13 @@ fn check_vector_block(
         fmax,
         xyz_out,
         mask_out,
-    )
+    )?;
+    if !complete {
+        return Err(Error::Parse(format!(
+            "file ended unexpectedly while reading {where_}"
+        )));
+    }
+    Ok(mag)
 }
 
 fn take_row_ranges(cur: &mut Cur<'_>, n: usize, where_: &str) -> Result<Vec<(usize, usize)>> {
@@ -807,11 +825,15 @@ fn check_vector_rows(
                 check_vector_rows_seq(bytes, piece, spec, id_required, fmax, xyz_piece, mask_piece)
             }));
         }
+        // `joins` was pushed from `ranges.chunks`, which walks the file
+        // from the first row, and this loop joins in that same order.
         for join in joins {
             match join.join().expect("row check") {
                 Ok(Some(mag)) => maxes.push(mag),
                 Ok(None) => {}
-                Err(err) => error = Some(err),
+                Err(err) => {
+                    error.get_or_insert(err);
+                }
             }
         }
     });
