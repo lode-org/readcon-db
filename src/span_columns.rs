@@ -1000,9 +1000,9 @@ fn fixed_axes(tok: &[u8], spec: u32) -> Result<[u8; 3]> {
         };
     }
     if val > 7 {
+        let shown = String::from_utf8_lossy(tok);
         return Err(Error::Parse(format!(
-            "invalid fixed flag: {}",
-            String::from_utf8_lossy(tok)
+            "invalid fixed flag: column 4 flag {shown:?} is not a legal integer for spec {spec}"
         )));
     }
     Ok([
@@ -1019,7 +1019,7 @@ fn parse_flag(tok: &[u8], spec: u32) -> Result<()> {
 fn parse_id(tok: &[u8]) -> Result<()> {
     if tok.is_empty() || !tok.iter().all(|b| b.is_ascii_digit()) {
         return Err(Error::Parse(format!(
-            "invalid number format: invalid float: {}",
+            "invalid number format: invalid integer: {}",
             String::from_utf8_lossy(tok)
         )));
     }
@@ -1376,6 +1376,14 @@ mod tests {
             (Some("   "), "expected 3 values on line, found 0"),
             (Some("0.25 0 0 4"), "expected 3 values on line, found 4"),
             (Some("0.25 0 0 4 5 6"), "expected 3 values on line, found 6"),
+            (
+                Some("0.25 9 0"),
+                "invalid fixed flag: column 4 flag \"9\" is not a legal integer for spec 3",
+            ),
+            (
+                Some("0.25 0 zz"),
+                "invalid number format: invalid integer: zz",
+            ),
             (
                 None,
                 "file ended unexpectedly while reading energies section",
