@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-REMOTE_TIP = "origin/fix/ingest-species-count"
+REMOTE_BRANCH = "fix/ingest-species-count"
 
 LADDER_BYTES = {
     "paper40x8": 12480,
@@ -67,28 +67,34 @@ def measure_root() -> Path:
     return REPO
 
 
+def remote_branch_sha(root: Path, branch: str = REMOTE_BRANCH) -> str:
+    """Commit named by ``refs/heads/<branch>`` on origin.
+
+    A local ``origin/<branch>`` ref stays stale when ``remote.origin.fetch``
+    only covers main. ``ls-remote`` reads the remote ref itself.
+    """
+    ref = f"refs/heads/{branch}"
+    out = _git(root, "ls-remote", "origin", ref)
+    for line in out.splitlines():
+        sha, _sep, name = line.partition("\t")
+        if name == ref:
+            return sha
+    raise SystemExit(f"refusing to measure: origin has no {ref}")
+
+
 def require_tip() -> str:
     """Refuse unless HEAD is the remote branch tip and the tree is clean."""
     root = measure_root()
-    subprocess_fetch(root)
-    tip = _git(root, "rev-parse", REMOTE_TIP)
+    tip = remote_branch_sha(root)
     head = _git(root, "rev-parse", "HEAD")
     if head != tip:
         raise SystemExit(
             f"refusing to measure: HEAD {head} is not the remote branch tip {tip}"
         )
-    dirty = _git(root, "status", "--porcelain")
+    dirty = _git(root, "status", "--porcelain", "--untracked-files=all", "--ignored=no")
     if dirty.strip():
         raise SystemExit("refusing to measure: working tree is not clean")
     return head
-
-
-def subprocess_fetch(root: Path) -> None:
-    import subprocess
-
-    subprocess.check_call(
-        ["git", "fetch", "origin", "fix/ingest-species-count"], cwd=root
-    )
 
 
 def _git(root: Path, *args: str) -> str:

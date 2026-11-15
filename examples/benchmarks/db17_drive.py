@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
-REMOTE_TIP = "origin/fix/ingest-species-count"
+REMOTE_BRANCH = "fix/ingest-species-count"
 DB15 = "9e568240a2d734085da2c411be0977e604e12ed6"
 N = 12
 N_FRAMES = 64
@@ -93,18 +93,30 @@ def git(root: Path, *args: str) -> str:
     return subprocess.check_output(["git", *args], cwd=root, text=True).strip()
 
 
+def remote_branch_sha(root: Path, branch: str = REMOTE_BRANCH) -> str:
+    """Commit named by ``refs/heads/<branch>`` on origin.
+
+    A local ``origin/<branch>`` ref stays stale when ``remote.origin.fetch``
+    only covers main. ``ls-remote`` reads the remote ref itself.
+    """
+    ref = f"refs/heads/{branch}"
+    out = git(root, "ls-remote", "origin", ref)
+    for line in out.splitlines():
+        sha, _sep, name = line.partition("\t")
+        if name == ref:
+            return sha
+    raise SystemExit(f"refusing to measure: origin has no {ref}")
+
+
 def require_tip(root: Path) -> str:
     """Refuse unless HEAD is the remote branch tip and the tree is clean."""
-    subprocess.check_call(
-        ["git", "fetch", "origin", "fix/ingest-species-count"], cwd=root
-    )
-    tip = git(root, "rev-parse", REMOTE_TIP)
+    tip = remote_branch_sha(root)
     head = git(root, "rev-parse", "HEAD")
     if head != tip:
         raise SystemExit(
             f"refusing to measure: HEAD {head} is not the remote branch tip {tip}"
         )
-    dirty = git(root, "status", "--porcelain")
+    dirty = git(root, "status", "--porcelain", "--untracked-files=all", "--ignored=no")
     if dirty.strip():
         raise SystemExit("refusing to measure: working tree is not clean")
     return head
