@@ -992,49 +992,6 @@ fn skip_lines(bytes: &[u8], i: &mut usize, n: usize) -> usize {
     skipped
 }
 
-/// Project many frames at once. One frame stays on the calling thread.
-fn project_spans(texts: &[&str]) -> Result<Vec<(crate::span_columns::SpanFacts, Vec<u8>)>> {
-    let bytes: usize = texts.iter().map(|text| text.len()).sum();
-    // Thirty-two tiny frames are enough work to hide a spawn. A handful of
-    // 100k-atom frames are too: each one is several mebibytes, and a serial
-    // walk of those was the ingest that lost to ASE.
-    let parallel = texts.len() >= 32 || (texts.len() > 1 && bytes >= 1024 * 1024);
-    if !parallel {
-        return texts
-            .iter()
-            .map(|text| crate::span_columns::project_frame_cooked(text.as_bytes()))
-            .collect();
-    }
-    let threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        .clamp(1, 8);
-    let chunk = texts.len().div_ceil(threads).max(1);
-    let mut parts = Vec::new();
-    std::thread::scope(|scope| {
-        let mut joins = Vec::new();
-        for piece in texts.chunks(chunk) {
-            joins.push(scope.spawn(
-                move || -> Result<Vec<(crate::span_columns::SpanFacts, Vec<u8>)>> {
-                    let mut out = Vec::with_capacity(piece.len());
-                    for text in piece {
-                        out.push(crate::span_columns::project_frame_cooked(text.as_bytes())?);
-                    }
-                    Ok(out)
-                },
-            ));
-        }
-        for join in joins {
-            parts.push(join.join().expect("frame projection"));
-        }
-    });
-    let mut all = Vec::with_capacity(texts.len());
-    for part in parts {
-        all.extend(part?);
-    }
-    Ok(all)
-}
-
 /// One sequential read of a corpus under 1 MiB, into a buffer that is dropped.
 ///
 /// This runs before `Env::open`. Opening the environment first faults the
@@ -2053,10 +2010,9 @@ impl ConCorpus {
         file_contents: &str,
         compress: bool,
     ) -> Result<Vec<PreparedIndexPuts>> {
-        // A 10^4-atom frame is still cheaper to parse outright. Per-atom
-        // objects dominate by 10^5 atoms (about 5 MiB of CON text).
-        // The species-count guard runs before either walk: the span walk
-        // calls the same `with_capacity` on line 7.
+        // One readcon-core parse. A second span walk was slower than that
+        // parse, and confirming the span with the parser scanned the text
+        // twice.
         Self::prepare_trajectory_str_at(traj_id, file_contents, 0, compress)
     }
 
@@ -2068,114 +2024,10 @@ impl ConCorpus {
         compress: bool,
     ) -> Result<Vec<PreparedIndexPuts>> {
         Self::species_counts_fit(file_contents)?;
-        if file_contents.len() <= 512 * 1024 {
-            return Self::prepare_trajectory_str_parsed(
-                traj_id,
-                file_contents,
-                start_idx,
-                compress,
-            );
-        }
-        Self::prepare_trajectory_str_span(traj_id, file_contents, start_idx, compress)
+        Self::prepare_trajectory_str_parsed(traj_id, file_contents, start_idx, compress)
     }
 
-    /// Index each stored span without building a per-atom frame.
-    fn prepare_trajectory_str_span(
-        traj_id: TrajId,
-        file_contents: &str,
-        start_idx: u32,
-        compress: bool,
-    ) -> Result<Vec<PreparedIndexPuts>> {
-        let spans = readcon_core::index_proj::frame_byte_spans_skip(file_contents)
-            .map_err(|e| Error::Parse(e.to_string()))?;
-        Self::prepare_sliced(traj_id, file_contents, &spans, start_idx, compress)
-    }
-
-    /// [`Self::prepare_trajectory_str_span`] when the span table is already known.
-    fn prepare_sliced(
-        traj_id: TrajId,
-        file_contents: &str,
-        spans: &[readcon_core::index_proj::FrameByteSpan],
-        start_idx: u32,
-        compress: bool,
-    ) -> Result<Vec<PreparedIndexPuts>> {
-        let mut texts = Vec::with_capacity(spans.len());
-        for span in spans {
-            texts.push(
-                span.slice(file_contents)
-                    .ok_or_else(|| Error::Parse("frame span is not valid UTF-8".into()))?,
-            );
-        }
-        let mut out = Vec::with_capacity(texts.len());
-        let heavy = texts.iter().any(|text| text.len() >= 256 * 1024);
-        // One frame: compress the CON text while the coordinate walk fills
-        // the RCSO blob. Both only read the span. Several large frames are
-        // projected together below, and the group compressor is the only
-        // zstd pass. Compressing each frame first made `group_prepared`
-        // decompress that work and compress it again.
-        if texts.len() == 1 || (texts.len() < 32 && !heavy) {
-            for (i, text) in texts.iter().enumerate() {
-                let fk = FrameKey {
-                    traj_id,
-                    frame_idx: start_idx
-                        + u32::try_from(i).map_err(|_| Error::Parse("too many frames".into()))?,
-                };
-                let (facts, cooked, stored) = if compress && text.len() >= 256 * 1024 {
-                    // Compress while the coordinate walk fills column scratch.
-                    // The RCSO blob is encoded before that thread is joined, so
-                    // the compressor and the blob are both in memory while the
-                    // copy overlaps the tail of compression.
-                    std::thread::scope(|scope| {
-                        let job = scope.spawn(|| crate::frame_codec::store_frame(text, true));
-                        let scanned =
-                            crate::span_columns::project_frame_parts(text.as_bytes(), true);
-                        let cooked = scanned.and_then(|(facts, acc)| {
-                            let cooked = crate::span_columns::finish_cook(
-                                &facts,
-                                acc.unwrap_or_else(crate::span_columns::CookAcc::empty),
-                            )?;
-                            Ok((facts, cooked))
-                        });
-                        let stored = job.join().expect("frame compression");
-                        cooked.and_then(|(facts, blob)| {
-                            stored.map(|bytes| (facts, blob, Some(bytes)))
-                        })
-                    })?
-                } else {
-                    let (facts, cooked) =
-                        crate::span_columns::project_frame_cooked(text.as_bytes())?;
-                    (facts, cooked, None)
-                };
-                out.push(Self::build_index_from_facts(
-                    fk, &facts, text, compress, cooked, stored,
-                )?);
-            }
-            return Ok(out);
-        }
-        let projected = project_spans(&texts)?;
-        // More than one frame is packed by `group_prepared`. Leave the CON
-        // text uncompressed until that single pass.
-        let compress_now = compress && texts.len() < 2;
-        for (i, (text, (facts, cooked))) in texts.iter().zip(projected).enumerate() {
-            let fk = FrameKey {
-                traj_id,
-                frame_idx: start_idx
-                    + u32::try_from(i).map_err(|_| Error::Parse("too many frames".into()))?,
-            };
-            out.push(Self::build_index_from_facts(
-                fk,
-                &facts,
-                text,
-                compress_now,
-                cooked,
-                None,
-            )?);
-        }
-        Ok(out)
-    }
-
-    /// Full parse. Used for small texts, where building the frame is cheaper
-    /// than a separate span walk, and it applies every parser rejection.
+    /// One readcon-core parse of every frame in the text.
     fn prepare_trajectory_str_parsed(
         traj_id: TrajId,
         file_contents: &str,
@@ -2712,27 +2564,10 @@ impl ConCorpus {
             // survives until the single commit. A failed insert aborts that
             // transaction, so no frame is visible.
             //
-            // A single large frame used to scan the species counts and the
-            // span table here, then `prepare_trajectory_str` scanned both
-            // again before the coordinate walk. The batch decision is the
-            // only reason to look at the spans first, and that result is
-            // reused.
+            // Each frame is one readcon-core parse. A span table, then a
+            // second walk, then a confirming parse, read the text three times.
             if file_contents.len() > 512 * 1024 {
-                Self::species_counts_fit(file_contents)?;
-                let spans = readcon_core::index_proj::frame_byte_spans_skip(file_contents)
-                    .map_err(|e| Error::Parse(e.to_string()))?;
-                if spans.len() > crate::frame_codec::GROUP_LEN as usize {
-                    return self.append_spans_batched(traj_id, file_contents, &spans, source);
-                }
-                let mut prepared =
-                    Self::prepare_sliced(traj_id, file_contents, &spans, 0, self.compress_on())?;
-                return self.commit_prepared(
-                    traj_id,
-                    &mut prepared,
-                    source,
-                    false,
-                    self.compress_on(),
-                );
+                return self.append_parsed_groups(traj_id, file_contents, source);
             }
             // Prepare outside exclusive write section (parallel writers can parse concurrently).
             let mut prepared =
@@ -2745,54 +2580,88 @@ impl ConCorpus {
         result
     }
 
-    /// Cook and put [`GROUP_LEN`] frames, drop that scratch, then the next group.
+    /// Cook and put [`GROUP_LEN`] frames from one parser pass, drop that
+    /// scratch, then the next group.
     ///
     /// One write transaction covers the trajectory. Dropping `prepared` frees
     /// the cooked blob and the decompressed group text. The bytes just put
     /// live in the transaction's dirty pages until commit.
-    fn append_spans_batched(
+    fn append_parsed_groups(
         &self,
         traj_id: TrajId,
         file_contents: &str,
-        spans: &[readcon_core::index_proj::FrameByteSpan],
         source: String,
     ) -> Result<u32> {
+        Self::species_counts_fit(file_contents)?;
         let compress = self.compress_on();
         let batch = crate::frame_codec::GROUP_LEN as usize;
-        let n_frames =
-            u32::try_from(spans.len()).map_err(|_| Error::Parse("too many frames".into()))?;
-        let mut slots = Vec::with_capacity(spans.len());
-        // Cooked columns sit beside the text, so reserve about twice the file.
+        let mut iter = ConFrameIterator::new(file_contents);
+        let mut first: Vec<(ConFrame, String)> = Vec::with_capacity(batch);
+        let mut overflow = None;
+        loop {
+            match iter.next_with_raw_span(file_contents) {
+                None => break,
+                Some(Err(err)) => return Err(Error::Parse(err.to_string())),
+                Some(Ok((frame, blob))) => {
+                    if first.len() == batch {
+                        overflow = Some((frame, blob.to_owned()));
+                        break;
+                    }
+                    first.push((frame, blob.to_owned()));
+                }
+            }
+        }
+        // One group uses the same commit as a short file, so `data.mdb`
+        // matches that path. A longer trajectory is put one group at a time.
+        let Some(overflow) = overflow else {
+            let mut prepared = Vec::with_capacity(first.len());
+            for (index, (frame, text)) in first.into_iter().enumerate() {
+                let fk = FrameKey {
+                    traj_id,
+                    frame_idx: u32::try_from(index)
+                        .map_err(|_| Error::Parse("too many frames".into()))?,
+                };
+                prepared.push(Self::build_index_puts(fk, &frame, text, compress)?);
+            }
+            return self.commit_prepared(traj_id, &mut prepared, source, false, compress);
+        };
         let input_bytes = file_contents.len().saturating_mul(2);
+        let mut queued = vec![first];
+        let mut carry = Some(overflow);
         self.with_write(input_bytes, |wtxn| {
             let mut next = 0u32;
             let mut groups = 0u32;
-            for chunk in spans.chunks(batch) {
-                let mut prepared = Vec::with_capacity(chunk.len());
-                let mut texts = Vec::with_capacity(chunk.len());
-                for span in chunk {
-                    texts.push(
-                        span.slice(file_contents)
-                            .ok_or_else(|| Error::Parse("frame span is not valid UTF-8".into()))?,
-                    );
-                }
-                let heavy = texts.iter().any(|text| text.len() >= 256 * 1024);
-                let projected = project_spans(&texts)?;
-                // A large group is compressed once, in `group_prepared`.
-                let compress_now = compress && !(heavy && texts.len() > 1);
-                for (offset, (text, (facts, cooked))) in texts.iter().zip(projected).enumerate() {
+            let mut slots = Vec::new();
+            loop {
+                let frames = if let Some(frames) = queued.pop() {
+                    frames
+                } else {
+                    let mut frames = Vec::with_capacity(batch);
+                    if let Some(seed) = carry.take() {
+                        frames.push(seed);
+                    }
+                    while frames.len() < batch {
+                        match iter.next_with_raw_span(file_contents) {
+                            None => break,
+                            Some(Err(err)) => return Err(Error::Parse(err.to_string())),
+                            Some(Ok((frame, blob))) => frames.push((frame, blob.to_owned())),
+                        }
+                    }
+                    if frames.is_empty() {
+                        break;
+                    }
+                    frames
+                };
+                let count = frames.len();
+                let heavy = frames.iter().any(|(_, text)| text.len() >= 256 * 1024);
+                let compress_now = compress && !(heavy && count > 1);
+                let mut prepared = Vec::with_capacity(count);
+                for (offset, (frame, text)) in frames.into_iter().enumerate() {
                     let frame_idx = next
                         + u32::try_from(offset)
                             .map_err(|_| Error::Parse("too many frames".into()))?;
                     let fk = FrameKey { traj_id, frame_idx };
-                    prepared.push(Self::build_index_from_facts(
-                        fk,
-                        &facts,
-                        text,
-                        compress_now,
-                        cooked,
-                        None,
-                    )?);
+                    prepared.push(Self::build_index_puts(fk, &frame, text, compress_now)?);
                 }
                 Self::pack_small_cooked(&mut prepared);
                 if compress {
@@ -2807,9 +2676,9 @@ impl ConCorpus {
                 if fail_injected_group(groups) {
                     return Err(Error::Message("injected insert failure".into()));
                 }
-                next += u32::try_from(chunk.len())
-                    .map_err(|_| Error::Parse("too many frames".into()))?;
+                next += u32::try_from(count).map_err(|_| Error::Parse("too many frames".into()))?;
             }
+            let n_frames = next;
             let tid_key = traj_id.to_be_bytes();
             if let Some(existing) = self.traj_meta.get(wtxn, &tid_key[..])? {
                 let meta: TrajMeta = serde_json::from_str(existing)?;
@@ -3477,8 +3346,7 @@ impl ConCorpus {
     ///
     /// An uncompressed span is parsed from the LMDB mapping. A zstd value
     /// is decompressed once. A 64-frame group is decompressed once and each
-    /// member is parsed from that buffer. The numeric tokens use
-    /// readcon-core's fast-float kernel. No per-atom object is built.
+    /// member is parsed from that buffer. Columns are the readcon-core parse.
     pub fn read_columns(&self, traj_id: TrajId) -> Result<crate::span_columns::Columns> {
         let n = self
             .traj_meta(traj_id)?
@@ -6009,7 +5877,7 @@ x
             "tiny_multi_cuh2.con",
         ] {
             let text = std::fs::read_to_string(fixture(name)).unwrap();
-            let prepared = ConCorpus::prepare_trajectory_str_span(3, &text, 0, false).unwrap();
+            let prepared = ConCorpus::prepare_trajectory_str_parsed(3, &text, 0, false).unwrap();
             let mut it = ConFrameIterator::new(&text);
             for puts in &prepared {
                 let (frame, span) = it
@@ -8906,5 +8774,106 @@ x
             parsed.contains("file ended unexpectedly while reading forces section"),
             "{parsed}"
         );
+    }
+
+    /// Full iterator walk. The first frame is not enough: a later error is
+    /// the result, and one `Ok` frame has to be the whole slice.
+    fn walk_message(text: &str) -> String {
+        let mut iter = ConFrameIterator::new(text);
+        let mut frames = 0usize;
+        loop {
+            match iter.next() {
+                None => break,
+                Some(Err(err)) => return err.to_string(),
+                Some(Ok(_)) => frames += 1,
+            }
+        }
+        if frames <= 1 {
+            "accepted".into()
+        } else {
+            "CON validation failed: frame span contains more than one frame".into()
+        }
+    }
+
+    fn assert_large_matches_walk(body: &str) -> String {
+        let text = pad_past_span_gate(body);
+        assert!(text.len() > 512 * 1024, "{}", text.len());
+        let (appended, parsed) = span_and_parser(&text);
+        let walked = walk_message(&text);
+        assert_eq!(appended, parsed, "large and small paths");
+        assert!(
+            parsed.contains(&walked),
+            "stored message {parsed} does not contain the parser walk {walked}"
+        );
+        assert_ne!(
+            appended, "accepted",
+            "large path accepted a span the parser rejects"
+        );
+        walked
+    }
+
+    #[test]
+    fn trailing_blocks_on_a_large_frame_match_the_parser() {
+        let forces = "\n{\"con_spec_version\":3,\"con_spec_minor\":1,\"units\":{\"length\":\"angstrom\",\"energy\":\"eV\"},\"sections\":[\"forces\"]}\n10.5 12.25 8.0\n90 90 90\n\n\n1\n1\n63.546\nCu\nCoordinates of Component 1\n0.1 0.2 0.3 0 0\n\nCu\nForces of Component 1\n0.0 0.1 0.2 0 0\n";
+        let energies =
+            assert_large_matches_walk(&format!("{forces}\nCu\nEnergies of Component 1\n0.2 0 0\n"));
+        assert!(energies.contains("invalid float: Energies"), "{energies}");
+        let spreads = assert_large_matches_walk(&format!(
+            "{forces}\nCu\nSpreads of Component 1\n0.1 0.2 0.3 0 0\n"
+        ));
+        assert!(spreads.contains("invalid float: Spreads"), "{spreads}");
+        let empty_forces = assert_large_matches_walk(
+            "\n{\"con_spec_version\":3,\"con_spec_minor\":1,\"units\":{\"length\":\"angstrom\",\"energy\":\"eV\"},\"sections\":[]}\n10.5 12.25 8.0\n90 90 90\n\n\n1\n1\n63.546\nCu\nCoordinates of Component 1\n0.1 0.2 0.3 0 0\n\nCu\nForces of Component 1\n0.0 0.1 0.2 0 0\n",
+        );
+        assert!(
+            empty_forces.contains("invalid float: Forces"),
+            "{empty_forces}"
+        );
+        let empty_vel_time = assert_large_matches_walk(
+            "\n{\"con_spec_version\":3,\"con_spec_minor\":1,\"units\":{\"length\":\"angstrom\",\"energy\":\"eV\",\"time\":\"ps\"},\"sections\":[]}\n10.5 12.25 8.0\n90 90 90\n\n\n1\n1\n63.546\nCu\nCoordinates of Component 1\n0.1 0.2 0.3 0 0\n\nCu\nVelocities of Component 1\n0.1 0.0 0.0 0 0\n",
+        );
+        assert!(
+            empty_vel_time.contains("invalid float: Velocities"),
+            "{empty_vel_time}"
+        );
+        let legacy_order = assert_large_matches_walk(
+            "\n{\"con_spec_version\":3,\"con_spec_minor\":1,\"units\":{\"length\":\"angstrom\",\"energy\":\"eV\",\"time\":\"ps\"}}\n10.5 12.25 8.0\n90 90 90\n\n\n1\n1\n63.546\nCu\nCoordinates of Component 1\n0.1 0.2 0.3 0 0\n\nCu\nVelocities of Component 1\n0.1 0.0 0.0 0 0\n\nCu\nForces of Component 1\n0.0 0.1 0.2 0 0\n",
+        );
+        assert!(
+            legacy_order.contains("invalid float: Forces"),
+            "{legacy_order}"
+        );
+        let empty_vel = assert_large_matches_walk(
+            "\n{\"con_spec_version\":3,\"con_spec_minor\":1,\"units\":{\"length\":\"angstrom\",\"energy\":\"eV\"},\"sections\":[]}\n10.5 12.25 8.0\n90 90 90\n\n\n1\n1\n63.546\nCu\nCoordinates of Component 1\n0.1 0.2 0.3 0 0\n\nCu\nVelocities of Component 1\n0.1 0.0 0.0 0 0\n",
+        );
+        assert!(
+            empty_vel.contains("invalid float: Velocities"),
+            "{empty_vel}"
+        );
+        assert!(!empty_vel.contains("units.time"), "{empty_vel}");
+    }
+
+    #[test]
+    fn label_case_and_duplicate_sections_store_the_parser_columns() {
+        let case = "\n{\"con_spec_version\":3,\"con_spec_minor\":1,\"units\":{\"length\":\"angstrom\",\"energy\":\"eV\",\"time\":\"ps\"},\"sections\":[\"forces\",\"velocities\"]}\n10.5 12.25 8.0\n90 90 90\n\n\n1\n1\n63.546\nCu\nCoordinates of Component 1\n0.1 0.2 0.3 0 0\n\nCu\nFORCES of Component 1\n1.5 2.5 3.5 0 0\n\nCu\nvelocities of Component 1\n4.5 5.5 6.5 0 0\n";
+        let duplicate = "\n{\"con_spec_version\":3,\"con_spec_minor\":1,\"units\":{\"length\":\"angstrom\",\"energy\":\"eV\"},\"sections\":[\"forces\",\"forces\"]}\n10.5 12.25 8.0\n90 90 90\n\n\n1\n1\n63.546\nCu\nCoordinates of Component 1\n0.1 0.2 0.3 0 0\n\nCu\nForces of Component 1\n1.0 0.0 0.0 0 0\n\nCu\nForces of Component 1\n4.0 5.0 6.0 0 0\n";
+        for body in [case, duplicate] {
+            let text = pad_past_span_gate(body);
+            assert!(text.len() > 512 * 1024);
+            assert_append_matches_parsed(&text, false);
+            let frame = ConFrameIterator::new(&text).next().unwrap().unwrap();
+            let cols = crate::span_columns::scan_bytes(text.as_bytes()).unwrap();
+            let forces = frame.forces.f64_slice().unwrap();
+            assert_eq!(cols.forces.as_slice(), forces);
+            let (_facts, cooked) =
+                crate::span_columns::project_frame_cooked(text.as_bytes()).unwrap();
+            let parsed = crate::cooked_soa::CookedSoa::encode_frame(&frame).unwrap();
+            assert_eq!(cooked, parsed);
+        }
+        let dup = ConFrameIterator::new(duplicate).next().unwrap().unwrap();
+        assert_eq!(dup.forces.f64_slice().unwrap(), &[4.0, 5.0, 6.0][..]);
+        let cased = ConFrameIterator::new(case).next().unwrap().unwrap();
+        assert_eq!(cased.forces.f64_slice().unwrap(), &[1.5, 2.5, 3.5][..]);
+        assert_eq!(cased.velocities.f64_slice().unwrap(), &[4.5, 5.5, 6.5][..]);
     }
 }

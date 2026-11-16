@@ -68,8 +68,11 @@ impl CookedSoa {
         }
         let natoms = n as u32;
         let mut flags = 0u32;
-        let has_f = frame.atom_data.iter().any(|a| a.force().is_some());
-        let has_v = frame.atom_data.iter().any(|a| a.velocity().is_some());
+        // The frame SoA is the section. `has_forces` / `has_velocities`
+        // read that length. Scanning every atom for a missing section
+        // walked the tail of a million-atom frame twice.
+        let has_f = frame.has_forces();
+        let has_v = frame.has_velocities();
         if has_f {
             flags |= FLAG_FORCES;
         }
@@ -88,48 +91,22 @@ impl CookedSoa {
         out.extend_from_slice(&[0u8; 3]);
         out.extend_from_slice(&0u32.to_le_bytes());
 
-        push_coord_block(
-            &mut out,
-            frame.positions.f64_slice(),
-            &frame.atom_data,
-            crate::atom_coord::atom_xyz,
-        )?;
-        if has_f {
-            push_coord_block(&mut out, frame.forces.f64_slice(), &frame.atom_data, |a| {
-                a.force().unwrap_or([0.0; 3])
-            })?;
+        if frame.masses.len() != n {
+            return Err(Error::Message("cooked masses length".into()));
         }
-        if has_v {
-            push_coord_block(
-                &mut out,
-                frame.velocities.f64_slice(),
-                &frame.atom_data,
-                |a| a.velocity().unwrap_or([0.0; 3]),
-            )?;
-        }
+        copy_coordinates(&mut out, frame, has_f, has_v)?;
+        let uniform_mass = uniform_mass(frame);
+        let any_fixed = any_atom_fixed(&frame.atom_data);
         // These blocks sit after the numeric columns. A reader that does not
         // know the flags still decodes positions, forces, and velocities.
         flags |= FLAG_MASSES | FLAG_NUMBERS | FLAG_CONSTRAINTS | FLAG_CELL | FLAG_META;
         out[12..16].copy_from_slice(&flags.to_le_bytes());
-        if frame.masses.len() != n {
-            return Err(Error::Message("cooked masses length".into()));
-        }
-        let mass_slice = frame.masses.f64_slice();
-        // An empty frame has no mass to sample. One shared mass is still
-        // the uniform encoding, with the value 0.
-        let uniform_mass = if n == 0 {
-            Some(0.0)
-        } else {
-            mass_slice
-                .filter(|xs| xs.len() == n && xs.iter().all(|m| m.to_bits() == xs[0].to_bits()))
-                .map(|xs| xs[0])
-        };
         if let Some(mass) = uniform_mass {
             out.push(1);
             push_f64s(&mut out, &[mass]);
         } else {
             out.push(0);
-            if let Some(xs) = mass_slice {
+            if let Some(xs) = frame.masses.f64_slice() {
                 push_f64s(&mut out, xs);
             } else {
                 for i in 0..n {
@@ -138,8 +115,8 @@ impl CookedSoa {
             }
         }
         // Species runs follow the header's type groups, so this does not
-        // walk every atom. Constraints are a dense mask only when one axis
-        // is fixed; the common case stores a single zero byte.
+        // walk every atom. Constraints are a dense mask only when one
+        // axis is fixed; the common case stores a single zero byte.
         let mut runs: Vec<(&str, u32)> = Vec::new();
         let mut offset = 0usize;
         if frame.header.natms_per_type.is_empty() {
@@ -163,10 +140,6 @@ impl CookedSoa {
                 offset += count;
             }
         }
-        let any_fixed = frame
-            .atom_data
-            .iter()
-            .any(|a| a.fixed() != [false, false, false]);
         if any_fixed {
             out.push(1);
             for a in &frame.atom_data {
@@ -1127,19 +1100,63 @@ fn push_f64s(out: &mut Vec<u8>, xs: &[f64]) {
     if cfg!(target_endian = "little") {
         let nbytes = xs.len() * 8;
         let old = out.len();
-        out.resize(old + nbytes, 0);
+        out.reserve(nbytes);
+        // SAFETY: `nbytes` bytes are copied from `xs` before any read.
+        // Zeroing that tail first wrote the column twice.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 xs.as_ptr().cast::<u8>(),
                 out.as_mut_ptr().add(old),
                 nbytes,
             );
+            out.set_len(old + nbytes);
         }
     } else {
         for x in xs {
             out.extend_from_slice(&x.to_le_bytes());
         }
     }
+}
+
+fn copy_coordinates(out: &mut Vec<u8>, frame: &ConFrame, has_f: bool, has_v: bool) -> Result<()> {
+    push_coord_block(
+        out,
+        frame.positions.f64_slice(),
+        &frame.atom_data,
+        crate::atom_coord::atom_xyz,
+    )?;
+    if has_f {
+        push_coord_block(out, frame.forces.f64_slice(), &frame.atom_data, |atom| {
+            atom.force().unwrap_or([0.0; 3])
+        })?;
+    }
+    if has_v {
+        push_coord_block(
+            out,
+            frame.velocities.f64_slice(),
+            &frame.atom_data,
+            |atom| atom.velocity().unwrap_or([0.0; 3]),
+        )?;
+    }
+    Ok(())
+}
+
+fn any_atom_fixed(atoms: &[readcon_core::types::AtomDatum]) -> bool {
+    atoms.iter().any(|atom| atom.is_fixed())
+}
+
+fn uniform_mass(frame: &ConFrame) -> Option<f64> {
+    let n = frame.atom_data.len();
+    if n == 0 {
+        return Some(0.0);
+    }
+    // An empty frame has no mass to sample. One shared mass is still
+    // the uniform encoding, with the value 0.
+    frame
+        .masses
+        .f64_slice()
+        .filter(|xs| xs.len() == n && xs.iter().all(|mass| mass.to_bits() == xs[0].to_bits()))
+        .map(|xs| xs[0])
 }
 
 fn push_coord_block(

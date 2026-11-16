@@ -7,9 +7,11 @@ import time
 from pathlib import Path
 
 import numpy as np
+import pytest
 
+pytest.importorskip("readcon")
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "examples" / "benchmarks"))
-import fair_ase_protocol as fair
+import fair_ase_protocol as fair  # noqa: E402
 
 
 def test_cold_read_does_not_collect_inside_the_timer(tmp_path, monkeypatch):

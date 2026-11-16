@@ -2,9 +2,15 @@
 
 from pathlib import Path
 
-import h5py
 import numpy as np
-from readcon_db import ConCorpus, canonicalize_unit, unit_conversion_factor
+import pytest
+
+h5py = pytest.importorskip("h5py")
+from readcon_db import (  # noqa: E402
+    ConCorpus,
+    canonicalize_unit,
+    unit_conversion_factor,
+)
 
 FIXTURE = Path(__file__).resolve().parents[2] / "resources" / "test"
 NATURAL_TIME = "(amu*angstrom^2/eV)^0.5"
@@ -325,6 +331,7 @@ def test_pack_frames_unpack_batch(tmp_path):
 
 
 def test_export_h5md_mdanalysis_reader_with_velocity(tmp_path):
+    pytest.importorskip("MDAnalysis")
     from MDAnalysis.coordinates.H5MD import H5MDReader
 
     db = ConCorpus(str(tmp_path / "corpus"))
@@ -353,6 +360,7 @@ def test_export_h5md_mdanalysis_reader_with_velocity(tmp_path):
 
 
 def test_export_h5md_mdanalysis_reader(tmp_path):
+    pytest.importorskip("MDAnalysis")
     from MDAnalysis.coordinates.H5MD import H5MDReader
 
     db = ConCorpus(str(tmp_path / "corpus"))
@@ -370,6 +378,7 @@ def test_export_h5md_mdanalysis_reader(tmp_path):
 
 
 def test_export_h5md_mdanalysis_reader_with_forces(tmp_path):
+    pytest.importorskip("MDAnalysis")
     from MDAnalysis.coordinates.H5MD import H5MDReader
 
     db = ConCorpus(str(tmp_path / "corpus"))
@@ -557,6 +566,7 @@ def test_export_h5md_velocity_time_unit_override_fs(tmp_path):
 
 def test_eon36_convel_mdanalysis_velocity_unit_and_ke(tmp_path):
     """KE from H5MD velocities matches eOn 3.6 printed KE within 6 decimals."""
+    pytest.importorskip("MDAnalysis")
     from MDAnalysis.coordinates.H5MD import H5MDReader
 
     printed = 1.5004770201120763e-2

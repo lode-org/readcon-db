@@ -3,8 +3,10 @@
 from pathlib import Path
 
 import numpy as np
-import readcon
-from readcon_db import ConCorpus
+import pytest
+
+readcon = pytest.importorskip("readcon")
+from readcon_db import ConCorpus  # noqa: E402
 
 FIXTURE = Path(__file__).resolve().parents[2] / "resources" / "test"
 

@@ -1,8 +1,8 @@
-//! Column scan of a CON span.
+//! Columns of a CON span.
 //!
-//! The bytes are the stored frame (or a decompressed group member). Numeric
-//! tokens go through the same fast-float kernel the core column reader uses, so the bits match
-//! a frame parse. No per-atom object is built.
+//! The bytes are the stored frame (or a decompressed group member). One
+//! readcon-core parse fills the columns, so a label, a duplicate section,
+//! and a declared-empty `sections` array match that parse.
 
 use crate::error::{Error, Result};
 
@@ -57,132 +57,8 @@ impl Columns {
     }
 }
 
-struct Cur<'a> {
-    bytes: &'a [u8],
-    i: usize,
-}
-
-impl<'a> Cur<'a> {
-    fn rest_blank(&self) -> bool {
-        self.bytes[self.i..].iter().all(|b| b.is_ascii_whitespace())
-    }
-
-    fn peek(&self) -> Option<&'a [u8]> {
-        line_at(self.bytes, self.i)
-    }
-
-    fn take(&mut self) -> Result<&'a [u8]> {
-        let (line, next) = split_line(self.bytes, self.i)
-            .ok_or_else(|| Error::Parse("truncated CON frame".into()))?;
-        self.i = next;
-        Ok(line)
-    }
-}
-
-fn line_at(bytes: &[u8], i: usize) -> Option<&[u8]> {
-    split_line(bytes, i).map(|(line, _)| line)
-}
-
-fn split_line(bytes: &[u8], i: usize) -> Option<(&[u8], usize)> {
-    if i >= bytes.len() {
-        return None;
-    }
-    let rest = &bytes[i..];
-    match rest.iter().position(|b| *b == b'\n') {
-        Some(n) => {
-            let mut line = &rest[..n];
-            if line.last() == Some(&b'\r') {
-                line = &line[..line.len() - 1];
-            }
-            Some((line, i + n + 1))
-        }
-        None => {
-            let mut line = rest;
-            if line.last() == Some(&b'\r') {
-                line = &line[..line.len() - 1];
-            }
-            Some((line, bytes.len()))
-        }
-    }
-}
-
-fn is_blank(line: &[u8]) -> bool {
-    line.iter().all(|b| b.is_ascii_whitespace())
-}
-
 fn as_str(line: &[u8]) -> Result<&str> {
     std::str::from_utf8(line).map_err(|_| Error::Parse("CON line is not UTF-8".into()))
-}
-
-fn xyz_prefix(line: &[u8]) -> Result<[f64; 3]> {
-    // Same kernel as `parse_line_of_range_f64_stack`: fast-float2 on the
-    // raw bytes, stopping at whitespace. Trailing flag and id are ignored.
-    let mut i = 0usize;
-    let mut out = [0.0f64; 3];
-    for slot in &mut out {
-        while i < line.len() && line[i].is_ascii_whitespace() {
-            i += 1;
-        }
-        if i >= line.len() {
-            return Err(Error::Parse("coordinate row needs three floats".into()));
-        }
-        let (val, consumed) = fast_float2::parse_partial::<f64, _>(&line[i..])
-            .map_err(|_| Error::Parse("invalid float".into()))?;
-        let next = i + consumed;
-        if next < line.len() && !line[next].is_ascii_whitespace() {
-            return Err(Error::Parse("invalid float".into()));
-        }
-        if !val.is_finite() {
-            return Err(Error::Parse("non-finite coordinate".into()));
-        }
-        *slot = val;
-        i = next;
-    }
-    Ok(out)
-}
-
-/// Header lines from the byte offset, in the order [`parse_frame_header`] reads them.
-struct HeaderLines<'a> {
-    bytes: &'a [u8],
-    i: usize,
-    utf8_bad: bool,
-}
-
-impl<'a> Iterator for HeaderLines<'a> {
-    type Item = &'a str;
-
-    fn next(&mut self) -> Option<&'a str> {
-        if self.utf8_bad {
-            return None;
-        }
-        let (line, next) = split_line(self.bytes, self.i)?;
-        match std::str::from_utf8(line) {
-            Ok(text) => {
-                self.i = next;
-                Some(text)
-            }
-            Err(_) => {
-                self.utf8_bad = true;
-                None
-            }
-        }
-    }
-}
-
-/// The core header parser owns spec, units, and count checks.
-fn read_header(cur: &mut Cur<'_>) -> Result<readcon_core::types::FrameHeader> {
-    let mut lines = HeaderLines {
-        bytes: cur.bytes,
-        i: cur.i,
-        utf8_bad: false,
-    };
-    let header = readcon_core::parser::parse_frame_header(&mut lines);
-    if lines.utf8_bad {
-        return Err(Error::Parse("CON line is not UTF-8".into()));
-    }
-    let header = header.map_err(|err| Error::Parse(err.to_string()))?;
-    cur.i = lines.i;
-    Ok(header)
 }
 
 fn meta_of(line: &[u8], cols: &mut Columns) -> Result<()> {
@@ -231,98 +107,93 @@ fn meta_of(line: &[u8], cols: &mut Columns) -> Result<()> {
 }
 
 /// Append every frame in `bytes` to `cols`.
+///
+/// Columns come from one readcon-core parse of the whole buffer. A second
+/// frame that the parser rejects is not dropped, and a declared section is
+/// stored the way that parse stored it.
 pub fn append_span(cols: &mut Columns, bytes: &[u8]) -> Result<()> {
-    let mut cur = Cur { bytes, i: 0 };
-    while cur.i < bytes.len() && !cur.rest_blank() {
-        parse_frame(&mut cur, cols)?;
+    let text =
+        std::str::from_utf8(bytes).map_err(|_| Error::Parse("CON line is not UTF-8".into()))?;
+    for item in readcon_core::iterators::ConFrameIterator::new(text) {
+        let frame = item.map_err(|err| Error::Parse(err.to_string()))?;
+        push_frame_columns(cols, &frame)?;
     }
     Ok(())
 }
 
-fn parse_frame(cur: &mut Cur<'_>, cols: &mut Columns) -> Result<()> {
-    let start = cur.i;
-    let header = read_header(cur)?;
-    meta_of(header.prebox_header.metadata_line().as_bytes(), cols)?;
-    cols.cells.extend_from_slice(&header.boxl);
-    cols.cells.extend_from_slice(&header.angles);
-    let n_types = header.natm_types;
-    if n_types == 0 {
-        reject_zero_atom_sections(&header.sections)?;
+fn push_frame_columns(cols: &mut Columns, frame: &readcon_core::types::ConFrame) -> Result<()> {
+    meta_of(frame.header.prebox_header.metadata_line().as_bytes(), cols)?;
+    cols.cells.extend_from_slice(&frame.header.boxl);
+    cols.cells.extend_from_slice(&frame.header.angles);
+    let n = frame.atom_data.len();
+    if n == 0 {
         cols.n_atoms.push(0);
         cols.symbol_runs.push(Vec::new());
         cols.forces_uniform = false;
         return Ok(());
     }
-    let counts = header.natms_per_type;
-    let masses = header.masses_per_type;
-    let mut runs = Vec::with_capacity(n_types);
-    let mut natoms = 0u32;
-    let force_at = cols.forces.len();
-    let _vel_at = cols.forces.len();
-    for (count, mass) in counts.iter().zip(&masses) {
-        let symbol = as_str(cur.take()?)?.trim().to_string();
-        let label = as_str(cur.take()?)?;
-        if !label.contains("Coordinates") {
-            return Err(Error::Parse(format!("expected coordinates, got {label}")));
-        }
-        let n = u32::try_from(*count).map_err(|_| Error::Parse("count overflow".into()))?;
-        runs.push((symbol, n));
-        for _ in 0..*count {
-            let row = xyz_prefix(cur.take()?)?;
-            cols.positions.extend_from_slice(&row);
-            cols.masses.push(*mass);
-            natoms += 1;
+    let natoms = u32::try_from(n).map_err(|_| Error::Parse("count overflow".into()))?;
+    cols.n_atoms.push(natoms);
+    cols.symbol_runs.push(symbol_runs(frame));
+    if let Some(xs) = frame.positions.f64_slice().filter(|xs| xs.len() == n * 3) {
+        cols.positions.extend_from_slice(xs);
+    } else {
+        for atom in &frame.atom_data {
+            cols.positions
+                .extend_from_slice(&crate::atom_coord::atom_xyz(atom));
         }
     }
-    cols.n_atoms.push(natoms);
-    cols.symbol_runs.push(runs);
-    let mut saw_forces = false;
-    if header.sections.is_empty() {
-        while legacy_section_opens(cur) {
-            let _blank = cur.take()?;
-            parse_section(cur, &counts, cols, &mut saw_forces, None)?;
+    if let Some(xs) = frame.masses.f64_slice().filter(|xs| xs.len() == n) {
+        cols.masses.extend_from_slice(xs);
+    } else {
+        for i in 0..n {
+            cols.masses.push(frame.masses.get_f64(i));
+        }
+    }
+    let force_at = cols.forces.len();
+    if frame.has_forces() {
+        if let Some(xs) = frame.forces.f64_slice().filter(|xs| xs.len() == n * 3) {
+            cols.forces.extend_from_slice(xs);
+        } else {
+            for atom in &frame.atom_data {
+                cols.forces
+                    .extend_from_slice(&atom.force().unwrap_or([0.0; 3]));
+            }
         }
     } else {
-        for name in &header.sections {
-            begin_declared_section(cur, name)?;
-            parse_section(cur, &counts, cols, &mut saw_forces, Some(name))?;
-        }
-    }
-    if !saw_forces {
         cols.forces_uniform = false;
         cols.forces.truncate(force_at);
     }
-    confirm_with_parser(&cur.bytes[start..cur.i])?;
     Ok(())
 }
 
-fn parse_section(
-    cur: &mut Cur<'_>,
-    counts: &[usize],
-    cols: &mut Columns,
-    saw_forces: &mut bool,
-    expected: Option<&str>,
-) -> Result<()> {
-    for count in counts {
-        let _symbol = cur.take()?;
-        let label = as_str(cur.take()?)?;
-        let kind = label.split_whitespace().next().unwrap_or("");
-        if let Some(name) = expected {
-            require_section_label(name, kind)?;
-        }
-        let is_force = kind == "Forces";
-        if is_force {
-            *saw_forces = true;
-        }
-        for _ in 0..*count {
-            let line = cur.take()?;
-            if is_force {
-                let row = xyz_prefix(line)?;
-                cols.forces.extend_from_slice(&row);
+fn symbol_runs(frame: &readcon_core::types::ConFrame) -> Vec<(String, u32)> {
+    let counts = &frame.header.natms_per_type;
+    let mut runs: Vec<(String, u32)> = Vec::new();
+    let mut offset = 0usize;
+    if counts.is_empty() {
+        for atom in &frame.atom_data {
+            let sym = atom.symbol.as_ref();
+            if let Some(last) = runs.last_mut() {
+                if last.0 == sym {
+                    last.1 += 1;
+                    continue;
+                }
             }
+            runs.push((sym.to_string(), 1));
         }
+        return runs;
     }
-    Ok(())
+    for &count in counts {
+        if count == 0 || offset >= frame.atom_data.len() {
+            continue;
+        }
+        let sym = frame.atom_data[offset].symbol.as_ref().to_string();
+        let n = u32::try_from(count).unwrap_or(u32::MAX);
+        runs.push((sym, n));
+        offset += count;
+    }
+    runs
 }
 
 /// Index fields of one frame, without a per-atom object or a coordinate array.
@@ -364,819 +235,87 @@ pub struct SpanFacts {
     pub magmom: Option<f64>,
 }
 
+/// One readcon-core frame, and it must cover `text`.
+///
+/// The iterator is walked to the end. A later error is that error. A later
+/// successful frame means this slice is not one frame. Trailing whitespace
+/// after the single frame is the end of the span, not another frame.
+fn one_consuming_frame(text: &str) -> Result<Option<readcon_core::types::ConFrame>> {
+    let mut iter = readcon_core::iterators::ConFrameIterator::new(text);
+    let (frame, span) = match iter.next_with_raw_span(text) {
+        None => return Ok(None),
+        Some(Err(err)) => return Err(Error::Parse(err.to_string())),
+        Some(Ok(pair)) => pair,
+    };
+    match iter.next() {
+        Some(Err(err)) => Err(Error::Parse(err.to_string())),
+        Some(Ok(_)) => Err(Error::Parse(
+            "CON validation failed: frame span contains more than one frame".into(),
+        )),
+        None => {
+            let start = (span.as_ptr() as usize).saturating_sub(text.as_ptr() as usize);
+            let end = start.saturating_add(span.len());
+            let rest = text.get(end..).unwrap_or("");
+            if rest.bytes().any(|byte| !byte.is_ascii_whitespace()) {
+                return Err(Error::Parse(
+                    "CON validation failed: frame span contains more than one frame".into(),
+                ));
+            }
+            Ok(Some(frame))
+        }
+    }
+}
+
 /// Index one frame from its stored bytes.
 ///
-/// Every coordinate, force, and velocity row is checked for field count,
-/// float syntax, and the fixed flag. No per-atom object is built. Force
-/// magnitudes are reduced to `fmax`. Rows of a large block are checked
-/// in parallel.
+/// One [`readcon_core::iterators::ConFrameIterator`] pass applies every
+/// core check. The index fields are the projection of that frame.
 #[allow(dead_code)] // index-only entry; ingest uses project_frame_cooked
 pub fn project_frame(bytes: &[u8]) -> Result<SpanFacts> {
-    Ok(project_frame_parts(bytes, false)?.0)
-}
-
-/// Index fields plus an RCSO blob, from the same byte walk.
-///
-/// The coordinate scan already parses every float and fixed flag. Cooking
-/// keeps those values instead of building a `ConFrame` and parsing again.
-pub(crate) fn project_frame_cooked(bytes: &[u8]) -> Result<(SpanFacts, Vec<u8>)> {
-    let (facts, acc) = project_frame_parts(bytes, true)?;
-    let blob = finish_cook(&facts, acc.unwrap_or_else(CookAcc::empty))?;
-    Ok((facts, blob))
-}
-
-pub(crate) struct CookAcc {
-    positions: Vec<f64>,
-    forces: Vec<f64>,
-    velocities: Vec<f64>,
-    constraints: Vec<u8>,
-    masses: Vec<f64>,
-    runs: Vec<(String, u32)>,
-    cell: [f64; 9],
-}
-
-impl CookAcc {
-    pub(crate) fn empty() -> Self {
-        Self {
-            positions: Vec::new(),
-            forces: Vec::new(),
-            velocities: Vec::new(),
-            constraints: Vec::new(),
-            masses: Vec::new(),
-            runs: Vec::new(),
-            cell: [0.0; 9],
-        }
-    }
-}
-
-pub(crate) fn project_frame_parts(
-    bytes: &[u8],
-    cook: bool,
-) -> Result<(SpanFacts, Option<CookAcc>)> {
-    let mut cur = Cur { bytes, i: 0 };
-    if cur.rest_blank() {
-        let (facts, _) = facts_from_meta(b"")?;
-        return Ok((facts, cook.then(CookAcc::empty)));
-    }
-    let header = read_header(&mut cur)?;
-    let (mut facts, mut gate) = facts_from_meta(header.prebox_header.metadata_line().as_bytes())?;
-    gate.spec = u64::from(header.spec_version);
-    let boxl = header.boxl;
-    let angles = header.angles;
-    if facts.cell_volume.is_none() {
-        facts.cell_volume = volume_from_box(&boxl, &angles);
-    }
-    let n_types = header.natm_types;
-    let mut acc = cook.then(CookAcc::empty);
-    if let Some(acc) = acc.as_mut() {
-        acc.cell = cell_row_major(gate.lattice, &boxl, &angles);
-    }
-    if n_types == 0 {
-        reject_zero_atom_sections(&header.sections)?;
-        return Ok((facts, acc));
-    }
-    let counts = header.natms_per_type;
-    let masses = header.masses_per_type;
-    facts.total_mass = total_mass(&counts, &masses);
-    let natoms_sum: usize = counts.iter().sum();
-    if let Some(acc) = acc.as_mut() {
-        acc.positions.resize(natoms_sum * 3, 0.0);
-        acc.constraints.resize(natoms_sum * 3, 0);
-        acc.masses = masses.clone();
-        acc.runs.reserve(n_types);
-    }
-    let mut species = std::collections::BTreeMap::<String, u32>::new();
-    let mut natoms = 0u32;
-    for count in &counts {
-        let symbol = as_str(cur.take()?)?.trim().to_string();
-        let label = as_str(cur.take()?)?;
-        if !label.contains("Coordinates") {
-            return Err(Error::Parse(format!("expected coordinates, got {label}")));
-        }
-        let n = u32::try_from(*count).map_err(|_| Error::Parse("count overflow".into()))?;
-        if !symbol.is_empty() {
-            *species.entry(symbol.clone()).or_insert(0) += n;
-        }
-        let spec = gate.spec as u32;
-        if let Some(acc) = acc.as_mut() {
-            let start = (natoms as usize) * 3;
-            let end = start + (*count) * 3;
-            check_vector_block(
-                &mut cur,
-                *count,
-                "atom data",
-                spec,
-                false,
-                false,
-                Some(&mut acc.positions[start..end]),
-                Some(&mut acc.constraints[start..end]),
-            )?;
-            acc.runs.push((symbol, n));
-        } else {
-            check_vector_block(
-                &mut cur,
-                *count,
-                "atom data",
-                spec,
-                false,
-                false,
-                None,
-                None,
-            )?;
-        }
-        natoms += n;
-    }
-    facts.n_atoms = natoms;
-    facts.species = species.into_iter().collect();
-    let mut fmax = None;
-    if header.sections.is_empty() {
-        while legacy_section_opens(&cur) {
-            let _blank = cur.take()?;
-            note_section(
-                &mut cur,
-                &counts,
-                gate.spec as u32,
-                &mut facts,
-                &mut fmax,
-                acc.as_mut(),
-                None,
-            )?;
-        }
-    } else {
-        for name in &header.sections {
-            begin_declared_section(&mut cur, name)?;
-            note_section(
-                &mut cur,
-                &counts,
-                gate.spec as u32,
-                &mut facts,
-                &mut fmax,
-                acc.as_mut(),
-                Some(name),
-            )?;
-        }
-    }
-    facts.fmax = fmax;
-    if facts.has_velocities && gate.spec >= 3 && gate.minor >= 1 && !gate.units_time {
-        return Err(Error::Parse(
-            "minor >= 1 requires units.time when a velocities section is present".into(),
-        ));
-    }
-    confirm_with_parser(bytes)?;
-    Ok((facts, acc))
-}
-
-/// Every frame the span walk accepts is checked again by the core parser,
-/// so a per-section rule the walk does not implement still rejects the frame.
-fn confirm_with_parser(bytes: &[u8]) -> Result<()> {
     let text =
         std::str::from_utf8(bytes).map_err(|_| Error::Parse("CON line is not UTF-8".into()))?;
-    match readcon_core::iterators::ConFrameIterator::new(text).next() {
-        Some(Err(err)) => Err(Error::Parse(err.to_string())),
-        _ => Ok(()),
+    match one_consuming_frame(text)? {
+        Some(frame) => Ok(facts_from_frame(&frame)),
+        None => facts_from_meta(b""),
     }
 }
 
-pub(crate) fn finish_cook(facts: &SpanFacts, mut acc: CookAcc) -> Result<Vec<u8>> {
-    let n = facts.n_atoms as usize;
-    let mass_uniform = if n == 0 {
-        Some(0.0)
-    } else if !acc.masses.is_empty()
-        && acc
-            .masses
-            .iter()
-            .all(|m| m.to_bits() == acc.masses[0].to_bits())
-    {
-        Some(acc.masses[0])
-    } else {
-        None
-    };
-    let expanded = if mass_uniform.is_none() {
-        let mut out = Vec::with_capacity(n);
-        for ((_, count), mass) in acc.runs.iter().zip(&acc.masses) {
-            out.extend(std::iter::repeat_n(*mass, *count as usize));
+/// Index fields plus an RCSO blob from one readcon-core parse.
+#[cfg_attr(not(any(test, feature = "mpi")), allow(dead_code))]
+pub(crate) fn project_frame_cooked(bytes: &[u8]) -> Result<(SpanFacts, Vec<u8>)> {
+    let text =
+        std::str::from_utf8(bytes).map_err(|_| Error::Parse("CON line is not UTF-8".into()))?;
+    match one_consuming_frame(text)? {
+        Some(frame) => {
+            let facts = facts_from_frame(&frame);
+            let cooked = crate::cooked_soa::CookedSoa::encode_frame(&frame)?;
+            Ok((facts, cooked))
         }
-        out
-    } else {
-        Vec::new()
-    };
-    let constraints = if acc.constraints.iter().any(|b| *b != 0) {
-        Some(std::mem::take(&mut acc.constraints))
-    } else {
-        drop(std::mem::take(&mut acc.constraints));
-        None
-    };
-    let forces = if acc.forces.len() == n * 3 {
-        std::mem::take(&mut acc.forces)
-    } else {
-        drop(std::mem::take(&mut acc.forces));
-        Vec::new()
-    };
-    let velocities = if acc.velocities.len() == n * 3 {
-        std::mem::take(&mut acc.velocities)
-    } else {
-        drop(std::mem::take(&mut acc.velocities));
-        Vec::new()
-    };
-    let runs: Vec<(&str, u32)> = acc
-        .runs
-        .iter()
-        .map(|(sym, count)| (sym.as_str(), *count))
-        .collect();
-    let pbc = facts.pbc.unwrap_or([false, false, false]);
-    crate::cooked_soa::CookedSoa::encode_columns(
-        facts.n_atoms,
-        acc.positions,
-        forces,
-        velocities,
-        mass_uniform,
-        &expanded,
-        constraints,
-        acc.cell,
-        facts.energy.unwrap_or(0.0),
-        facts.energy.is_some(),
-        facts.frame_index.unwrap_or(0.0),
-        facts.frame_index.is_some(),
-        pbc,
-        facts.pbc.is_some(),
-        &runs,
-    )
-}
-
-fn cell_row_major(lattice: Option<[[f64; 3]; 3]>, boxl: &[f64], angles: &[f64]) -> [f64; 9] {
-    let m = if let Some(lv) = lattice {
-        lv
-    } else if boxl.len() >= 3 && angles.len() >= 3 {
-        readcon_core::types::cell_vectors(
-            [boxl[0], boxl[1], boxl[2]],
-            [angles[0], angles[1], angles[2]],
-        )
-    } else {
-        [[0.0; 3]; 3]
-    };
-    [
-        m[0][0], m[0][1], m[0][2], m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2],
-    ]
-}
-
-fn reject_zero_atom_sections(sections: &[String]) -> Result<()> {
-    if sections.is_empty() {
-        Ok(())
-    } else {
-        Err(Error::Parse(
-            "invalid count: a zero-atom frame cannot declare sections".into(),
-        ))
-    }
-}
-
-fn known_section(name: &str) -> bool {
-    matches!(
-        name,
-        readcon_core::types::SECTION_VELOCITIES
-            | readcon_core::types::SECTION_FORCES
-            | readcon_core::types::SECTION_ENERGIES
-            | readcon_core::types::SECTION_CHARGES
-            | readcon_core::types::SECTION_SPINS
-            | readcon_core::types::SECTION_MAGMOMS
-            | readcon_core::types::SECTION_DISPLACEMENTS
-            | readcon_core::types::SECTION_SPREADS
-    )
-}
-
-/// A blank line opens a section when the next line is a component symbol.
-/// A blank tail, or the blank line 1 of the next frame, does not.
-fn legacy_section_opens(cur: &Cur<'_>) -> bool {
-    let Some(line) = cur.peek() else {
-        return false;
-    };
-    if !is_blank(line) || cur.rest_blank() {
-        return false;
-    }
-    let after = split_line(cur.bytes, cur.i)
-        .map(|(_, n)| n)
-        .unwrap_or(cur.i);
-    matches!(
-        line_at(cur.bytes, after),
-        Some(next) if next.first() != Some(&b'{') && !is_blank(next)
-    )
-}
-
-fn section_label_word(name: &str) -> &str {
-    match name {
-        "velocities" => "Velocities",
-        "forces" => "Forces",
-        "energies" => "Energies",
-        "charges" => "Charges",
-        "spins" => "Spins",
-        "magmoms" => "Magmoms",
-        "displacements" => "Displacements",
-        "spreads" => "Spreads",
-        _ => "",
-    }
-}
-
-fn require_section_label(name: &str, kind: &str) -> Result<()> {
-    if kind.eq_ignore_ascii_case(section_label_word(name)) {
-        Ok(())
-    } else {
-        Err(Error::Parse(format!(
-            "file ended unexpectedly while reading {name} section"
-        )))
-    }
-}
-
-fn begin_declared_section(cur: &mut Cur<'_>, name: &str) -> Result<()> {
-    if !known_section(name) {
-        return Err(Error::Parse(format!(
-            "unknown section type in metadata: {name}"
-        )));
-    }
-    if !legacy_section_opens(cur) {
-        return Err(Error::Parse(format!(
-            "file ended unexpectedly while reading {name} section"
-        )));
-    }
-    let _blank = cur.take()?;
-    Ok(())
-}
-
-fn note_section(
-    cur: &mut Cur<'_>,
-    counts: &[usize],
-    spec: u32,
-    facts: &mut SpanFacts,
-    fmax: &mut Option<f64>,
-    mut cook: Option<&mut CookAcc>,
-    expected: Option<&str>,
-) -> Result<()> {
-    let mut atom_base = 0usize;
-    for count in counts {
-        let missing = || {
-            expected
-                .map(|name| {
-                    Error::Parse(format!(
-                        "file ended unexpectedly while reading {name} section"
-                    ))
-                })
-                .unwrap_or_else(|| {
-                    Error::Parse("file ended unexpectedly while reading atom data".into())
-                })
-        };
-        let _symbol = cur.take().map_err(|_| missing())?;
-        let label = as_str(cur.take().map_err(|_| missing())?)?;
-        let kind = label.split_whitespace().next().unwrap_or("");
-        if let Some(name) = expected {
-            require_section_label(name, kind)?;
-        }
-        let where_ = match kind {
-            "Forces" => "forces section",
-            "Velocities" => "velocities section",
-            "Energies" => "energies section",
-            _ => "atom data",
-        };
-        match kind {
-            "Forces" => {
-                facts.has_forces = true;
-                let n = *count;
-                let local = if let Some(c) = cook.as_mut() {
-                    let start = c.forces.len();
-                    c.forces.resize(start + n * 3, 0.0);
-                    check_vector_block(
-                        cur,
-                        n,
-                        where_,
-                        spec,
-                        true,
-                        true,
-                        Some(&mut c.forces[start..]),
-                        None,
-                    )?
-                } else {
-                    check_vector_block(cur, n, where_, spec, true, true, None, None)?
-                };
-                if let Some(mag) = local {
-                    *fmax = Some(fmax.map_or(mag, |cur| cur.max(mag)));
-                }
-            }
-            "Velocities" => {
-                facts.has_velocities = true;
-                let n = *count;
-                if let Some(c) = cook.as_mut() {
-                    let start = c.velocities.len();
-                    c.velocities.resize(start + n * 3, 0.0);
-                    check_vector_block(
-                        cur,
-                        n,
-                        where_,
-                        spec,
-                        true,
-                        false,
-                        Some(&mut c.velocities[start..]),
-                        None,
-                    )?;
-                } else {
-                    check_vector_block(cur, n, where_, spec, true, false, None, None)?;
-                }
-            }
-            "Energies" => {
-                facts.has_energy = true;
-                let (ranges, complete) = take_present_rows(cur, *count);
-                check_scalar_rows(cur.bytes, &ranges, spec)?;
-                if !complete {
-                    return Err(short_read(where_));
-                }
-            }
-            "Charges" | "Spins" => {
-                let where_ = if kind == "Charges" {
-                    "charges section"
-                } else {
-                    "spins section"
-                };
-                let (ranges, complete) = take_present_rows(cur, *count);
-                check_scalar_rows(cur.bytes, &ranges, spec)?;
-                if !complete {
-                    return Err(short_read(where_));
-                }
-            }
-            "Magmoms" | "Displacements" | "Spreads" => {
-                let where_ = match kind {
-                    "Magmoms" => "magmoms section",
-                    "Displacements" => "displacements section",
-                    _ => "spreads section",
-                };
-                let n = *count;
-                if kind == "Spreads" {
-                    let mut xyz = vec![0.0; n * 3];
-                    check_vector_block(cur, n, where_, spec, true, false, Some(&mut xyz), None)?;
-                    reject_negative_spreads(&xyz, atom_base)?;
-                } else {
-                    check_vector_block(cur, n, where_, spec, true, false, None, None)?;
-                }
-            }
-            _ => {
-                check_vector_block(cur, *count, where_, spec, true, false, None, None)?;
-            }
-        }
-        atom_base += *count;
-    }
-    Ok(())
-}
-
-fn reject_negative_spreads(xyz: &[f64], atom_base: usize) -> Result<()> {
-    for (i, row) in xyz.as_chunks::<3>().0.iter().enumerate() {
-        if row.iter().any(|v| !v.is_finite()) {
-            return Err(Error::Parse(format!(
-                "non-finite value: spreads atom {}",
-                atom_base + i
-            )));
-        }
-        if row.iter().any(|v| *v < 0.0) {
-            return Err(Error::Parse(format!(
-                "CON validation failed: spreads: atom {} has a negative or non-finite spread",
-                atom_base + i
-            )));
+        None => {
+            let facts = facts_from_meta(b"")?;
+            let cooked = crate::cooked_soa::CookedSoa::encode_columns(
+                0,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Some(0.0),
+                &[],
+                None,
+                [0.0; 9],
+                facts.energy.unwrap_or(0.0),
+                facts.energy.is_some(),
+                facts.frame_index.unwrap_or(0.0),
+                facts.frame_index.is_some(),
+                facts.pbc.unwrap_or([false, false, false]),
+                facts.pbc.is_some(),
+                &[],
+            )?;
+            Ok((facts, cooked))
         }
     }
-    Ok(())
 }
 
-/// Short blocks are checked in place. A long block records line ranges and
-/// checks them on several threads.
-#[allow(clippy::too_many_arguments)]
-fn check_vector_block(
-    cur: &mut Cur<'_>,
-    n: usize,
-    where_: &str,
-    spec: u32,
-    id_required: bool,
-    fmax: bool,
-    xyz_out: Option<&mut [f64]>,
-    mask_out: Option<&mut [u8]>,
-) -> Result<Option<f64>> {
-    if n < 8_192 {
-        let mut max_mag = None;
-        let mut xyz_out = xyz_out;
-        let mut mask_out = mask_out;
-        for i in 0..n {
-            let line = cur.take().map_err(|_| short_read(where_))?;
-            let (xyz, mask) = check_vector_line(line, spec, id_required)?;
-            if let Some(buf) = xyz_out.as_mut() {
-                buf[i * 3..i * 3 + 3].copy_from_slice(&xyz);
-            }
-            if let Some(buf) = mask_out.as_mut() {
-                buf[i * 3..i * 3 + 3].copy_from_slice(&mask);
-            }
-            if fmax {
-                let mag = (xyz[0] * xyz[0] + xyz[1] * xyz[1] + xyz[2] * xyz[2]).sqrt();
-                if mag.is_finite() {
-                    max_mag = Some(max_mag.map_or(mag, |cur: f64| cur.max(mag)));
-                }
-            }
-        }
-        return Ok(max_mag);
-    }
-    // One region for the whole block. Restarting a thread set every 16,384
-    // rows spent the launch on the check: a million-atom block was slower in
-    // those pieces than as one pass. The range list is dropped before the
-    // cooked blob is encoded.
-    //
-    // A short file still checks the lines that were present. The bad row is
-    // reported ahead of the missing tail.
-    let (ranges, complete) = take_present_rows(cur, n);
-    let mag = check_vector_rows(
-        cur.bytes,
-        &ranges,
-        spec,
-        id_required,
-        fmax,
-        xyz_out,
-        mask_out,
-    )?;
-    if !complete {
-        return Err(short_read(where_));
-    }
-    Ok(mag)
-}
-
-fn short_read(where_: &str) -> Error {
-    Error::Parse(format!("file ended unexpectedly while reading {where_}"))
-}
-
-/// Line ranges that are actually in the file, and whether all `n` were present.
-fn take_present_rows(cur: &mut Cur<'_>, n: usize) -> (Vec<(usize, usize)>, bool) {
-    let mut ranges = Vec::with_capacity(n);
-    let base = cur.bytes.as_ptr() as usize;
-    for _ in 0..n {
-        let Ok(line) = cur.take() else {
-            return (ranges, false);
-        };
-        let start = line.as_ptr() as usize - base;
-        ranges.push((start, start + line.len()));
-    }
-    (ranges, true)
-}
-
-/// `id_required` is false for coordinate rows, where the id may be omitted.
-/// `fmax` reduces the Euclidean force magnitude when the row is a force.
-fn check_vector_rows(
-    bytes: &[u8],
-    ranges: &[(usize, usize)],
-    spec: u32,
-    id_required: bool,
-    fmax: bool,
-    mut xyz_out: Option<&mut [f64]>,
-    mut mask_out: Option<&mut [u8]>,
-) -> Result<Option<f64>> {
-    if ranges.len() < 8_192 {
-        return check_vector_rows_seq(bytes, ranges, spec, id_required, fmax, xyz_out, mask_out);
-    }
-    let threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        .clamp(1, 8);
-    let chunk = ranges.len().div_ceil(threads).max(1);
-    let mut maxes = Vec::new();
-    let mut error = None;
-    std::thread::scope(|scope| {
-        let mut joins = Vec::new();
-        for piece in ranges.chunks(chunk) {
-            let n = piece.len();
-            let xyz_piece = match xyz_out {
-                Some(buf) => {
-                    let (head, tail) = buf.split_at_mut(n * 3);
-                    xyz_out = Some(tail);
-                    Some(head)
-                }
-                None => None,
-            };
-            let mask_piece = match mask_out {
-                Some(buf) => {
-                    let (head, tail) = buf.split_at_mut(n * 3);
-                    mask_out = Some(tail);
-                    Some(head)
-                }
-                None => None,
-            };
-            joins.push(scope.spawn(move || {
-                check_vector_rows_seq(bytes, piece, spec, id_required, fmax, xyz_piece, mask_piece)
-            }));
-        }
-        // `joins` was pushed from `ranges.chunks`, which walks the file
-        // from the first row, and this loop joins in that same order.
-        for join in joins {
-            match join.join().expect("row check") {
-                Ok(Some(mag)) => maxes.push(mag),
-                Ok(None) => {}
-                Err(err) => {
-                    error.get_or_insert(err);
-                }
-            }
-        }
-    });
-    if let Some(err) = error {
-        return Err(err);
-    }
-    Ok(maxes.into_iter().reduce(f64::max))
-}
-
-fn check_vector_rows_seq(
-    bytes: &[u8],
-    ranges: &[(usize, usize)],
-    spec: u32,
-    id_required: bool,
-    fmax: bool,
-    mut xyz_out: Option<&mut [f64]>,
-    mut mask_out: Option<&mut [u8]>,
-) -> Result<Option<f64>> {
-    let mut max_mag = None;
-    for (i, &(start, end)) in ranges.iter().enumerate() {
-        let (xyz, mask) = check_vector_line(&bytes[start..end], spec, id_required)?;
-        if let Some(buf) = xyz_out.as_mut() {
-            buf[i * 3..i * 3 + 3].copy_from_slice(&xyz);
-        }
-        if let Some(buf) = mask_out.as_mut() {
-            buf[i * 3..i * 3 + 3].copy_from_slice(&mask);
-        }
-        if fmax {
-            let mag = (xyz[0] * xyz[0] + xyz[1] * xyz[1] + xyz[2] * xyz[2]).sqrt();
-            if mag.is_finite() {
-                max_mag = Some(max_mag.map_or(mag, |cur: f64| cur.max(mag)));
-            }
-        }
-    }
-    Ok(max_mag)
-}
-
-fn check_scalar_rows(bytes: &[u8], ranges: &[(usize, usize)], spec: u32) -> Result<()> {
-    for &(start, end) in ranges {
-        check_scalar_line(&bytes[start..end], spec)?;
-    }
-    Ok(())
-}
-
-fn next_token(line: &[u8], mut i: usize) -> Option<(usize, usize)> {
-    while i < line.len() && line[i].is_ascii_whitespace() {
-        i += 1;
-    }
-    if i >= line.len() {
-        return None;
-    }
-    let start = i;
-    while i < line.len() && !line[i].is_ascii_whitespace() {
-        i += 1;
-    }
-    Some((start, i))
-}
-
-fn check_vector_line(line: &[u8], spec: u32, id_required: bool) -> Result<([f64; 3], [u8; 3])> {
-    let mut i = 0usize;
-    let mut xyz = [0.0f64; 3];
-    for (slot, dest) in xyz.iter_mut().enumerate() {
-        let Some((start, end)) = next_token(line, i) else {
-            return Err(width_err(slot));
-        };
-        *dest = parse_f64_token(&line[start..end])?;
-        i = end;
-    }
-    let Some((start, end)) = next_token(line, i) else {
-        return Err(width_err(3));
-    };
-    let mask = fixed_axes(&line[start..end], spec)?;
-    i = end;
-    match next_token(line, i) {
-        Some((start, end)) => {
-            parse_id(&line[start..end])?;
-            i = end;
-            if next_token(line, i).is_some() {
-                let mut found = 5usize;
-                let mut at = i;
-                while let Some((_, end)) = next_token(line, at) {
-                    found += 1;
-                    at = end;
-                }
-                return Err(width_err(found));
-            }
-        }
-        None if id_required => return Err(width_err(4)),
-        None => {}
-    }
-    Ok((xyz, mask))
-}
-
-fn check_scalar_line(line: &[u8], spec: u32) -> Result<()> {
-    let mut i = 0usize;
-    let Some((start, end)) = next_token(line, i) else {
-        return Err(scalar_width(0));
-    };
-    parse_f64_token(&line[start..end])?;
-    i = end;
-    let Some((start, end)) = next_token(line, i) else {
-        return Err(scalar_width(1));
-    };
-    parse_flag(&line[start..end], spec)?;
-    i = end;
-    let Some((start, end)) = next_token(line, i) else {
-        return Err(scalar_width(2));
-    };
-    parse_id(&line[start..end])?;
-    if next_token(line, end).is_some() {
-        let mut found = 3usize;
-        let mut at = end;
-        while let Some((_, next)) = next_token(line, at) {
-            found += 1;
-            at = next;
-        }
-        return Err(scalar_width(found));
-    }
-    Ok(())
-}
-
-fn scalar_width(found: usize) -> Error {
-    Error::Parse(format!("expected 3 values on line, found {found}"))
-}
-
-fn width_err(found: usize) -> Error {
-    Error::Parse(format!("expected 5 values on line, found {found}"))
-}
-
-fn parse_f64_token(tok: &[u8]) -> Result<f64> {
-    let shown = String::from_utf8_lossy(tok);
-    let (val, consumed) = fast_float2::parse_partial::<f64, _>(tok)
-        .map_err(|_| Error::Parse(format!("invalid number format: invalid float: {shown}")))?;
-    if consumed != tok.len() {
-        return Err(Error::Parse(format!(
-            "invalid number format: invalid float: {shown}"
-        )));
-    }
-    if !val.is_finite() {
-        return Err(Error::Parse(format!("non-finite value: {shown}")));
-    }
-    Ok(val)
-}
-
-fn bad_fixed_flag(tok: &[u8], spec: u32) -> Error {
-    let shown = String::from_utf8_lossy(tok);
-    Error::Parse(format!(
-        "invalid fixed flag: column 4 flag {shown:?} is not a legal integer for spec {spec}"
-    ))
-}
-
-fn fixed_axes(tok: &[u8], spec: u32) -> Result<[u8; 3]> {
-    if tok.is_empty() || !tok.iter().all(|b| b.is_ascii_digit()) {
-        return Err(bad_fixed_flag(tok, spec));
-    }
-    let val: u64 = std::str::from_utf8(tok)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or_else(|| bad_fixed_flag(tok, spec))?;
-    if spec < 2 {
-        return match val {
-            0 => Ok([0, 0, 0]),
-            1 => Ok([1, 1, 1]),
-            _ => Err(bad_fixed_flag(tok, spec)),
-        };
-    }
-    if val > 7 {
-        return Err(bad_fixed_flag(tok, spec));
-    }
-    Ok([
-        u8::from(val & 1 != 0),
-        u8::from(val & 2 != 0),
-        u8::from(val & 4 != 0),
-    ])
-}
-
-fn parse_flag(tok: &[u8], spec: u32) -> Result<()> {
-    fixed_axes(tok, spec).map(|_| ())
-}
-
-fn parse_id(tok: &[u8]) -> Result<()> {
-    let shown = String::from_utf8_lossy(tok);
-    if tok.is_empty() || !tok.iter().all(|b| b.is_ascii_digit()) {
-        return Err(Error::Parse(format!(
-            "invalid number format: invalid integer: {shown}"
-        )));
-    }
-    if std::str::from_utf8(tok)
-        .ok()
-        .and_then(|text| text.parse::<u64>().ok())
-        .is_none()
-    {
-        return Err(Error::Parse(format!(
-            "invalid number format: integer out of range 0..=2^64-1: {shown}"
-        )));
-    }
-    Ok(())
-}
-
-struct MetaGate {
-    spec: u64,
-    minor: u64,
-    units_time: bool,
-    lattice: Option<[[f64; 3]; 3]>,
-}
-
-fn facts_from_meta(line: &[u8]) -> Result<(SpanFacts, MetaGate)> {
+fn facts_from_meta(line: &[u8]) -> Result<SpanFacts> {
     let mut facts = SpanFacts {
         n_atoms: 0,
         species: Vec::new(),
@@ -1198,28 +337,10 @@ fn facts_from_meta(line: &[u8]) -> Result<(SpanFacts, MetaGate)> {
     };
     let text = as_str(line)?.trim();
     if !text.starts_with('{') {
-        return Ok((
-            facts,
-            MetaGate {
-                spec: 0,
-                minor: 0,
-                units_time: false,
-                lattice: None,
-            },
-        ));
+        return Ok(facts);
     }
     let v: serde_json::Value =
         serde_json::from_str(text).map_err(|e| Error::Parse(e.to_string()))?;
-    let gate = MetaGate {
-        spec: v.get("con_spec_version").and_then(json_u64).unwrap_or(0),
-        minor: v.get("con_spec_minor").and_then(json_u64).unwrap_or(0),
-        units_time: v
-            .get("units")
-            .and_then(|units| units.get("time"))
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|unit| !unit.trim().is_empty()),
-        lattice: lattice_matrix(&v),
-    };
     facts.energy = v.get("energy").and_then(json_finite);
     if facts.energy.is_some() {
         facts.has_energy = true;
@@ -1267,12 +388,7 @@ fn facts_from_meta(line: &[u8]) -> Result<(SpanFacts, MetaGate)> {
             }
         }
     }
-    Ok((facts, gate))
-}
-
-fn json_u64(v: &serde_json::Value) -> Option<u64> {
-    v.as_u64()
-        .or_else(|| v.as_i64().and_then(|i| u64::try_from(i).ok()))
+    Ok(facts)
 }
 
 fn json_finite(v: &serde_json::Value) -> Option<f64> {
@@ -1285,41 +401,6 @@ fn json_finite(v: &serde_json::Value) -> Option<f64> {
         u as f64
     };
     f.is_finite().then_some(f)
-}
-
-fn total_mass(counts: &[usize], masses: &[f64]) -> Option<f64> {
-    let n = counts.len().min(masses.len());
-    if n == 0 {
-        return None;
-    }
-    let mut sum = 0.0f64;
-    for i in 0..n {
-        let mi = masses[i];
-        let ni = counts[i] as f64;
-        if !mi.is_finite() || !ni.is_finite() {
-            return None;
-        }
-        sum += mi * ni;
-    }
-    sum.is_finite().then_some(sum)
-}
-
-fn lattice_matrix(v: &serde_json::Value) -> Option<[[f64; 3]; 3]> {
-    let rows = v.get("lattice_vectors")?.as_array()?;
-    if rows.len() != 3 {
-        return None;
-    }
-    let mut m = [[0.0f64; 3]; 3];
-    for (i, row) in rows.iter().enumerate() {
-        let arr = row.as_array()?;
-        if arr.len() != 3 {
-            return None;
-        }
-        for (j, cell) in arr.iter().enumerate() {
-            m[i][j] = json_finite(cell)?;
-        }
-    }
-    Some(m)
 }
 
 fn lattice_volume(rows: &[serde_json::Value]) -> Option<f64> {
@@ -1340,36 +421,6 @@ fn lattice_volume(rows: &[serde_json::Value]) -> Option<f64> {
     det.is_finite().then_some(det)
 }
 
-fn volume_from_box(boxl: &[f64], angles: &[f64]) -> Option<f64> {
-    if boxl.len() < 3 || angles.len() < 3 {
-        return None;
-    }
-    let [a, b, c] = [boxl[0], boxl[1], boxl[2]];
-    let [alpha, beta, gamma] = [angles[0], angles[1], angles[2]];
-    if ![a, b, c, alpha, beta, gamma]
-        .iter()
-        .all(|x| x.is_finite() && *x > 0.0)
-    {
-        return None;
-    }
-    let ar = alpha.to_radians();
-    let br = beta.to_radians();
-    let gr = gamma.to_radians();
-    let ca = ar.cos();
-    let cb = br.cos();
-    let cg = gr.cos();
-    let sg = gr.sin();
-    if sg.abs() < 1e-15 {
-        return None;
-    }
-    let t = 1.0 - ca * ca - cb * cb - cg * cg + 2.0 * ca * cb * cg;
-    if t <= 0.0 {
-        return None;
-    }
-    let v = a * b * c * t.sqrt();
-    v.is_finite().then_some(v)
-}
-
 fn scalar_triple(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> f64 {
     a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
         + a[2] * (b[0] * c[1] - b[1] * c[0])
@@ -1377,9 +428,14 @@ fn scalar_triple(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> f64 {
 
 /// The same fields [`readcon_core::index_proj::FrameIndexProjection::from_frame`]
 /// stores, so a span index can be compared with a parsed frame.
+///
+/// Species counts come from the header's type runs, and `fmax` from the
+/// force column. Both match the projection without walking every atom.
 pub fn facts_from_frame(frame: &readcon_core::types::ConFrame) -> SpanFacts {
-    use readcon_core::index_proj::FrameIndexProjection;
-    let p = FrameIndexProjection::from_frame(frame);
+    if let Some(facts) = facts_from_columns(frame) {
+        return facts;
+    }
+    let p = readcon_core::index_proj::FrameIndexProjection::from_frame(frame);
     SpanFacts {
         n_atoms: p.n_atoms,
         species: p.species_counts,
@@ -1399,6 +455,133 @@ pub fn facts_from_frame(frame: &readcon_core::types::ConFrame) -> SpanFacts {
         charge: p.charge,
         magmom: p.magmom,
     }
+}
+
+fn section_named(frame: &readcon_core::types::ConFrame, name: &str) -> bool {
+    frame
+        .header
+        .sections
+        .iter()
+        .any(|section| section.eq_ignore_ascii_case(name))
+}
+
+fn facts_from_columns(frame: &readcon_core::types::ConFrame) -> Option<SpanFacts> {
+    let species = species_from_runs(frame)?;
+    let n = frame.atom_data.len();
+    let has_forces = section_named(frame, "forces") || frame.has_forces();
+    let has_velocities = section_named(frame, "velocities") || frame.has_velocities();
+    let energy = frame.header.energy().filter(|value| value.is_finite());
+    let has_energy = section_named(frame, "energies") || frame.has_energies() || energy.is_some();
+    let fmax = if has_forces {
+        let xs = frame.forces.f64_slice()?;
+        if xs.len() != n.saturating_mul(3) {
+            return None;
+        }
+        column_fmax(xs)
+    } else {
+        None
+    };
+    Some(SpanFacts {
+        n_atoms: n as u32,
+        species,
+        energy,
+        fmax,
+        total_mass: readcon_core::index_proj::frame_total_mass(frame),
+        cell_volume: readcon_core::index_proj::frame_cell_volume(frame),
+        pbc: frame.header.pbc(),
+        has_forces,
+        has_velocities,
+        has_energy,
+        time: finite_meta(frame, "time", frame.header.time()),
+        timestep: finite_meta(frame, "timestep", frame.header.timestep()),
+        frame_index: finite_meta(
+            frame,
+            "frame_index",
+            frame.header.frame_index().map(|index| index as f64),
+        ),
+        neb_bead: finite_meta(
+            frame,
+            "neb_bead",
+            frame.header.neb_bead().map(|index| index as f64),
+        ),
+        neb_band: meta_f64(frame, "neb_band"),
+        charge: meta_f64(frame, "charge"),
+        magmom: meta_f64(frame, "magmom"),
+    })
+}
+
+fn species_from_runs(frame: &readcon_core::types::ConFrame) -> Option<Vec<(String, u32)>> {
+    let counts = &frame.header.natms_per_type;
+    if counts.is_empty() {
+        return None;
+    }
+    let n = frame.atom_data.len();
+    let mut covered = 0usize;
+    let mut order: Vec<(String, u32)> = Vec::new();
+    for &count in counts {
+        if count == 0 {
+            continue;
+        }
+        if covered >= n {
+            return None;
+        }
+        let symbol = frame.atom_data[covered].symbol.as_ref();
+        if !symbol.is_empty() {
+            if let Some(slot) = order.iter_mut().find(|(name, _)| name == symbol) {
+                slot.1 = slot.1.saturating_add(count as u32);
+            } else {
+                order.push((symbol.to_string(), count as u32));
+            }
+        }
+        covered = covered.checked_add(count)?;
+    }
+    if covered != n {
+        return None;
+    }
+    order.sort_by(|left, right| left.0.cmp(&right.0));
+    Some(order)
+}
+
+fn column_fmax(xs: &[f64]) -> Option<f64> {
+    // `sqrt` is monotonic on the finite squares, so one square-root of the
+    // winning square matches the per-atom Euclidean magnitude.
+    let mut max_sq: Option<f64> = None;
+    for tri in xs.as_chunks::<3>().0 {
+        let sq = tri[0] * tri[0] + tri[1] * tri[1] + tri[2] * tri[2];
+        if sq.is_finite() {
+            max_sq = Some(match max_sq {
+                Some(cur) if cur >= sq => cur,
+                _ => sq,
+            });
+        }
+    }
+    max_sq.map(f64::sqrt)
+}
+
+fn finite_meta(
+    frame: &readcon_core::types::ConFrame,
+    key: &str,
+    header: Option<f64>,
+) -> Option<f64> {
+    header
+        .filter(|value| value.is_finite())
+        .or_else(|| meta_f64(frame, key))
+}
+
+fn meta_f64(frame: &readcon_core::types::ConFrame, key: &str) -> Option<f64> {
+    let value = frame.header.metadata.get(key)?;
+    if let Some(number) = value.as_f64() {
+        return number.is_finite().then_some(number);
+    }
+    if let Some(number) = value.as_i64() {
+        let number = number as f64;
+        return number.is_finite().then_some(number);
+    }
+    if let Some(number) = value.as_u64() {
+        let number = number as f64;
+        return number.is_finite().then_some(number);
+    }
+    None
 }
 
 /// Scan one CON buffer that may hold several frames.
@@ -1709,13 +892,51 @@ mod tests {
             let body = mutate_frame(&mut rng, i);
             let text = pad_span(&body);
             let span = frame_message(project_frame(text.as_bytes()));
-            let parsed = parser_frame_message(&text);
+            let walked = walk_one_frame(&text);
+            let parsed = match &walked {
+                Ok(_) => "accepted".to_string(),
+                Err(err) => err.clone(),
+            };
             if span != parsed {
                 mismatches.push(format!(
                     "case {i}\nspan:   {span}\nparser: {parsed}\n{body}"
                 ));
                 if mismatches.len() == 12 {
                     break;
+                }
+            }
+            if let Ok(Some(frame)) = walked {
+                let cooked = match project_frame_cooked(text.as_bytes()) {
+                    Ok((_facts, blob)) => blob,
+                    Err(err) => {
+                        mismatches.push(format!("case {i} columns rejected {err}\n{body}"));
+                        break;
+                    }
+                };
+                let expect = match crate::cooked_soa::CookedSoa::encode_frame(&frame) {
+                    Ok(blob) => blob,
+                    Err(err) => {
+                        mismatches.push(format!("case {i} encode failed {err}\n{body}"));
+                        break;
+                    }
+                };
+                if cooked != expect {
+                    mismatches.push(format!("case {i} stored columns differ\n{body}"));
+                    if mismatches.len() == 12 {
+                        break;
+                    }
+                }
+                if let Ok(cols) = scan_bytes(text.as_bytes()) {
+                    if let Some(xs) = frame.forces.f64_slice() {
+                        if frame.has_forces() && cols.forces.as_slice() != xs {
+                            mismatches.push(format!(
+                                "case {i} force columns differ from the parser\n{body}"
+                            ));
+                            if mismatches.len() == 12 {
+                                break;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1760,10 +981,33 @@ mod tests {
         }
     }
 
-    fn parser_frame_message(text: &str) -> String {
-        match ConFrameIterator::new(text).next() {
-            Some(Ok(_)) | None => "accepted".into(),
-            Some(Err(err)) => err.to_string(),
+    /// Full iterator walk. One `Ok` frame must cover the slice. A later
+    /// error is that error, not a silent accept of the first frame.
+    fn walk_one_frame(
+        text: &str,
+    ) -> std::result::Result<Option<readcon_core::types::ConFrame>, String> {
+        let mut iter = ConFrameIterator::new(text);
+        let (frame, span) = match iter.next_with_raw_span(text) {
+            None => return Ok(None),
+            Some(Err(err)) => return Err(err.to_string()),
+            Some(Ok(pair)) => pair,
+        };
+        match iter.next() {
+            Some(Err(err)) => Err(err.to_string()),
+            Some(Ok(_)) => {
+                Err("CON validation failed: frame span contains more than one frame".into())
+            }
+            None => {
+                let start = (span.as_ptr() as usize).saturating_sub(text.as_ptr() as usize);
+                let end = start.saturating_add(span.len());
+                let rest = text.get(end..).unwrap_or("");
+                if rest.bytes().any(|byte| !byte.is_ascii_whitespace()) {
+                    return Err(
+                        "CON validation failed: frame span contains more than one frame".into(),
+                    );
+                }
+                Ok(Some(frame))
+            }
         }
     }
 
@@ -1882,6 +1126,29 @@ mod tests {
             body.push_str(&energy_block);
         } else if sections.contains("forces") {
             body.push_str(force);
+        }
+        if index.is_multiple_of(29) && sections.contains("\"forces\"") {
+            body = body.replacen(
+                "\"sections\":[\"forces\"]",
+                "\"sections\":[\"forces\",\"forces\"]",
+                1,
+            );
+            body.push_str("\nCu\nForces of Component 1\n9.0 8.0 7.0 0 0\n");
+        }
+        if index.is_multiple_of(31) && sections.contains("\"velocities\"") {
+            body = body.replacen(
+                "\"sections\":[\"velocities\"]",
+                "\"sections\":[\"velocities\",\"velocities\"]",
+                1,
+            );
+            body.push_str("\nCu\nVelocities of Component 1\n4.0 5.0 6.0 0 0\n");
+        }
+        if index.is_multiple_of(37) {
+            body = body.replace("Forces of Component", "FORCES of Component");
+            body = body.replace("Velocities of Component", "velocities of Component");
+        }
+        if index.is_multiple_of(41) && !sections.is_empty() {
+            body.push_str("\nCu\nEnergies of Component 1\n0.2 0 0\n");
         }
         if index.is_multiple_of(23) {
             let cut = (index * 17) % body.len().max(1);

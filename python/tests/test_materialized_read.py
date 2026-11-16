@@ -4,9 +4,11 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
+pytest.importorskip("readcon")
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "examples" / "benchmarks"))
-import fair_ase_protocol as fair
+import fair_ase_protocol as fair  # noqa: E402
 
 
 def test_both_tools_materialize_the_same_arrays(tmp_path):

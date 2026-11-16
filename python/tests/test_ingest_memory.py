@@ -17,6 +17,9 @@ def test_append_trajectory_str(tmp_path):
 
 
 def test_append_trajectory_frames(tmp_path):
+    import pytest
+
+    pytest.importorskip("readcon")
     import readcon
 
     frames = readcon.read_con(str(FIXTURE / "tiny_cuh2.con"))

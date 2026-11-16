@@ -3,8 +3,10 @@
 import time
 from pathlib import Path
 
-import readcon
-from readcon_db import ConCorpus
+import pytest
+
+readcon = pytest.importorskip("readcon")
+from readcon_db import ConCorpus  # noqa: E402
 
 
 def _hwm_kib() -> int:

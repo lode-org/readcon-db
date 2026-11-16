@@ -10,6 +10,9 @@ from readcon_db import ConCorpus
 def test_raw_and_shuffled_arrays_are_writable(tmp_path, monkeypatch):
     import sys
 
+    import pytest
+
+    pytest.importorskip("readcon")
     sys.path.insert(
         0, str(Path(__file__).resolve().parents[2] / "examples" / "benchmarks")
     )
