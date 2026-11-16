@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 
 def _runnable_blocks():
     org = (
@@ -30,6 +32,7 @@ def _runnable_blocks():
 
 
 def test_streaming_guide_example(tmp_path, monkeypatch):
+    pytest.importorskip("readcon")
     blocks = _runnable_blocks()
     assert blocks, "the streaming guide has no runnable example"
     monkeypatch.chdir(tmp_path)
