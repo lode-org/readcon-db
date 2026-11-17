@@ -654,17 +654,45 @@ def test_git_pin_allocator_comes_from_lib_rs(tmp_path: Path, monkeypatch) -> Non
     assert prov["allocator"] == "mimalloc"
 
 
-def test_export_includes_ab_sidecar_files() -> None:
+def _synthetic_prov() -> dict[str, object]:
+    host = {
+        "cpu": "x",
+        "ncpu": 1,
+        "cpuinfo_mhz": 1.0,
+        "kernel": "k",
+        "family": "6",
+        "model": "85",
+        "mhz": 1.0,
+        "nproc": 1,
+    }
+    return {
+        "commit": "a" * 40,
+        "tree": "b" * 40,
+        "readcon_core": "0.23.2",
+        "readcon_sha": "c" * 40,
+        "rustc": "rustc 1.88.0",
+        "python": "Python 3.12.0",
+        "allocator": "system",
+        "host": host,
+    }
+
+
+def test_export_copies_listed_sidecars_and_refuses_the_rest(tmp_path: Path) -> None:
     import rerun_release as rerun
 
-    for name in (
-        "RESULTS.md",
-        "noise.json",
-        "tables.json",
-        "levers.json",
-        "high_byte.json",
-    ):
-        assert name in rerun.EXPORT_NAMES
+    root = tmp_path / "out"
+    rerun.write_synthetic(root, _synthetic_prov(), 6)
+    sidecar = root / "db33" / "db24" / "RESULTS.md"
+    sidecar.write_text("# db24\n")
+    export = tmp_path / "export"
+    rerun.export_records(root, export, "a" * 40)
+    assert (export / "db33" / "db24" / "RESULTS.md").read_text() == "# db24\n"
+    dropped = root / "db33" / "db24" / "notes.txt"
+    dropped.write_text("x\n")
+    again = tmp_path / "export-again"
+    with pytest.raises(SystemExit, match="db33/db24/notes.txt"):
+        rerun.export_records(root, again, "a" * 40)
+    assert not again.exists()
 
 
 def test_dirty_tree_names_files_inside_untracked_directories(tmp_path: Path) -> None:

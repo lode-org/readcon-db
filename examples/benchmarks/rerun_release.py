@@ -979,6 +979,17 @@ def export_records(root: Path, export: Path, commit: str) -> None:
     for step in STEPS:
         rel = record_rel(step)
         src = root / step.paper
+        extras = sorted(
+            item.name
+            for item in src.iterdir()
+            if item.is_file() and item.name not in EXPORT_NAMES
+        )
+        if extras:
+            listed = ", ".join(f"{step.paper}/{name}" for name in extras)
+            raise SystemExit(
+                f"refusing to export: {listed} would be dropped; "
+                "add the name to EXPORT_NAMES"
+            )
         dest = export / step.paper
         dest.mkdir(parents=True, exist_ok=True)
         record = dest / step.record_name
