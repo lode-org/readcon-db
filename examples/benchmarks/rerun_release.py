@@ -824,22 +824,29 @@ def stamp(record_path: Path, prov: dict[str, object], source: str) -> None:
 
 
 def _shown_arg(text: str, root: Path | None) -> str:
+    """Show ``text`` relative to the longer of the output root and the repo.
+
+    The output root is checked before the repository when it is inside the
+    repository. The string is not resolved, so a symlink under the prefix
+    stays a relative path.
+    """
     if not text:
         return text
-    value = text
-    repo_abs = str(REPO.resolve())
-    if value == repo_abs:
-        return "."
-    if value.startswith(repo_abs + os.sep):
-        return Path(value).resolve().relative_to(REPO.resolve()).as_posix()
+    prefixes: list[tuple[str, str]] = []
     if root is not None:
-        root_abs = str(root.resolve())
-        if value == root_abs:
+        prefixes.append((str(root.resolve()), "root"))
+    prefixes.append((str(REPO.resolve()), "repo"))
+    prefixes.sort(key=lambda item: (len(item[0]), item[1] == "root"), reverse=True)
+    for prefix, kind in prefixes:
+        if text == prefix:
             return "."
-        if value.startswith(root_abs + os.sep):
-            rel = Path(value).resolve().relative_to(root.resolve()).as_posix()
-            return f"./{rel}"
-    return value
+        head = prefix + os.sep
+        if text.startswith(head):
+            rel = text[len(head) :]
+            if kind == "root":
+                return f"./{rel}"
+            return rel
+    return text
 
 
 def run_command(

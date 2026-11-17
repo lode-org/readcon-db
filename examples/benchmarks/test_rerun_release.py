@@ -752,6 +752,33 @@ def test_cpu_model_key_is_not_model_name() -> None:
     assert rerun.cpu_family_and_model(text) == ("6", "85")
 
 
+def test_shown_arg_prefers_the_output_root(tmp_path: Path, monkeypatch) -> None:
+    import rerun_release as rerun
+
+    repo = tmp_path / "repo"
+    out = repo / "build" / "out"
+    out.mkdir(parents=True)
+    monkeypatch.setattr(rerun, "REPO", repo)
+    assert rerun._shown_arg(str(out / "db33" / "ab.json"), out) == "./db33/ab.json"
+    assert (
+        rerun._shown_arg(str(repo / "examples" / "bench_corpus_ops.rs"), out)
+        == "examples/bench_corpus_ops.rs"
+    )
+    assert rerun._shown_arg(str(out), out) == "."
+
+
+def test_shown_arg_keeps_a_symlink_under_the_repo(tmp_path: Path, monkeypatch) -> None:
+    import rerun_release as rerun
+
+    repo = tmp_path / "repo"
+    link_dir = repo / "bin"
+    link_dir.mkdir(parents=True)
+    link = link_dir / "python"
+    link.symlink_to("/usr/bin/python3")
+    monkeypatch.setattr(rerun, "REPO", repo)
+    assert rerun._shown_arg(str(link), None) == "bin/python"
+
+
 def test_configured_toolchain_prefers_rustup_env(monkeypatch) -> None:
     import rerun_release as rerun
 
