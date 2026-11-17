@@ -85,7 +85,7 @@ end-to-end number. The per-frame blobs stay.
 The CPC ingest is `db_v2.py` in readcon-core.
 
 <!-- fair-docs:begin fairness-cpc -->
-The published CPC samples in `fair-db31/campaign.json` (`published_db_v2`, 40 frames of 8 Cu) give readcon-db a type-7 median **4.6724e-03 s** (n=6). ASE's 6 samples are 1.0352e-01 s, 8.1242e-02 s, 1.0350e-01 s, 5.9195e-02 s, 6.3394e-02 s, 5.4239e-02 s. Type-7 median **7.2318e-02 s**, Q1 6.0244e-02 s, Q3 9.7937e-02 s, IQR **3.7693e-02 s**.
+The published CPC samples in `fair-db32/campaign.json` (`published_db_v2`, 40 frames of 8 Cu) give readcon-db a type-7 median **4.6724e-03 s** (n=6). ASE's 6 samples are 1.0352e-01 s, 8.1242e-02 s, 1.0350e-01 s, 5.9195e-02 s, 6.3394e-02 s, 5.4239e-02 s. Type-7 median **7.2318e-02 s**, Q1 6.0244e-02 s, Q3 9.7937e-02 s, IQR **3.7693e-02 s**.
 <!-- fair-docs:end fairness-cpc -->
 
 ## What the published timer actually did
@@ -182,42 +182,42 @@ buffers. The GIL is released for the scan. Field checks stay on the
 float64 bytes.
 
 <!-- fair-docs:begin fairness-tables -->
-Warm full read, cold full read, and cold single-frame read from `fair-db31/campaign.json`. Each cell is the type-7 median. n is the sample count stored for that row.
+Warm full read, cold full read, and cold single-frame read from `fair-db32/campaign.json`. Each cell is the type-7 median. n is the sample count stored for that row.
 
 | workload | op | cache | readcon-db | ASE | faster |
 | --- | --- | --- | --- | --- | --- |
-| 10^3 atoms, 1 frame | full_read | warm | 1.6289e-05 (n=12) | 5.2822e-04 (n=12) | readcon-db |
-| 10^3 atoms, 1 frame | full_read | cold | 3.1071e-05 (n=12) | 2.5292e-03 (n=12) | readcon-db |
-| 10^3 atoms, 1 frame | selected | cold | 3.0146e-05 (n=12) | 2.2604e-03 (n=12) | readcon-db |
-| 10^4 atoms, 1 frame | full_read | warm | 2.6799e-04 (n=12) | 3.5971e-03 (n=12) | readcon-db |
-| 10^4 atoms, 1 frame | full_read | cold | 2.9262e-04 (n=12) | 5.0335e-03 (n=12) | readcon-db |
-| 10^4 atoms, 1 frame | selected | cold | 2.8709e-04 (n=12) | 5.2154e-03 (n=12) | readcon-db |
-| 10^5 atoms, 1 frame | full_read | warm | 2.5425e-03 (n=12) | 2.9110e-02 (n=12) | readcon-db |
-| 10^5 atoms, 1 frame | full_read | cold | 5.2342e-03 (n=12) | 3.4039e-02 (n=12) | readcon-db |
-| 10^5 atoms, 1 frame | selected | cold | 5.2760e-03 (n=12) | 3.3105e-02 (n=12) | readcon-db |
-| 10^6 atoms, 1 frame | full_read | warm | 1.9523e-02 (n=12) | 3.0455e-01 (n=12) | readcon-db |
-| 10^6 atoms, 1 frame | full_read | cold | 6.4952e-02 (n=12) | 3.6831e-01 (n=12) | readcon-db |
-| 10^6 atoms, 1 frame | selected | cold | 5.5127e-02 (n=12) | 3.3654e-01 (n=12) | readcon-db |
-| 8 atoms, 1 frame | full_read | warm | 1.1577e-05 (n=12) | 1.5962e-04 (n=12) | readcon-db |
-| 8 atoms, 1 frame | full_read | cold | 2.2461e-05 (n=12) | 5.6110e-04 (n=12) | readcon-db |
-| 8 atoms, 1 frame | selected | cold | 2.1296e-05 (n=12) | 7.2995e-04 (n=12) | readcon-db |
-| 8 atoms, 100 frames | full_read | warm | 4.3565e-05 (n=12) | 8.5145e-03 (n=12) | readcon-db |
-| 8 atoms, 100 frames | full_read | cold | 6.9793e-05 (n=12) | 1.0073e-02 (n=12) | readcon-db |
-| 8 atoms, 100 frames | selected | cold | 2.0235e-05 (n=12) | 1.0385e-03 (n=12) | readcon-db |
-| 8 atoms, 10^4 frames | full_read | warm | 6.1211e-03 (n=12) | 9.0138e-01 (n=12) | readcon-db |
-| 8 atoms, 10^4 frames | full_read | cold | 6.0743e-03 (n=12) | 9.0206e-01 (n=12) | readcon-db |
-| 8 atoms, 10^4 frames | selected | cold | 4.4252e-05 (n=12) | 3.8061e-03 (n=12) | readcon-db |
+| 10^3 atoms, 1 frame | full_read | warm | 1.6831e-05 (n=12) | 4.3995e-04 (n=12) | readcon-db |
+| 10^3 atoms, 1 frame | full_read | cold | 3.0909e-05 (n=12) | 1.4131e-03 (n=12) | readcon-db |
+| 10^3 atoms, 1 frame | selected | cold | 2.9382e-05 (n=12) | 1.4830e-03 (n=12) | readcon-db |
+| 10^4 atoms, 1 frame | full_read | warm | 2.5438e-04 (n=12) | 3.1741e-03 (n=12) | readcon-db |
+| 10^4 atoms, 1 frame | full_read | cold | 2.8230e-04 (n=12) | 4.9253e-03 (n=12) | readcon-db |
+| 10^4 atoms, 1 frame | selected | cold | 2.7642e-04 (n=12) | 4.8785e-03 (n=12) | readcon-db |
+| 10^5 atoms, 1 frame | full_read | warm | 2.5267e-03 (n=12) | 2.8448e-02 (n=12) | readcon-db |
+| 10^5 atoms, 1 frame | full_read | cold | 5.6241e-03 (n=12) | 3.4032e-02 (n=12) | readcon-db |
+| 10^5 atoms, 1 frame | selected | cold | 5.2856e-03 (n=12) | 3.3449e-02 (n=12) | readcon-db |
+| 10^6 atoms, 1 frame | full_read | warm | 1.7261e-02 (n=12) | 3.0055e-01 (n=12) | readcon-db |
+| 10^6 atoms, 1 frame | full_read | cold | 5.7936e-02 (n=12) | 3.4425e-01 (n=12) | readcon-db |
+| 10^6 atoms, 1 frame | selected | cold | 4.7590e-02 (n=12) | 3.2115e-01 (n=12) | readcon-db |
+| 8 atoms, 1 frame | full_read | warm | 1.1489e-05 (n=12) | 1.5351e-04 (n=12) | readcon-db |
+| 8 atoms, 1 frame | full_read | cold | 2.2806e-05 (n=12) | 5.8094e-04 (n=12) | readcon-db |
+| 8 atoms, 1 frame | selected | cold | 2.1025e-05 (n=12) | 8.2697e-04 (n=12) | readcon-db |
+| 8 atoms, 100 frames | full_read | warm | 4.3081e-05 (n=12) | 8.6057e-03 (n=12) | readcon-db |
+| 8 atoms, 100 frames | full_read | cold | 6.7944e-05 (n=12) | 1.0095e-02 (n=12) | readcon-db |
+| 8 atoms, 100 frames | selected | cold | 2.0075e-05 (n=12) | 1.1083e-03 (n=12) | readcon-db |
+| 8 atoms, 10^4 frames | full_read | warm | 6.6220e-03 (n=12) | 9.0089e-01 (n=12) | readcon-db |
+| 8 atoms, 10^4 frames | full_read | cold | 6.0512e-03 (n=12) | 9.2588e-01 (n=12) | readcon-db |
+| 8 atoms, 10^4 frames | selected | cold | 4.3335e-05 (n=12) | 4.5176e-03 (n=12) | readcon-db |
 
-The 10^6-atom warm one-thread full read in this table is the fair-db31 median 1.9523e-02 s. On this host the same sampling rule gave medians of 1.939e-02 s to 3.447e-02 s across campaigns. sample_operation repeats the call until the timed spans reach 50 ms and stores the mean. fair-db30 has eleven samples at inner_n=2 and one at inner_n=1. fair-db31 has inner_n=3 on all twelve. `bench/db31/ase` is the Cu2 stand-in. The equal comparison is fair-db31.
+The 10^6-atom warm one-thread full read in this table is the fair-db32 median 1.7261e-02 s. On this host the same sampling rule gave medians of 1.726e-02 s to 3.447e-02 s across campaigns. sample_operation repeats the call until the timed spans reach 50 ms and stores the mean. fair-db30 has eleven samples at inner_n=2 and one at inner_n=1. fair-db31 has inner_n=3 on all twelve. fair-db32 has eleven samples at inner_n=3 and one at inner_n=4. `bench/db31/ase` is the Cu2 stand-in. The equal comparison is fair-db32.
 
-The large inserts do not share a winner (10^4 atoms, 1 frame: readcon-db 3.6841e-03 (n=12), ASE 3.7112e-03 (n=12), readcon-db is faster; 10^5 atoms, 1 frame: readcon-db 2.5725e-02 (n=12), ASE 2.4346e-02 (n=12), ASE is faster; 10^6 atoms, 1 frame: readcon-db 2.8672e-01 (n=12), ASE 2.4002e-01 (n=12), ASE is faster).
+The large inserts do not share a winner (10^4 atoms, 1 frame: readcon-db 3.6756e-03 (n=12), ASE 3.7001e-03 (n=12), readcon-db is faster; 10^5 atoms, 1 frame: readcon-db 2.4768e-02 (n=12), ASE 2.4911e-02 (n=12), readcon-db is faster; 10^6 atoms, 1 frame: readcon-db 2.8619e-01 (n=12), ASE 2.3656e-01 (n=12), ASE is faster).
 readcon-db is faster on the read rows in this table and on the other insert rows.
 
 ## This machine
 
-Regenerated from `fair-db31/`. Commit `a584a28816c2f603c8c94759fdf45d86fc20f069`. The host line in the log is the neutral label.
+Regenerated from `fair-db32/`. Commit `d8bf1cb567c4117a995fcc7605d1b8dc488324a8`. The host line in the log is the neutral label.
 
-The published-harness rerun in that directory, one warmup discarded, is readcon-db 2.8223e-03 (IQR 1.5053e-03, n=12) and ASE 4.3732e-02 (IQR 1.8376e-02, n=12).
+The published-harness rerun in that directory, one warmup discarded, is readcon-db 4.1602e-03 (IQR 8.1670e-04, n=12) and ASE 7.7911e-02 (IQR 6.4512e-03, n=12).
 
-The fair 40×8 insert, one commit each, is readcon-db 2.2606e-03 and ASE 5.5270e-03.
+The fair 40×8 insert, one commit each, is readcon-db 2.2603e-03 and ASE 5.7336e-03.
 <!-- fair-docs:end fairness-tables -->

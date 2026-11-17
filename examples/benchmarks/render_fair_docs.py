@@ -14,7 +14,7 @@ from collections import Counter
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-DEFAULT_RESULTS = REPO / "examples" / "benchmarks" / "fair-db31"
+DEFAULT_RESULTS = REPO / "examples" / "benchmarks" / "fair-db32"
 
 LADDER = (
     ("atoms-1000", "10^3 atoms, 1 frame"),
@@ -185,30 +185,42 @@ def _million_warm_medians(repo: Path) -> list[float]:
 
 
 def million_warm_note(results_name: str) -> str:
-    """Host range for the 1M warm one-thread cell. Only the fair-db31 prose."""
-    if results_name != "fair-db31":
+    """Host range for the 1M warm one-thread cell. Only the fair-db32 prose."""
+    if results_name != "fair-db32":
         return ""
     # The committed campaigns, not the REPO the doc splice writes into.
     repo = Path(__file__).resolve().parents[2]
     root = repo / "examples" / "benchmarks"
-    current = load(root / "fair-db31")
-    earlier = load(root / "fair-db30")
+    current = load(root / results_name)
     row = pick(current["fair"], "atoms-1000000", "full_read", "warm", "readcon-db")
-    old = pick(earlier["fair"], "atoms-1000000", "full_read", "warm", "readcon-db")
     medians = _million_warm_medians(repo)
     low, high = min(medians), max(medians)
-    now_counts = _inner_counts(root / "fair-db31", row["samples_s"])
-    old_counts = _inner_counts(root / "fair-db30", old["samples_s"])
+    counts = [
+        _describe_inner(
+            name,
+            _inner_counts(
+                root / name,
+                pick(
+                    load(root / name)["fair"],
+                    "atoms-1000000",
+                    "full_read",
+                    "warm",
+                    "readcon-db",
+                )["samples_s"],
+            ),
+        )
+        for name in ("fair-db30", "fair-db31", "fair-db32")
+    ]
     return (
         "The 10^6-atom warm one-thread full read in this table is the "
-        f"fair-db31 median {fmt(row['median_s'])} s. On this host the same sampling "
+        f"{results_name} median {fmt(row['median_s'])} s. On this host the same sampling "
         f"rule gave medians of {_sig4(low)} s to {_sig4(high)} s across campaigns. "
         "sample_operation repeats the "
         "call until the timed spans reach 50 ms and stores the mean. "
-        f"{_describe_inner('fair-db30', old_counts)} "
-        f"{_describe_inner('fair-db31', now_counts)} "
+        + " ".join(counts)
+        + " "
         "`bench/db31/ase` is the Cu2 stand-in. The equal comparison is "
-        "fair-db31."
+        f"{results_name}."
     )
 
 
