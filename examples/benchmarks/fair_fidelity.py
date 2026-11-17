@@ -5,6 +5,12 @@ The geometry is ``paper_con_text``: eight Cu atoms, forty frames, cell
 non-zero velocity, and an atom id that is a permutation of ``0..7``.
 CON stores one mass per symbol, so that mass is the same on every Cu
 atom and is not the elemental default.
+
+``compare`` checks, with exact equality, symbols, positions, cell
+lengths, cell angles, pbc, masses, fixed flags, velocities, and
+frame_index on the stored CON frames, on ``read_arrays``, and on
+``materialize_ase``. Atom ids are checked on the CON frames only.
+ASE keeps no atom id.
 """
 
 from __future__ import annotations
@@ -131,90 +137,134 @@ def _yes(kept: bool) -> str:
     return "yes" if kept else "no"
 
 
-def compare(stored: dict) -> list[dict]:
-    """One row per field. ``kept`` is whether the store returned the written value."""
+def views(stored: dict) -> dict:
+    """Stored CON frames, cooked arrays, and the ASE materializer output."""
     parsed = stored["parsed"]
-    written = stored["atoms"]
     rdb = ConCorpus(str(stored["corpus"]), readonly=True)
     try:
         con_frames = [
             readcon.read_con_string(rdb.get_frame_text(1, index))[0]
             for index in range(N_FRAMES)
         ]
+        arrays = rdb.read_arrays(1)
     finally:
         fair.close_lmdb(rdb)
     rows = fair.read_ase_rows(stored["ase"], N_FRAMES)
-    got = fair.materialize_ase(rows)
-    back = [row.toatoms() for row in rows]
+    return {
+        "parsed": parsed,
+        "written": stored["atoms"],
+        "con": con_frames,
+        "arrays": arrays,
+        "got": fair.materialize_ase(rows),
+        "ase_atom_id": ["atom_id" in row.toatoms().arrays for row in rows],
+    }
+
+
+def _u8(left, right) -> bool:
+    return (
+        np.asarray(left, dtype=np.uint8).tobytes()
+        == np.asarray(right, dtype=np.uint8).tobytes()
+    )
+
+
+def _lengths_angles(matrix) -> tuple[np.ndarray, np.ndarray]:
+    from ase.cell import Cell
+
+    cell = Cell(np.asarray(matrix, dtype=np.float64))
+    return (
+        np.asarray(cell.lengths(), dtype=np.float64),
+        np.asarray(cell.angles(), dtype=np.float64),
+    )
+
+
+def compare(stored: dict) -> list[dict]:
+    """One row per asserted field. Equality is byte-for-byte on the arrays."""
+    seen = views(stored)
+    parsed = seen["parsed"]
+    written = seen["written"]
+    con_frames = seen["con"]
+    arrays = seen["arrays"]
+    got = seen["got"]
+    symbols = ["Cu"] * N_ATOMS
+    expect_pos = np.stack([_positions(frame) for frame in parsed])
+    expect_vel = np.stack([_velocities(frame) for frame in parsed])
+    expect_mass = np.stack([_masses(frame) for frame in parsed])
+    expect_fixed = np.stack([_fixed_rows(frame) for frame in parsed])
+    expect_index = np.arange(N_FRAMES, dtype=np.float64)
+    expect_ase_pos = np.stack([atoms.positions for atoms in written])
+    expect_ase_vel = np.stack([atoms.get_velocities() for atoms in written])
+    expect_ase_mass = np.stack([atoms.get_masses() for atoms in written])
+    expect_ase_cell = np.stack([atoms.cell.array for atoms in written])
+    expect_ase_fixed = np.stack([fair._fixed_mask(atoms) for atoms in written])
 
     symbols_rdb = all(
-        [atom.symbol for atom in frame.atoms] == ["Cu"] * N_ATOMS
-        for frame in con_frames
+        [atom.symbol for atom in frame.atoms] == symbols for frame in con_frames
+    ) and all(
+        [run[0] for run in frame] == symbols[:1] and frame[0][1] == N_ATOMS
+        for frame in arrays["symbol_runs"]
     )
     symbols_ase = all(
-        atoms.get_chemical_symbols() == ["Cu"] * N_ATOMS for atoms in back
+        [run[0] for run in frame] == symbols[:1] and frame[0][1] == N_ATOMS
+        for frame in got["symbol_runs"]
     )
-    pos_rdb = all(
-        _bits(_positions(frame), _positions(src))
-        for frame, src in zip(con_frames, parsed)
+    pos_rdb = _bits(expect_pos, [_positions(frame) for frame in con_frames]) and _bits(
+        arrays["positions"], expect_pos
     )
-    pos_ase = all(
-        _bits(atoms.positions, src.positions) for atoms, src in zip(back, written)
-    )
-    cell_rdb = all(
+    pos_ase = _bits(got["positions"], expect_ase_pos)
+    lengths_rdb = all(
         _bits(frame.cell, src.cell) for frame, src in zip(con_frames, parsed)
     )
-    cell_ase = all(
-        _bits(atoms.cell.array, src.cell.array) for atoms, src in zip(back, written)
+    angles_rdb = all(
+        _bits(frame.angles, src.angles) for frame, src in zip(con_frames, parsed)
     )
-    pbc_rdb = all(tuple(frame.metadata["pbc"]) == PBC for frame in con_frames)
-    pbc_ase = all(tuple(bool(flag) for flag in atoms.pbc) == PBC for atoms in back)
-    mass_rdb = all(
-        _bits(_masses(frame), _masses(src)) for frame, src in zip(con_frames, parsed)
+    lengths_ase = all(
+        _bits(_lengths_angles(matrix)[0], atoms.cell.lengths())
+        for matrix, atoms in zip(got["cell"], written)
     )
-    mass_ase = all(
-        _bits(atoms.get_masses(), src.get_masses()) for atoms, src in zip(back, written)
+    angles_ase = all(
+        _bits(_lengths_angles(matrix)[1], atoms.cell.angles())
+        for matrix, atoms in zip(got["cell"], written)
     )
-    fixed_rdb = all(
-        _fixed_rows(frame).tobytes() == _fixed_rows(src).tobytes()
-        for frame, src in zip(con_frames, parsed)
+    cell_ase = _bits(got["cell"], expect_ase_cell) and lengths_ase and angles_ase
+    pbc_rdb = all(
+        tuple(bool(flag) for flag in frame.metadata["pbc"]) == PBC
+        for frame in con_frames
+    ) and all(tuple(bool(flag) for flag in flags) == PBC for flags in arrays["pbc"])
+    pbc_ase = all(tuple(bool(flag) for flag in flags) == PBC for flags in got["pbc"])
+    mass_rdb = _bits([_masses(frame) for frame in con_frames], expect_mass) and _bits(
+        arrays["masses"], expect_mass
     )
-    fixed_ase = all(
-        fair._fixed_mask(atoms).tobytes() == fair._fixed_mask(src).tobytes()
-        for atoms, src in zip(back, written)
+    mass_ase = _bits(got["masses"], expect_ase_mass)
+    fixed_rdb = _u8([_fixed_rows(frame) for frame in con_frames], expect_fixed) and _u8(
+        arrays["constraints"], expect_fixed
     )
-    # The fair reader must report the mask the database stored.
-    fixed_reader = (
-        got["constraints"].tobytes()
-        == np.stack([fair._fixed_mask(atoms) for atoms in back]).tobytes()
+    fixed_ase = _u8(got["constraints"], expect_ase_fixed)
+    vel_rdb = _bits(
+        [frame.velocities_array() for frame in con_frames], expect_vel
+    ) and _bits(arrays["velocities"], expect_vel)
+    vel_ase = _bits(got["velocities"], expect_ase_vel)
+    index_rdb = (
+        all(int(frame.frame_index) == index for index, frame in enumerate(con_frames))
+        and _bits(arrays["frame_index"], expect_index)
+        and all(arrays["frame_index_set"])
     )
-    vel_rdb = all(
-        _bits(_velocities(frame), _velocities(src))
-        for frame, src in zip(con_frames, parsed)
-    )
-    vel_ase = all(
-        _bits(atoms.get_velocities(), src.get_velocities())
-        for atoms, src in zip(back, written)
-    )
+    index_ase = _bits(got["frame_index"], expect_index) and all(got["frame_index_set"])
     ids_rdb = all(
         [atom.atom_id for atom in frame.atoms] == list(ATOM_IDS) for frame in con_frames
     )
-    ids_ase = all("atom_id" in atoms.arrays for atoms in back)
-    float_rdb = pos_rdb and cell_rdb and mass_rdb and vel_rdb
+    float_rdb = pos_rdb and lengths_rdb and angles_rdb and mass_rdb and vel_rdb
     float_ase = pos_ase and cell_ase and mass_ase and vel_ase
-    rows_out = [
+    return [
         {"field": "symbols", "readcon": symbols_rdb, "ase": symbols_ase},
         {"field": "positions", "readcon": pos_rdb, "ase": pos_ase},
-        {"field": "cell", "readcon": cell_rdb, "ase": cell_ase},
+        {"field": "cell lengths", "readcon": lengths_rdb, "ase": lengths_ase},
+        {"field": "cell angles", "readcon": angles_rdb, "ase": angles_ase},
         {"field": "pbc", "readcon": pbc_rdb, "ase": pbc_ase},
         {"field": "masses", "readcon": mass_rdb, "ase": mass_ase},
-        {
-            "field": "fixed flags",
-            "readcon": fixed_rdb,
-            "ase": fixed_ase and fixed_reader,
-        },
+        {"field": "fixed flags", "readcon": fixed_rdb, "ase": fixed_ase},
         {"field": "velocities", "readcon": vel_rdb, "ase": vel_ase},
-        {"field": "atom ids", "readcon": ids_rdb, "ase": ids_ase},
+        {"field": "frame index", "readcon": index_rdb, "ase": index_ase},
+        {"field": "atom ids", "readcon": ids_rdb, "ase": False},
         {
             "field": "float precision",
             "readcon": float_rdb,
@@ -223,7 +273,6 @@ def compare(stored: dict) -> list[dict]:
             "ase_text": "bit-exact" if float_ase else "not bit-exact",
         },
     ]
-    return rows_out
 
 
 def render_markdown(rows: list[dict]) -> str:
@@ -233,7 +282,10 @@ def render_markdown(rows: list[dict]) -> str:
         "Generated by `examples/benchmarks/fair-fidelity/write_fields.py`.",
         "Forty frames of eight Cu atoms, the paper cell and coordinates,",
         "an explicit mass of 62.5 on every atom, mixed fixed flags,",
-        "non-zero velocities, and atom ids `(3, 0, 7, 1, 5, 2, 6, 4)`.",
+        "non-zero velocities, frame indexes, and atom ids",
+        "`(3, 0, 7, 1, 5, 2, 6, 4)`.",
+        "Checked on the stored CON frames, on readcon-db `read_arrays`,",
+        "and on `materialize_ase`. Atom ids are a readcon-db field.",
         "CON keeps one mass per symbol, so the mass does not vary inside the frame.",
         "",
         "| field | readcon-db kept? | ASE kept? |",
