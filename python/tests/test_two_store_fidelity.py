@@ -2,12 +2,13 @@
 
 Exact equality on the stored CON frames, on ``read_arrays``, and on
 ``materialize_ase``: symbols, positions, cell lengths, cell angles, the
-cell matrix, pbc, masses, fixed flags, velocities, frame index, and
-atomic numbers. ``read_arrays`` energy is 0 with ``energy_set`` false,
-and ``velocities_set`` and ``pbc_set`` are true. ``materialize_ase``
-energy is that same unset pair. CON units metadata matches the written
-units. Atom ids are exact on the CON frames and are whatever
-``ase_atom_id`` read back.
+cell matrix bytes, pbc, masses, fixed flags, velocities, forces, frame
+index, and atomic numbers. Even frames have non-zero forces and odd
+frames have zeros. ``read_arrays`` energy is 0 with ``energy_set``
+false, ``velocities_set`` and ``pbc_set`` are true, and ``n_frames`` and
+``n_atoms`` match the fixture. ``materialize_ase`` energy is that same
+unset pair. CON units metadata matches the written units. Atom ids are
+exact on the CON frames and are whatever ``ase_atom_id`` read back.
 """
 
 from __future__ import annotations
@@ -85,6 +86,9 @@ def test_paper_frames_round_trip_each_field(tmp_path: Path) -> None:
     got = seen["got"]
     expect_pos = np.stack([fair_fidelity._positions(frame) for frame in parsed])
     expect_vel = np.stack([fair_fidelity._velocities(frame) for frame in parsed])
+    expect_forces = np.stack([fair_fidelity._forces(frame) for frame in parsed])
+    assert np.any(expect_forces[0::2] != 0.0)
+    assert np.all(expect_forces[1::2] == 0.0)
     expect_mass = np.stack([fair_fidelity._masses(frame) for frame in parsed])
     expect_fixed = np.stack([fair_fidelity._fixed_rows(frame) for frame in parsed])
     expect_index = np.arange(fair_fidelity.N_FRAMES, dtype=np.float64)
@@ -105,10 +109,16 @@ def test_paper_frames_round_trip_each_field(tmp_path: Path) -> None:
             == fair_fidelity._fixed_rows(src).tobytes()
         )
         assert _bits(frame.velocities_array(), fair_fidelity._velocities(src))
+        assert frame.has_forces
+        assert _bits(frame.forces_array(), src.forces_array())
         assert [atom.atom_id for atom in frame.atoms] == list(fair_fidelity.ATOM_IDS)
         assert int(frame.frame_index) == index
+    assert int(arrays["n_frames"]) == fair_fidelity.N_FRAMES
+    assert int(arrays["n_atoms"]) == fair_fidelity.N_ATOMS
     assert _bits(arrays["positions"], expect_pos)
     assert _bits(arrays["velocities"], expect_vel)
+    assert _bits(arrays["forces"], expect_forces)
+    assert _bits(arrays["cell"], [atoms.cell.array for atoms in written])
     assert arrays["velocities_set"] is True
     assert (
         np.asarray(arrays["numbers"], dtype=np.uint32).tobytes()
@@ -133,6 +143,8 @@ def test_paper_frames_round_trip_each_field(tmp_path: Path) -> None:
         assert _bits(angles, atoms.cell.angles())
     assert _bits(got["positions"], [atoms.positions for atoms in written])
     assert _bits(got["velocities"], [atoms.get_velocities() for atoms in written])
+    assert got["forces"] is not None
+    assert _bits(got["forces"], expect_forces)
     assert (
         np.asarray(got["numbers"], dtype=np.uint32).tobytes()
         == np.full(
@@ -170,6 +182,7 @@ def test_paper_frames_round_trip_each_field(tmp_path: Path) -> None:
         "masses",
         "fixed flags",
         "velocities",
+        "forces",
         "frame index",
         "atomic numbers",
         "energy",
