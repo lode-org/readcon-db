@@ -373,19 +373,26 @@ def cpu_model() -> str:
     return ""
 
 
-def cpu_family_and_model() -> tuple[str, str]:
+def cpu_family_and_model(cpuinfo: str | None = None) -> tuple[str, str]:
+    """Family and model. The key is ``model``, not ``model name``."""
+    if cpuinfo is None:
+        try:
+            cpuinfo = Path("/proc/cpuinfo").read_text()
+        except OSError:
+            return "", ""
     family = ""
     model = ""
-    try:
-        for line in Path("/proc/cpuinfo").read_text().splitlines():
-            if line.startswith("cpu family") and ":" in line:
-                family = line.split(":", 1)[1].strip()
-            if line.startswith("model") and ":" in line:
-                model = line.split(":", 1)[1].strip()
-            if family and model:
-                break
-    except OSError:
-        return "", ""
+    for line in cpuinfo.splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        if key == "cpu family":
+            family = value.strip()
+        elif key == "model":
+            model = value.strip()
+        if family and model:
+            break
     return family, model
 
 

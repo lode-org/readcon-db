@@ -704,6 +704,18 @@ def test_run_command_relativizes_repo_paths(tmp_path: Path) -> None:
     assert "/usr/bin/python3" in body
 
 
+def test_cpu_model_key_is_not_model_name() -> None:
+    import rerun_release as rerun
+
+    text = (
+        "model name\t: Intel(R) Xeon(R) CPU\n"
+        "cpu family\t: 6\n"
+        "model\t: 85\n"
+        "stepping\t: 4\n"
+    )
+    assert rerun.cpu_family_and_model(text) == ("6", "85")
+
+
 def test_configured_toolchain_prefers_rustup_env(monkeypatch) -> None:
     import rerun_release as rerun
 
