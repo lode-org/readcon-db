@@ -334,61 +334,126 @@ def test_export_writes_each_run_to_one_path(tmp_path: Path) -> None:
     assert not (repo / "build" / "rerun-wrong-core-export").exists()
 
 
-def test_unpushed_readcon_core_refuses_export(tmp_path: Path) -> None:
-    """A remote feature branch or any tag is pushed. A local-only sha is not."""
-    import rerun_release as rerun
-
+def _bare_and_clone(tmp_path: Path) -> tuple[Path, Path, str]:
+    bare = tmp_path / "bare.git"
+    init_bare = _git(tmp_path, "init", "--bare", "-b", "main", str(bare))
+    assert init_bare.returncode == 0, init_bare.stderr
     core = tmp_path / "core"
     core.mkdir()
-    _git(core, "init", "-b", "main")
+    assert _git(core, "init", "-b", "main").returncode == 0
     (core / "readme").write_text("one\n")
-    _git(core, "add", "readme")
-    _git(core, "commit", "-m", "one")
-    _git(core, "update-ref", "refs/remotes/origin/main", "HEAD")
-    pushed = _git(core, "rev-parse", "HEAD").stdout.strip()
-    assert rerun.core_sha_is_pushed(pushed, core)
-    tagged = _git(core, "tag", "v0.23.9", pushed)
-    assert tagged.returncode == 0, tagged.stderr
-    assert rerun.core_sha_is_pushed(pushed, core)
-    branch_only = _git(core, "checkout", "-b", "feature")
-    assert branch_only.returncode == 0, branch_only.stderr
-    (core / "readme").write_text("two\n")
-    _git(core, "add", "readme")
-    _git(core, "commit", "-m", "two")
+    assert _git(core, "add", "readme").returncode == 0
+    assert _git(core, "commit", "-m", "one").returncode == 0
+    assert _git(core, "remote", "add", "origin", str(bare)).returncode == 0
+    pushed = _git(core, "push", "-u", "origin", "main")
+    assert pushed.returncode == 0, pushed.stderr
+    return bare, core, _git(core, "rev-parse", "HEAD").stdout.strip()
+
+
+def test_local_tag_only_is_refused(tmp_path: Path, monkeypatch) -> None:
+    """A commit tagged only locally does not count as pushed."""
+    import rerun_release as rerun
+
+    bare, core, _main_sha = _bare_and_clone(tmp_path)
+    assert _git(core, "checkout", "--detach").returncode == 0
+    (core / "readme").write_text("local-tag-only\n")
+    assert _git(core, "add", "readme").returncode == 0
+    assert _git(core, "commit", "-m", "local tag only").returncode == 0
+    local_sha = _git(core, "rev-parse", "HEAD").stdout.strip()
+    assert _git(core, "tag", "v0.23.9-local", local_sha).returncode == 0
+    assert not rerun.core_sha_is_pushed(local_sha, core)
+    with pytest.raises(SystemExit, match="not a crates.io release or a pushed commit"):
+        rerun.require_exportable_core(
+            {
+                "name": "readcon-core",
+                "version": "0.23.3",
+                "source": "git+https://github.com/lode-org/readcon-core#" + local_sha,
+            },
+            "0.23.3",
+            core,
+        )
+    # Also verify the cloned checkout path rejects a local-only tag on an unpushed commit.
+    monkeypatch.setattr(rerun, "REPO", tmp_path / "work")
+    monkeypatch.setattr(rerun, "CORE_GIT", str(bare))
+    dest = rerun.core_checkout()
+    assert _git(dest, "checkout", "--detach").returncode == 0
+    (dest / "readme").write_text("dest-local\n")
+    assert _git(dest, "add", "readme").returncode == 0
+    assert _git(dest, "commit", "-m", "dest local").returncode == 0
+    dest_sha = _git(dest, "rev-parse", "HEAD").stdout.strip()
+    assert _git(dest, "tag", "local-only", dest_sha).returncode == 0
+    assert not rerun.core_sha_is_pushed(dest_sha)
+
+
+def test_pushed_branch_is_accepted(tmp_path: Path, monkeypatch) -> None:
+    """A commit on a pushed branch is accepted."""
+    import rerun_release as rerun
+
+    bare, core, _main_sha = _bare_and_clone(tmp_path)
+    assert _git(core, "checkout", "-b", "feature").returncode == 0
+    (core / "readme").write_text("feature\n")
+    assert _git(core, "add", "readme").returncode == 0
+    assert _git(core, "commit", "-m", "feature").returncode == 0
     feature = _git(core, "rev-parse", "HEAD").stdout.strip()
-    _git(core, "update-ref", "refs/remotes/origin/feature", feature)
+    assert _git(core, "push", "origin", "feature").returncode == 0
     assert rerun.core_sha_is_pushed(feature, core)
-    detached = _git(core, "checkout", "--detach")
-    assert detached.returncode == 0, detached.stderr
-    (core / "readme").write_text("tagged\n")
-    _git(core, "add", "readme")
-    tagged_commit = _git(core, "commit", "-m", "tag only")
-    assert tagged_commit.returncode == 0, tagged_commit.stderr
-    tag_sha = _git(core, "rev-parse", "HEAD").stdout.strip()
-    assert tag_sha not in {pushed, feature}
-    assert not rerun.core_sha_is_pushed(tag_sha, core)
-    made = _git(core, "tag", "pinned", tag_sha)
-    assert made.returncode == 0, made.stderr
-    assert rerun.core_sha_is_pushed(tag_sha, core)
-    missing = "b" * 40
-    assert not rerun.core_sha_is_pushed(missing, core)
-    try:
-        try:
-            rerun.require_exportable_core(
-                {
-                    "name": "readcon-core",
-                    "version": "0.23.3",
-                    "source": "git+https://github.com/lode-org/readcon-core#" + missing,
-                },
-                "0.23.3",
-                core,
-            )
-        except SystemExit as exc:
-            assert "not a crates.io release or a pushed commit" in str(exc)
-        else:
-            raise AssertionError("unpushed readcon-core was accepted")
-    finally:
-        _git(core, "checkout", "main")
+
+    monkeypatch.setattr(rerun, "REPO", tmp_path / "work")
+    monkeypatch.setattr(rerun, "CORE_GIT", str(bare))
+    assert rerun.core_sha_is_pushed(feature)
+
+
+def test_commit_reachable_only_from_pushed_tag_is_accepted(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A commit reachable only from a pushed tag (not on any branch) is accepted."""
+    import rerun_release as rerun
+
+    bare, core, _main_sha = _bare_and_clone(tmp_path)
+    assert _git(core, "checkout", "--detach").returncode == 0
+    (core / "readme").write_text("ancestor\n")
+    assert _git(core, "add", "readme").returncode == 0
+    assert _git(core, "commit", "-m", "ancestor").returncode == 0
+    ancestor_sha = _git(core, "rev-parse", "HEAD").stdout.strip()
+    (core / "readme").write_text("tagged-tip\n")
+    assert _git(core, "add", "readme").returncode == 0
+    assert _git(core, "commit", "-m", "tagged tip").returncode == 0
+    tip_sha = _git(core, "rev-parse", "HEAD").stdout.strip()
+    assert _git(core, "tag", "-a", "v0.23.9", "-m", "release", tip_sha).returncode == 0
+    assert _git(core, "push", "origin", "v0.23.9").returncode == 0
+
+    assert rerun.core_sha_is_pushed(tip_sha, core)
+    assert rerun.core_sha_is_pushed(ancestor_sha, core)
+
+    monkeypatch.setattr(rerun, "REPO", tmp_path / "work")
+    monkeypatch.setattr(rerun, "CORE_GIT", str(bare))
+    assert rerun.core_sha_is_pushed(ancestor_sha)
+
+
+def test_no_remotes_is_refused(tmp_path: Path) -> None:
+    """A repo with no configured remotes never counts local branches or tags."""
+    import rerun_release as rerun
+
+    core = tmp_path / "no-remotes"
+    core.mkdir()
+    assert _git(core, "init", "-b", "main").returncode == 0
+    (core / "readme").write_text("one\n")
+    assert _git(core, "add", "readme").returncode == 0
+    assert _git(core, "commit", "-m", "one").returncode == 0
+    sha = _git(core, "rev-parse", "HEAD").stdout.strip()
+    assert _git(core, "tag", "v0.23.9", sha).returncode == 0
+    assert _git(core, "update-ref", "refs/remotes/origin/main", sha).returncode == 0
+    assert not rerun.core_sha_is_pushed(sha, core)
+    with pytest.raises(SystemExit, match="not a crates.io release or a pushed commit"):
+        rerun.require_exportable_core(
+            {
+                "name": "readcon-core",
+                "version": "0.23.3",
+                "source": "git+https://github.com/lode-org/readcon-core#" + sha,
+            },
+            "0.23.3",
+            core,
+        )
 
 
 def _core_repo(path: Path, remote: str) -> str:

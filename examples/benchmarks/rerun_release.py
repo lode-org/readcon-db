@@ -586,13 +586,74 @@ def _object_exists(checkout: Path, sha: str) -> bool:
     return found.returncode == 0
 
 
+def _configured_remotes(checkout: Path) -> list[str]:
+    remotes = _git_lines(checkout, "remote")
+    if remotes.returncode != 0:
+        return []
+    return [line.strip() for line in remotes.stdout.splitlines() if line.strip()]
+
+
+def _ls_remote_refs(checkout: Path, remote: str) -> dict[str, str]:
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    proc = subprocess.run(
+        ["git", "-C", str(checkout), "ls-remote", "--heads", "--tags", remote],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise SystemExit(
+            "refusing to export: could not query remote "
+            f"{remote} for readcon-core "
+            f"(git ls-remote failed with status {proc.returncode})"
+        )
+    refs: dict[str, str] = {}
+    for line in proc.stdout.splitlines():
+        if "\t" not in line:
+            continue
+        oid, refname = line.split("\t", 1)
+        oid = oid.strip().lower()
+        refname = refname.strip()
+        if refname.endswith("^{}"):
+            refs[refname[:-3]] = oid
+        elif refname not in refs:
+            refs[refname] = oid
+    return refs
+
+
 def _remote_contains(checkout: Path, sha: str) -> bool:
-    """True when a fetched remote branch or any tag contains ``sha``."""
-    branches = _git_lines(checkout, "branch", "-r", "--contains", sha)
-    if branches.returncode == 0 and branches.stdout.strip():
-        return True
-    tags = _git_lines(checkout, "tag", "--contains", sha)
-    return tags.returncode == 0 and bool(tags.stdout.strip())
+    """True when a remote branch or remote tag on a configured remote contains ``sha``."""
+    remotes = _configured_remotes(checkout)
+    if not remotes:
+        return False
+    target = sha.strip().lower()
+    has_target = _object_exists(checkout, target)
+    for remote in remotes:
+        refs = _ls_remote_refs(checkout, remote)
+        for tip in set(refs.values()):
+            if tip == target:
+                return True
+            if has_target and _object_exists(checkout, tip):
+                anc = _git_lines(checkout, "merge-base", "--is-ancestor", target, tip)
+                if anc.returncode == 0:
+                    return True
+    return False
+
+
+def _remote_tracking_contains(checkout: Path, sha: str) -> bool:
+    """True when fetched remote-tracking refs (branches or remote tags) contain ``sha``."""
+    remotes = _configured_remotes(checkout)
+    if not remotes:
+        return False
+    for remote in remotes:
+        refs = _git_lines(
+            checkout, "for-each-ref", "--contains", sha, f"refs/remotes/{remote}/"
+        )
+        if refs.returncode == 0 and refs.stdout.strip():
+            return True
+    return False
 
 
 def core_checkout() -> Path:
@@ -602,10 +663,30 @@ def core_checkout() -> Path:
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
     if not (dest / ".git").exists():
-        argv = ["git", "clone", "--quiet", CORE_GIT, str(dest)]
+        argv = [
+            "git",
+            "clone",
+            "--quiet",
+            "--no-tags",
+            "-c",
+            "remote.origin.fetch=+refs/tags/*:refs/remotes/origin/tags/*",
+            CORE_GIT,
+            str(dest),
+        ]
         action = "clone"
     else:
-        argv = ["git", "-C", str(dest), "fetch", "--quiet", "--tags", "origin"]
+        argv = [
+            "git",
+            "-C",
+            str(dest),
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--prune",
+            "origin",
+            "+refs/heads/*:refs/remotes/origin/*",
+            "+refs/tags/*:refs/remotes/origin/tags/*",
+        ]
         action = "fetch"
     try:
         subprocess.check_call(argv, env=env)
@@ -619,20 +700,21 @@ def core_checkout() -> Path:
 
 
 def core_sha_is_pushed(sha: str, repo: Path | None = None) -> bool:
-    """True when ``sha`` is on a remote branch or a tag of readcon-core.
+    """True when ``sha`` is on a remote branch or remote tag of readcon-core.
 
-    A commit that is already in the local checkout is judged from the
-    fetched remote-tracking branches and tags. Fetching is only for a sha
-    the checkout does not have yet, and a fetch or clone failure is a
-    clean refusal.
+    When ``repo`` is given, its configured remotes are queried directly via
+    ``git ls-remote``. Otherwise, a commit already in the local checkout is
+    judged from fetched remote-tracking refs under ``refs/remotes/*`` without
+    hitting the network; fetching is only for a sha the checkout does not have
+    yet, and a fetch or clone failure is a clean refusal.
     """
     if repo is not None:
         return _remote_contains(repo, sha)
     dest = REPO / "build" / "readcon-core-git"
     if (dest / ".git").exists() and _object_exists(dest, sha):
-        return _remote_contains(dest, sha)
+        return _remote_tracking_contains(dest, sha)
     core_checkout()
-    return _remote_contains(dest, sha)
+    return _remote_tracking_contains(dest, sha)
 
 
 def pin_instructions(version: str) -> str:
@@ -644,8 +726,8 @@ def pin_instructions(version: str) -> str:
         "For a pushed commit, set "
         '`readcon-core = { git = "https://github.com/lode-org/readcon-core", '
         'rev = "<sha>" }` and run `cargo update -p readcon-core`. '
-        "Export accepts that registry source, or a git rev that "
-        "`git branch -r --contains` or `git tag --contains` lists."
+        "Export accepts that registry source, or a git rev on a remote "
+        "branch or remote tag."
     )
 
 
