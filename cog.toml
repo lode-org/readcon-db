@@ -25,6 +25,7 @@ bld = { changelog_title = "Buildsystem" }
 gen = { changelog_title = "Generated" }
 dat = { changelog_title = "Data" }
 bench = { changelog_title = "Benchmarks" }
+records = { changelog_title = "Records" }
 deps = { changelog_title = "Dependencies" }
 wip = { changelog_title = "Work in progress" }
 merge = { changelog_title = "Merges" }
