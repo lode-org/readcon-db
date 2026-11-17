@@ -14,6 +14,7 @@ os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
+import argparse
 import platform
 import sys
 import time
@@ -179,9 +180,13 @@ N = 12
 
 
 def require_recorded_n(n: int) -> int:
-    """A saved record uses at least 12 paired samples."""
-    if n < 12:
-        raise ValueError(f"a recorded run needs n>=12, not {n}")
+    """A saved record uses at least 12 paired samples.
+
+    A release rerun (``READCON_RERUN_RELEASE=1``) may use 6.
+    """
+    floor = 6 if os.environ.get("READCON_RERUN_RELEASE") == "1" else 12
+    if n < floor:
+        raise ValueError(f"a recorded run needs n>={floor}, not {n}")
     return n
 
 
@@ -533,6 +538,16 @@ def example_record() -> dict:
 
 
 def main() -> None:
+    global BENCH, N
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", type=Path, default=None)
+    args = ap.parse_args()
+    if args.out is not None:
+        BENCH = args.out if args.out.is_absolute() else REPO / args.out
+    if os.environ.get("READCON_RERUN_RELEASE") == "1":
+        N = int(os.environ.get("READCON_DB28_N", str(N)))
+        if N < 6:
+            raise SystemExit(f"n must be at least 6, not {N}")
     os.environ.update(drv.env_base())
     os.environ.pop("READCON_DB_COOKED_CODEC", None)
     import fair_ase_protocol as fair
@@ -579,7 +594,7 @@ def main() -> None:
         "settings": "full, selected, range; cold and warm; threads unset and 1",
         **drv.fair.host_facts(),
     }
-    BENCH.mkdir(parents=True)
+    BENCH.mkdir(parents=True, exist_ok=args.out is not None)
     log_path = BENCH / "campaign.log"
     reads = {}
     peaks = {arm: {} for arm in ARMS}

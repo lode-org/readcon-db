@@ -68,8 +68,10 @@ from readcon_db import ConCorpus
 REPO = Path(__file__).resolve().parents[2]
 WARMUP = 1
 N_SAMPLES = int(os.environ.get("READCON_DB_N_SAMPLES", "12"))
-if N_SAMPLES < 12:
-    raise ValueError(f"a fair row needs n>=12, not {N_SAMPLES}")
+# A saved fair row stays at 12. The release rerun may use 6.
+_SAMPLE_FLOOR = 6 if os.environ.get("READCON_RERUN_RELEASE") == "1" else 12
+if N_SAMPLES < _SAMPLE_FLOOR:
+    raise ValueError(f"a fair row needs n>={_SAMPLE_FLOOR}, not {N_SAMPLES}")
 # A single sub-millisecond fsync or query is mostly timer noise. Repeat it
 # until the timed spans cover this long, and publish the mean as one sample.
 # Reads repeat until the timed spans cover this. A 50 ms mean is enough

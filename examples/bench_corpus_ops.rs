@@ -1,5 +1,8 @@
 //! Wall-clock insert / point extract / select vs workload size.
-//! Usage: cargo run --release --example bench_corpus_ops -- <frames_dir> <out.json>
+//! Usage: cargo run --release --example bench_corpus_ops -- <frames_dir> <out.json> [repeats]
+//!
+//! `repeats`, when given, is the extract round count and the select round count,
+//! and it must be at least 6. Omitted, extract stays at 20 rounds and select at 50.
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -72,14 +75,31 @@ fn host_record() -> Value {
     host
 }
 
+fn repeat_pair(text: Option<&str>) -> Result<(usize, usize), Box<dyn std::error::Error>> {
+    let Some(text) = text else {
+        return Ok((20, 50));
+    };
+    let n: usize = text.parse()?;
+    if n < 6 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("repeats must be at least 6, not {n}"),
+        )
+        .into());
+    }
+    Ok((n, n))
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let frames_dir = PathBuf::from(env::args().nth(1).expect("frames_dir"));
-    let out_path = env::args().nth(2).unwrap_or_else(|| {
+    let args: Vec<String> = env::args().collect();
+    let frames_dir = PathBuf::from(args.get(1).expect("frames_dir"));
+    let out_path = args.get(2).cloned().unwrap_or_else(|| {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("build/readcon_db_bench.json")
             .display()
             .to_string()
     });
+    let (rounds, sel_rounds) = repeat_pair(args.get(3).map(String::as_str))?;
     if let Some(parent) = PathBuf::from(&out_path).parent() {
         fs::create_dir_all(parent)?;
     }
@@ -116,7 +136,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let insert_s = t0.elapsed().as_secs_f64();
 
         let mut extract_sum = 0.0;
-        let rounds = 20usize;
         let mut extract_samples_s = Vec::with_capacity(rounds);
         for _ in 0..rounds {
             let t_round = Instant::now();
@@ -132,7 +151,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::hint::black_box(extract_sum);
         let extract_s = extract_samples_s.iter().sum::<f64>() / rounds as f64;
 
-        let sel_rounds = 50usize;
         let mut select_samples_s = Vec::with_capacity(sel_rounds);
         for _ in 0..sel_rounds {
             let t_round = Instant::now();

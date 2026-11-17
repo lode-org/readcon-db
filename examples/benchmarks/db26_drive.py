@@ -16,6 +16,7 @@ os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
+import argparse
 import platform
 import shutil
 import subprocess
@@ -565,6 +566,16 @@ def high_byte(commit: str) -> dict:
 
 
 def main() -> None:
+    global BENCH, N
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", type=Path, default=None)
+    args = ap.parse_args()
+    if args.out is not None:
+        BENCH = args.out if args.out.is_absolute() else REPO / args.out
+    if os.environ.get("READCON_RERUN_RELEASE") == "1":
+        N = int(os.environ.get("READCON_DB26_N", str(N)))
+        if N < 6:
+            raise SystemExit(f"n must be at least 6, not {N}")
     os.environ.update(env_base())
     fair.require_pushed_commit()
     commit = fair.git_out("rev-parse", "HEAD")

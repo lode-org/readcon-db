@@ -1,0 +1,243 @@
+"""Dry-run, refusal, and synthetic provenance tests for the release rerun."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPT = "examples/benchmarks/rerun_release.py"
+KINDS = ("ab.json", "readcon_db_bench.json", "campaign.json", "host.json")
+PRODUCERS = (
+    "examples/benchmarks/db24_drive.py",
+    "examples/benchmarks/db25_drive.py",
+    "examples/benchmarks/db26_drive.py",
+    "examples/benchmarks/db28_drive.py",
+    "examples/benchmarks/db29_drive.py",
+    "examples/bench_corpus_ops.rs",
+    "examples/benchmarks/fair_ase_protocol.py",
+)
+OUTPUTS = (
+    "db31/db24/ab.json",
+    "db31/db25/ab.json",
+    "db31/db26/ab.json",
+    "db31/db28/ab.json",
+    "db31/db29/ab.json",
+    "db31/corpus-ops/readcon_db_bench.json",
+    "db30/fair-db30/campaign.json",
+    "db31/fair-db31/campaign.json",
+    "db32/fair-db32/campaign.json",
+    "db30/db8/campaign.json",
+)
+PROVENANCE = (
+    "commit",
+    "tree",
+    "readcon_core",
+    "readcon_sha",
+    "rustc",
+    "python",
+    "allocator",
+)
+HOST = ("cpu", "ncpu", "cpuinfo_mhz", "kernel")
+_GIT_ENV = {
+    "GIT_AUTHOR_NAME": "Rohit Goswami",
+    "GIT_AUTHOR_EMAIL": "rgoswami@ieee.org",
+    "GIT_COMMITTER_NAME": "Rohit Goswami",
+    "GIT_COMMITTER_EMAIL": "rgoswami@ieee.org",
+}
+
+
+def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, **_GIT_ENV}
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _sync_uncommitted(src: Path, dst: Path) -> None:
+    status = _git(src, "status", "--porcelain")
+    for line in status.stdout.splitlines():
+        if not line.strip():
+            continue
+        code = line[:2]
+        rel = line[3:].split(" -> ")[-1]
+        target = dst / rel
+        if "D" in code:
+            target.unlink(missing_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src / rel, target)
+
+
+def _isolated_clean_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    done = subprocess.run(
+        ["git", "clone", "--shared", "--quiet", str(ROOT), str(repo)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    _sync_uncommitted(ROOT, repo)
+    if _git(repo, "status", "--porcelain").stdout.strip():
+        add = _git(repo, "add", "-A")
+        assert add.returncode == 0, add.stderr
+        commit = _git(
+            repo,
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "test: stage candidate changes",
+        )
+        assert commit.returncode == 0, commit.stderr
+    updated = _git(repo, "update-ref", "refs/remotes/origin/release-test", "HEAD")
+    assert updated.returncode == 0, updated.stderr
+    return repo
+
+
+def _run(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(repo / SCRIPT), *args],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _saved_digest(repo: Path) -> str:
+    return hashlib.sha256(
+        (repo / "bench" / "db24" / "ab.json").read_bytes()
+    ).hexdigest()
+
+
+def test_dry_run_lists_every_record_kind(tmp_path: Path) -> None:
+    """``--dry-run`` names every record kind, producer, and paper path."""
+    repo = _isolated_clean_repo(tmp_path)
+    saved = _saved_digest(repo)
+    out = repo / "build" / "rerun-dry"
+    done = _run(repo, "--dry-run", "--n", "6", "--out", str(out))
+    output = done.stdout + done.stderr
+    assert done.returncode == 0, output
+    assert not out.exists()
+    missing_kinds = [kind for kind in KINDS if f"kind {kind}" not in output]
+    assert not missing_kinds, output
+    missing_producers = [name for name in PRODUCERS if name not in output]
+    assert not missing_producers, output
+    missing_outputs = [path for path in OUTPUTS if path not in output]
+    assert not missing_outputs, output
+    for path in OUTPUTS:
+        parent = str(Path(path).parent)
+        assert f"{parent}/host.json" in output
+        assert f"{parent}/raw.log" in output
+        assert f"export {path}" in output
+    assert "--mode all" in output
+    assert "--mode db8" in output
+    assert "bench/db24/ab.json" not in output
+    assert _saved_digest(repo) == saved
+
+    short = _run(repo, "--dry-run", "--n", "5", "--out", str(out))
+    assert short.returncode != 0
+    assert "at least 6" in (short.stdout + short.stderr)
+
+    saved_out = _run(repo, "--dry-run", "--out", "bench/db24")
+    assert saved_out.returncode != 0
+    assert "saved record" in (saved_out.stdout + saved_out.stderr)
+    assert _saved_digest(repo) == saved
+
+
+def test_refuses_unpushed_or_dirty_tree(tmp_path: Path) -> None:
+    """A dirty tree or a commit on no remote branch is refused."""
+    repo = _isolated_clean_repo(tmp_path)
+    readme = repo / "README.md"
+    readme.write_text(readme.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    dirty = _run(repo, "--dry-run")
+    assert dirty.returncode != 0
+    assert "dirty tree" in (dirty.stdout + dirty.stderr)
+    _git(repo, "checkout", "--", "README.md")
+
+    unpushed = _git(
+        repo,
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "test: unpushed commit",
+    )
+    assert unpushed.returncode == 0, unpushed.stderr
+    refused = _run(repo, "--dry-run")
+    assert refused.returncode != 0
+    assert "not on any remote branch" in (refused.stdout + refused.stderr)
+
+
+def _assert_provenance(path: Path) -> None:
+    data = json.loads(path.read_text())
+    missing = [key for key in PROVENANCE if not data.get(key)]
+    assert not missing, (path, missing)
+    nested = data.get("provenance")
+    assert isinstance(nested, dict)
+    nested_missing = [key for key in PROVENANCE if not nested.get(key)]
+    assert not nested_missing, (path, nested_missing)
+    host = data["host"]
+    assert isinstance(host, dict)
+    host_missing = [key for key in HOST if host.get(key) in (None, "")]
+    assert not host_missing, (path, host_missing)
+    assert len(data["commit"]) == 40
+    assert len(data["tree"]) == 40
+    assert len(data["readcon_sha"]) == 40
+    beside = json.loads((path.parent / "host.json").read_text())
+    flat_missing = [
+        key for key in (*PROVENANCE, *HOST) if beside.get(key) in (None, "")
+    ]
+    assert not flat_missing, (path.parent / "host.json", flat_missing)
+    assert (path.parent / "raw.log").is_file()
+    assert path.read_bytes().endswith(b"\n")
+
+
+def test_synthetic_run_carries_provenance(tmp_path: Path) -> None:
+    """A tiny synthetic run writes every record kind with provenance."""
+    repo = _isolated_clean_repo(tmp_path)
+    saved = _saved_digest(repo)
+    out = repo / "build" / "rerun-synthetic"
+    export = repo / "build" / "rerun-synthetic-export"
+    done = _run(
+        repo,
+        "--synthetic",
+        "--n",
+        "6",
+        "--out",
+        str(out),
+        "--export",
+        str(export),
+    )
+    output = done.stdout + done.stderr
+    assert done.returncode == 0, output
+    for rel in OUTPUTS:
+        _assert_provenance(out / rel)
+        exported = export / rel
+        assert exported.is_file(), rel
+        _assert_provenance(exported)
+        record = json.loads((out / rel).read_text())
+        assert record["synthetic"] is True
+        assert record["n"] == 6
+        if rel.endswith("campaign.json"):
+            assert record["fair"] == []
+            assert record["head"] == record["commit"]
+        if rel.endswith("readcon_db_bench.json"):
+            assert record["rows"] == []
+    assert _saved_digest(repo) == saved
