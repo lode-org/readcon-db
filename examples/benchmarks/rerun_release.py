@@ -616,6 +616,32 @@ def pin_change(version: str, sha: str, ref: str) -> str:
     )
 
 
+def _looks_like_git_sha(ref: str) -> bool:
+    text = ref.lower()
+    return 7 <= len(text) <= SHA1 and all(ch in "0123456789abcdef" for ch in text)
+
+
+def linked_sha(locked: dict[str, str], ref: str | None) -> str:
+    """Revision compared with ``--readcon-core-ref``.
+
+    The help text accepts a version or a git sha. A registry pin's git sha
+    is the one in the crate, and only a sha-shaped ref needs that file.
+    Matching the version does not download the crate.
+    """
+    source = locked.get("source", "")
+    version = locked["version"]
+    if source.startswith("git+"):
+        return lock_source_sha(locked)
+    if (
+        source.startswith("registry+")
+        and ref
+        and ref != version
+        and _looks_like_git_sha(ref)
+    ):
+        return git_sha_of_crate(crate_root(locked))
+    return version
+
+
 def require_exportable_core(
     locked: dict[str, str],
     ref: str | None,
@@ -624,7 +650,7 @@ def require_exportable_core(
     """Refuse a link that is not a release or a pushed commit, or not ``ref``."""
     source = locked.get("source", "")
     version = locked["version"]
-    sha = lock_source_sha(locked) if source.startswith("git+") else version
+    sha = linked_sha(locked, ref)
     if ref and not ref_matches(version, sha, ref):
         raise SystemExit(pin_change(version, sha, ref))
     if source.startswith("registry+"):

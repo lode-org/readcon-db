@@ -413,6 +413,37 @@ def test_unreachable_core_remote_is_a_clean_error(tmp_path: Path, monkeypatch) -
         rerun.core_sha_is_pushed("ab" * 20)
 
 
+def test_registry_pin_accepts_a_git_sha_ref(tmp_path: Path, monkeypatch) -> None:
+    """``--readcon-core-ref`` may be the crate git sha, not only the version."""
+    import rerun_release as rerun
+
+    sha = "27df3974a8038f567e0d21ae25f404ce32534a7d"
+    root = tmp_path / "readcon-core-0.23.2"
+    root.mkdir()
+    (root / ".cargo_vcs_info.json").write_text(
+        json.dumps({"git": {"sha1": sha}, "path_in_vcs": ""}) + "\n"
+    )
+    calls = {"root": 0}
+
+    def crate_root(_locked: dict[str, str]) -> Path:
+        calls["root"] += 1
+        return root
+
+    monkeypatch.setattr(rerun, "crate_root", crate_root)
+    locked = {
+        "name": "readcon-core",
+        "version": "0.23.2",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "abc",
+    }
+    rerun.require_exportable_core(locked, "0.23.2")
+    assert calls["root"] == 0
+    rerun.require_exportable_core(locked, sha)
+    rerun.require_exportable_core(locked, sha[:12])
+    with pytest.raises(SystemExit, match="ab" * 20):
+        rerun.require_exportable_core(locked, "ab" * 20)
+
+
 def test_main_refuses_git_and_path_pins_before_registry_download(monkeypatch) -> None:
     import rerun_release as rerun
 
