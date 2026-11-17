@@ -23,17 +23,27 @@ Producers, and the commands that wrote the saved records:
   ``n10.con``, ``n50.con``, ``n100.con``, ``n200.con``, and ``n500.con`` (the
   ladder ``fair_campaign.prep_ladder`` uses), then
   ``cargo run --release --example bench_corpus_ops -- FRAMES OUT [repeats]``.
-* ``campaign.json``: ``python examples/benchmarks/fair_ase_protocol.py
-  --mode all --out DIR``. ``db30/fair-db30``, ``db31/fair-db31``, and
-  ``db32/fair-db32`` are that mode at three commits. One rerun writes one
-  campaign into all three paths. ``--mode db8`` is the shorter campaign at
-  ``db30/db8/campaign.json``.
+* ``campaign.json`` for the full fair protocol:
+  ``python examples/benchmarks/fair_ase_protocol.py --mode all --out DIR``.
+  The saved paper copies are ``db30/fair-db30``, ``db31/fair-db31``, and
+  ``db32/fair-db32``. The rerun writes that one run to ``db33/fair`` and a
+  ``SUPERSEDED.md`` beside each saved copy.
+* ``campaign.json`` for the db8 workload list:
+  ``python examples/benchmarks/fair_ase_protocol.py --mode db8 --out DIR``.
+  The saved copy is ``db30/db8``. The rerun writes ``db33/db8``.
+
+Each producer has one export path. A new run is ``db33/<name>/``. The saved
+``db30``, ``db31``, and ``db32`` records are not rewritten. The export writes
+a ``SUPERSEDED.md`` beside each of those paths, naming the new path and the
+readcon-db commit.
 
 ``n`` is at least 6. Each record and the ``host.json`` beside it carries the
 readcon-db commit and tree, the readcon-core version and git sha linked from
 ``Cargo.lock`` and the crate, rustc, python, the allocator, and the host
 cpu, count, MHz, and kernel. The tree must be clean, and ``git branch -r
---contains HEAD`` must list a remote branch.
+--contains HEAD`` must list a remote branch. Export also requires the linked
+readcon-core to be a crates.io release or a git commit on a remote branch or
+tag. ``--readcon-core-ref`` names the version or sha the lock must match.
 """
 
 from __future__ import annotations
@@ -72,87 +82,97 @@ EXPORT_NAMES = (
     "campaign.log",
 )
 SHA1 = 40
+CORE_GIT = "https://github.com/lode-org/readcon-core.git"
 
 
 @dataclass(frozen=True)
 class Step:
-    """One producer invocation and the paper directories that receive it."""
+    """One producer invocation and the single paper directory that receives it."""
 
     kind: str
     script: str
-    papers: tuple[str, ...]
+    paper: str
     record_name: str
     how: str
     sample_env: str
     flags: tuple[str, ...] = ()
+    supersedes: tuple[str, ...] = ()
 
 
 STEPS: tuple[Step, ...] = (
     Step(
         "ab.json",
         "examples/benchmarks/db24_drive.py",
-        ("db31/db24",),
+        "db33/db24",
         "ab.json",
         "drive",
         "READCON_DB24_N",
+        supersedes=("db31/db24",),
     ),
     Step(
         "ab.json",
         "examples/benchmarks/db25_drive.py",
-        ("db31/db25",),
+        "db33/db25",
         "ab.json",
         "drive",
         "READCON_DB24_N",
+        supersedes=("db31/db25",),
     ),
     Step(
         "ab.json",
         "examples/benchmarks/db26_drive.py",
-        ("db31/db26",),
+        "db33/db26",
         "ab.json",
         "drive",
         "READCON_DB26_N",
+        supersedes=("db31/db26",),
     ),
     Step(
         "ab.json",
         "examples/benchmarks/db28_drive.py",
-        ("db31/db28",),
+        "db33/db28",
         "ab.json",
         "drive",
         "READCON_DB28_N",
+        supersedes=("db31/db28",),
     ),
     Step(
         "ab.json",
         "examples/benchmarks/db29_drive.py",
-        ("db31/db29",),
+        "db33/db29",
         "ab.json",
         "drive",
         "READCON_DB29_N",
+        supersedes=("db31/db29",),
     ),
     Step(
         "readcon_db_bench.json",
         "examples/bench_corpus_ops.rs",
-        ("db31/corpus-ops",),
+        "db33/corpus-ops",
         "readcon_db_bench.json",
         "corpus",
         "",
+        supersedes=("db31/corpus-ops",),
     ),
     Step(
         "campaign.json",
         "examples/benchmarks/fair_ase_protocol.py",
-        ("db30/fair-db30", "db31/fair-db31", "db32/fair-db32"),
+        "db33/fair",
         "campaign.json",
         "fair",
         "READCON_DB_N_SAMPLES",
         ("--mode", "all"),
+        ("db30/fair-db30", "db31/fair-db31", "db32/fair-db32"),
     ),
     Step(
         "campaign.json",
         "examples/benchmarks/fair_ase_protocol.py",
-        ("db30/db8",),
+        "db33/db8",
         "campaign.json",
         "fair",
         "READCON_DB_N_SAMPLES",
         ("--mode", "db8"),
+        ("db30/db8",),
     ),
 )
 
@@ -261,10 +281,19 @@ def corpus_argv(frames: Path, out_json: Path, n: int) -> list[str]:
     ]
 
 
+def source_run(step: Step) -> str:
+    flags = " ".join(step.flags)
+    return f"{step.script} {flags}".strip()
+
+
+def record_rel(step: Step) -> str:
+    return f"{step.paper}/{step.record_name}"
+
+
 def command_line(step: Step, root: Path, n: int) -> str:
     if step.how == "corpus":
         frames = work_dir(root, step)
-        out_json = root / step.papers[0] / step.record_name
+        out_json = root / step.paper / step.record_name
         argv = corpus_argv(frames, out_json, n)
         prep = "concatenate resources/test/tiny_cuh2.con into " + " ".join(
             f"n{count}.con" for count in LADDER
@@ -273,25 +302,57 @@ def command_line(step: Step, root: Path, n: int) -> str:
     if step.how == "fair":
         dest = work_dir(root, step)
     else:
-        dest = root / step.papers[0]
+        dest = root / step.paper
     env = f"{step.sample_env}={n} READCON_RERUN_RELEASE=1"
     return f"{step.script} :: {env} " + " ".join(python_argv(step, dest))
 
 
+def require_one_export_path(steps: tuple[Step, ...] = STEPS) -> None:
+    """Each run has one destination, and no two runs share it."""
+    seen_path: dict[str, str] = {}
+    seen_run: dict[str, str] = {}
+    seen_old: set[str] = set()
+    for step in steps:
+        run = source_run(step)
+        rel = record_rel(step)
+        if rel in seen_path:
+            raise SystemExit(
+                f"refusing to export: {seen_path[rel]} and {run} both write {rel}"
+            )
+        if run in seen_run:
+            raise SystemExit(
+                f"refusing to export: {run} writes {seen_run[run]} and {rel}"
+            )
+        seen_path[rel] = run
+        seen_run[run] = rel
+        if step.paper in step.supersedes:
+            raise SystemExit(f"refusing to export {rel} onto a path it supersedes")
+        for old in step.supersedes:
+            if old in seen_old:
+                raise SystemExit(f"refusing to export: {old} is named twice")
+            seen_old.add(old)
+            old_rel = f"{old}/{step.record_name}"
+            if old_rel in seen_path:
+                raise SystemExit(f"refusing to export a second run to {old_rel}")
+
+
 def print_plan(root: Path, export: Path, n: int) -> None:
+    require_one_export_path()
     print(f"n {n}")
     print(f"out {root}")
     print(f"export {export}")
     print("kind host.json")
     for step in STEPS:
+        rel = record_rel(step)
         print(f"kind {step.kind}")
         print("producer " + command_line(step, root, n))
-        for paper in step.papers:
-            print(f"output {paper}/{step.record_name}")
-            print(f"output {paper}/host.json")
-            print(f"log {paper}/raw.log")
-            print(f"export {paper}/{step.record_name}")
-            print(f"export {paper}/host.json")
+        print(f"output {rel}")
+        print(f"output {step.paper}/host.json")
+        print(f"log {step.paper}/raw.log")
+        print(f"export {rel}")
+        print(f"export {step.paper}/host.json")
+        for old in step.supersedes:
+            print(f"supersede {old} -> {rel}")
 
 
 def cpu_model() -> str:
@@ -429,6 +490,86 @@ def allocator_in_use(root: Path) -> str:
     return "system"
 
 
+def ref_matches(version: str, sha: str, ref: str) -> bool:
+    if ref == version or ref == sha:
+        return True
+    return bool(
+        7 <= len(ref) < SHA1
+        and sha.startswith(ref)
+        and all(ch in "0123456789abcdef" for ch in ref)
+    )
+
+
+def core_checkout() -> Path:
+    dest = REPO / "build" / "readcon-core-git"
+    if not (dest / ".git").is_dir():
+        subprocess.check_call(["git", "clone", "--quiet", CORE_GIT, str(dest)])
+    else:
+        subprocess.check_call(
+            ["git", "-C", str(dest), "fetch", "--quiet", "--tags", "origin"]
+        )
+    return dest
+
+
+def core_sha_is_pushed(sha: str, repo: Path | None = None) -> bool:
+    """True when ``sha`` is on a remote branch or a tag of readcon-core."""
+    checkout = core_checkout() if repo is None else repo
+    branches = subprocess.run(
+        ["git", "-C", str(checkout), "branch", "-r", "--contains", sha],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if branches.returncode == 0 and branches.stdout.strip():
+        return True
+    tags = subprocess.run(
+        ["git", "-C", str(checkout), "tag", "--contains", sha],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return tags.returncode == 0 and bool(tags.stdout.strip())
+
+
+def pin_change(version: str, sha: str, ref: str) -> str:
+    """How to point the rerun at ``ref`` instead of the lock's pin."""
+    return (
+        f"refusing to export: Cargo.lock links readcon-core {version} ({sha}), "
+        f'not {ref}. The pin is `readcon-core = "={version}"` in Cargo.toml. '
+        'For a crates.io release, set `readcon-core = "=<version>"` and run '
+        "`cargo update -p readcon-core --precise <version>`. "
+        "For a pushed commit, set "
+        '`readcon-core = { git = "https://github.com/lode-org/readcon-core", '
+        'rev = "<sha>" }` and run `cargo update -p readcon-core`. '
+        "Export accepts that registry source, or a git rev that "
+        "`git branch -r --contains` or `git tag --contains` lists."
+    )
+
+
+def require_exportable_core(
+    prov: dict[str, object],
+    ref: str | None,
+    repo: Path | None = None,
+) -> None:
+    """Refuse a link that is not a release or a pushed commit, or not ``ref``."""
+    locked = lock_readcon_core()
+    source = locked.get("source", "")
+    version = str(prov["readcon_core"])
+    sha = str(prov["readcon_sha"])
+    if ref and not ref_matches(version, sha, ref):
+        raise SystemExit(pin_change(version, sha, ref))
+    if source.startswith("registry+"):
+        return
+    if source.startswith("git+") and core_sha_is_pushed(sha, repo):
+        return
+    shown = source or "a path"
+    raise SystemExit(
+        f"refusing to export: linked readcon-core {version} ({sha}) from {shown} "
+        "is not a crates.io release or a pushed commit. "
+        + pin_change(version, sha, ref or version)
+    )
+
+
 def provenance(commit: str, tree: str) -> dict[str, object]:
     locked = lock_readcon_core()
     root = crate_root(locked)
@@ -446,7 +587,7 @@ def provenance(commit: str, tree: str) -> dict[str, object]:
     }
 
 
-def stamp(record_path: Path, prov: dict[str, object]) -> None:
+def stamp(record_path: Path, prov: dict[str, object], source: str) -> None:
     data = json.loads(record_path.read_text())
     if not isinstance(data, dict):
         raise SystemExit(f"{record_path} is not a JSON object")
@@ -465,6 +606,7 @@ def stamp(record_path: Path, prov: dict[str, object]) -> None:
             "allocator": prov["allocator"],
             "host": host,
             "provenance": prov,
+            "source_run": source,
         }
     )
     if record_path.name == "campaign.json":
@@ -535,12 +677,14 @@ def publish_tree(src: Path, dest: Path, raw: str) -> None:
 
 
 def write_synthetic(root: Path, prov: dict[str, object], n: int) -> None:
+    require_one_export_path()
     for step in STEPS:
         body: dict[str, object] = {
             "synthetic": True,
             "n": n,
             "commit": prov["commit"],
             "tree": prov["tree"],
+            "source_run": source_run(step),
         }
         if step.record_name == "campaign.json":
             body.update(
@@ -554,68 +698,92 @@ def write_synthetic(root: Path, prov: dict[str, object], n: int) -> None:
             )
         elif step.record_name == "readcon_db_bench.json":
             body["rows"] = []
+        directory = root / step.paper
+        directory.mkdir(parents=True, exist_ok=True)
+        record = directory / step.record_name
+        refuse_existing(record)
+        record.write_text(json.dumps(body, indent=2) + "\n")
         raw = "synthetic\n" + command_line(step, root, n) + "\n"
-        for paper in step.papers:
-            directory = root / paper
-            directory.mkdir(parents=True, exist_ok=True)
-            record = directory / step.record_name
-            refuse_existing(record)
-            record.write_text(json.dumps(body, indent=2) + "\n")
-            (directory / "raw.log").write_text(raw)
-            stamp(record, prov)
+        (directory / "raw.log").write_text(raw)
+        stamp(record, prov, source_run(step))
 
 
 def run_measurements(root: Path, prov: dict[str, object], n: int) -> None:
+    require_one_export_path()
     for step in STEPS:
-        for paper in step.papers:
-            refuse_existing(root / paper / step.record_name)
+        record = root / step.paper / step.record_name
+        refuse_existing(record)
         env = child_env(step, n)
         if step.how == "corpus":
             frames = work_dir(root, step)
             prepare_frames(frames)
-            record = root / step.papers[0] / step.record_name
             record.parent.mkdir(parents=True, exist_ok=True)
-            raw = run_command(
-                corpus_argv(frames, record, n), env, record.parent / "raw.log"
-            )
+            run_command(corpus_argv(frames, record, n), env, record.parent / "raw.log")
             if not record.is_file():
                 raise SystemExit(f"corpus producer wrote no {record}")
-            stamp(record, prov)
+            stamp(record, prov, source_run(step))
             continue
         if step.how == "fair":
-            dest = work_dir(root, step)
-            dest.mkdir(parents=True, exist_ok=True)
-            raw = run_command(python_argv(step, dest), env, dest / "raw.log")
-            produced = dest / step.record_name
+            work = work_dir(root, step)
+            work.mkdir(parents=True, exist_ok=True)
+            raw = run_command(python_argv(step, work), env, work / "raw.log")
+            produced = work / step.record_name
             if not produced.is_file():
                 raise SystemExit(f"fair producer wrote no {produced}")
-            for paper in step.papers:
-                target = root / paper
-                publish_tree(dest, target, raw)
-                stamp(target / step.record_name, prov)
+            publish_tree(work, record.parent, raw)
+            stamp(record, prov, source_run(step))
             continue
-        dest = root / step.papers[0]
+        dest = record.parent
         dest.mkdir(parents=True, exist_ok=True)
-        record = dest / step.record_name
         raw = run_command(python_argv(step, dest), env, dest / "raw.log")
         if not record.is_file():
             raise SystemExit(f"producer wrote no {record}")
         if not (dest / "raw.log").is_file():
             (dest / "raw.log").write_text(raw)
-        stamp(record, prov)
+        stamp(record, prov, source_run(step))
 
 
-def export_records(root: Path, export: Path) -> None:
+def superseded_note(old: str, new: str, commit: str) -> str:
+    return (
+        f"Replacement: {new}\n"
+        "\n"
+        f"The record in `{old}` is unchanged. "
+        f"The rerun on `{commit}` is in `{new}`.\n"
+    )
+
+
+def export_records(root: Path, export: Path, commit: str) -> None:
     refuse_saved(export)
+    require_one_export_path()
+    written: list[str] = []
     for step in STEPS:
-        for paper in step.papers:
-            src = root / paper
-            dest = export / paper
-            dest.mkdir(parents=True, exist_ok=True)
-            for name in EXPORT_NAMES:
-                path = src / name
-                if path.is_file():
-                    shutil.copy2(path, dest / name)
+        rel = record_rel(step)
+        src = root / step.paper
+        dest = export / step.paper
+        dest.mkdir(parents=True, exist_ok=True)
+        record = dest / step.record_name
+        refuse_existing(record)
+        for name in EXPORT_NAMES:
+            path = src / name
+            if path.is_file():
+                target = dest / name
+                refuse_existing(target)
+                shutil.copy2(path, target)
+        if not record.is_file():
+            raise SystemExit(f"export is missing {rel}")
+        written.append(rel)
+        for old in step.supersedes:
+            note = export / old / "SUPERSEDED.md"
+            refuse_existing(note)
+            note.parent.mkdir(parents=True, exist_ok=True)
+            note.write_text(superseded_note(old, rel, commit))
+            old_record = export / old / step.record_name
+            if old_record.is_file():
+                raise SystemExit(f"refusing to leave a second copy at {old_record}")
+    if len(written) != len(set(written)):
+        raise SystemExit(
+            "refusing to export: one run was written to more than one path"
+        )
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -625,6 +793,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--n", type=int, default=12)
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--export", type=Path, default=None)
+    parser.add_argument(
+        "--readcon-core-ref",
+        default=None,
+        help=(
+            "version or git sha the Cargo.lock readcon-core pin must match; "
+            "omit to use the lock's version"
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -644,19 +820,23 @@ def main(argv: list[str] | None = None) -> None:
     refuse_saved(root)
     refuse_saved(export)
     for step in STEPS:
-        for paper in step.papers:
-            refuse_saved(root / paper)
-    if args.dry_run:
+        refuse_saved(root / step.paper)
+    if args.dry_run and not args.readcon_core_ref:
         print_plan(root, export, args.n)
         return
     prov = provenance(commit, tree)
     if prov["commit"] != commit or prov["tree"] != tree:
         raise SystemExit("provenance commit does not match HEAD")
+    require_exportable_core(prov, args.readcon_core_ref)
+    if args.dry_run:
+        print(f"readcon-core {prov['readcon_core']} {prov['readcon_sha']}")
+        print_plan(root, export, args.n)
+        return
     if args.synthetic:
         write_synthetic(root, prov, args.n)
     else:
         run_measurements(root, prov, args.n)
-    export_records(root, export)
+    export_records(root, export, commit)
     print(f"wrote {export}")
 
 

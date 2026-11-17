@@ -23,17 +23,27 @@ PRODUCERS = (
     "examples/benchmarks/fair_ase_protocol.py",
 )
 OUTPUTS = (
-    "db31/db24/ab.json",
-    "db31/db25/ab.json",
-    "db31/db26/ab.json",
-    "db31/db28/ab.json",
-    "db31/db29/ab.json",
-    "db31/corpus-ops/readcon_db_bench.json",
-    "db30/fair-db30/campaign.json",
-    "db31/fair-db31/campaign.json",
-    "db32/fair-db32/campaign.json",
-    "db30/db8/campaign.json",
+    "db33/db24/ab.json",
+    "db33/db25/ab.json",
+    "db33/db26/ab.json",
+    "db33/db28/ab.json",
+    "db33/db29/ab.json",
+    "db33/corpus-ops/readcon_db_bench.json",
+    "db33/fair/campaign.json",
+    "db33/db8/campaign.json",
 )
+SUPERSEDED = {
+    "db30/fair-db30": "db33/fair/campaign.json",
+    "db31/fair-db31": "db33/fair/campaign.json",
+    "db32/fair-db32": "db33/fair/campaign.json",
+    "db30/db8": "db33/db8/campaign.json",
+    "db31/db24": "db33/db24/ab.json",
+    "db31/db25": "db33/db25/ab.json",
+    "db31/db26": "db33/db26/ab.json",
+    "db31/db28": "db33/db28/ab.json",
+    "db31/db29": "db33/db29/ab.json",
+    "db31/corpus-ops": "db33/corpus-ops/readcon_db_bench.json",
+}
 PROVENANCE = (
     "commit",
     "tree",
@@ -145,6 +155,12 @@ def test_dry_run_lists_every_record_kind(tmp_path: Path) -> None:
         assert f"export {path}" in output
     assert "--mode all" in output
     assert "--mode db8" in output
+    assert "export db30/fair-db30/campaign.json" not in output
+    assert "export db31/fair-db31/campaign.json" not in output
+    assert "export db32/fair-db32/campaign.json" not in output
+    assert "export db30/db8/campaign.json" not in output
+    for old, new in SUPERSEDED.items():
+        assert f"supersede {old} -> {new}" in output
     assert "bench/db24/ab.json" not in output
     assert _saved_digest(repo) == saved
 
@@ -241,3 +257,109 @@ def test_synthetic_run_carries_provenance(tmp_path: Path) -> None:
         if rel.endswith("readcon_db_bench.json"):
             assert record["rows"] == []
     assert _saved_digest(repo) == saved
+
+
+def test_export_writes_each_run_to_one_path(tmp_path: Path) -> None:
+    """One source run is exported to one path, and saved records stay put."""
+    repo = _isolated_clean_repo(tmp_path)
+    saved_fair = (
+        repo / "examples" / "benchmarks" / "fair-db30" / "SUPERSEDED.md"
+    ).read_bytes()
+    saved = _saved_digest(repo)
+    out = repo / "build" / "rerun-one-path"
+    export = repo / "build" / "rerun-one-path-export"
+    done = _run(
+        repo,
+        "--synthetic",
+        "--n",
+        "6",
+        "--readcon-core-ref",
+        "0.23.2",
+        "--out",
+        str(out),
+        "--export",
+        str(export),
+    )
+    output = done.stdout + done.stderr
+    assert done.returncode == 0, output
+    found: dict[str, list[str]] = {}
+    for path in export.rglob("*.json"):
+        if path.name not in {"ab.json", "campaign.json", "readcon_db_bench.json"}:
+            continue
+        data = json.loads(path.read_text())
+        rel = path.relative_to(export).as_posix()
+        found.setdefault(data["source_run"], []).append(rel)
+    assert len(found) == len(OUTPUTS)
+    for run, paths in found.items():
+        assert paths == [paths[0]], (run, paths)
+    assert sorted(path for paths in found.values() for path in paths) == sorted(OUTPUTS)
+    fair_runs = [run for run in found if "fair_ase_protocol.py" in run]
+    assert len(fair_runs) == 2
+    assert found[next(run for run in fair_runs if "--mode all" in run)] == [
+        "db33/fair/campaign.json"
+    ]
+    commit = json.loads((export / "db33/fair/campaign.json").read_text())["commit"]
+    for old, new in SUPERSEDED.items():
+        assert not (export / old / Path(new).name).is_file()
+        note = (export / old / "SUPERSEDED.md").read_text()
+        assert new in note
+        assert commit in note
+    assert (
+        repo / "examples" / "benchmarks" / "fair-db30" / "SUPERSEDED.md"
+    ).read_bytes() == saved_fair
+    assert _saved_digest(repo) == saved
+
+    mismatch = _run(
+        repo,
+        "--synthetic",
+        "--n",
+        "6",
+        "--readcon-core-ref",
+        "0.23.3",
+        "--out",
+        str(repo / "build" / "rerun-wrong-core"),
+        "--export",
+        str(repo / "build" / "rerun-wrong-core-export"),
+    )
+    refused = mismatch.stdout + mismatch.stderr
+    assert mismatch.returncode != 0
+    assert "0.23.2" in refused
+    assert "0.23.3" in refused
+    assert "cargo update -p readcon-core" in refused
+    assert not (repo / "build" / "rerun-wrong-core-export").exists()
+
+
+def test_unpushed_readcon_core_refuses_export(tmp_path: Path) -> None:
+    """A git pin that no remote branch or tag contains is not exported."""
+    import rerun_release as rerun
+
+    core = tmp_path / "core"
+    core.mkdir()
+    _git(core, "init", "-b", "main")
+    (core / "readme").write_text("one\n")
+    _git(core, "add", "readme")
+    _git(core, "commit", "-m", "one")
+    _git(core, "update-ref", "refs/remotes/origin/main", "HEAD")
+    pushed = _git(core, "rev-parse", "HEAD").stdout.strip()
+    assert rerun.core_sha_is_pushed(pushed, core)
+    missing = "b" * 40
+    assert not rerun.core_sha_is_pushed(missing, core)
+    original = rerun.lock_readcon_core
+    rerun.lock_readcon_core = lambda: {
+        "name": "readcon-core",
+        "version": "0.23.3",
+        "source": "git+https://github.com/lode-org/readcon-core",
+    }
+    try:
+        try:
+            rerun.require_exportable_core(
+                {"readcon_core": "0.23.3", "readcon_sha": missing},
+                "0.23.3",
+                core,
+            )
+        except SystemExit as exc:
+            assert "not a crates.io release or a pushed commit" in str(exc)
+        else:
+            raise AssertionError("unpushed readcon-core was accepted")
+    finally:
+        rerun.lock_readcon_core = original
