@@ -562,8 +562,10 @@ def _core_repo(path: Path, remote: str) -> str:
     return _git(path, "rev-parse", "HEAD").stdout.strip()
 
 
-def test_unpushed_pin_is_refused_without_fetching(tmp_path: Path, monkeypatch) -> None:
-    """A commit already in the local checkout is refused with the remote down."""
+def test_unpushed_pin_with_unreachable_remote_is_refused_cleanly(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A cached unpushed commit is refused cleanly with the remote down."""
     import rerun_release as rerun
 
     monkeypatch.setattr(rerun, "REPO", tmp_path)
