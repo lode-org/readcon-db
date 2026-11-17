@@ -18,15 +18,17 @@ exclude = """(?x)(
 [[repos]]
 repo = "builtin"
 hooks = [
-  { id = "trailing-whitespace" },
-  { id = "end-of-file-fixer" },
+  # Saved campaign records are byte-exact. A missing final newline is part of
+  # the log, so the hooks that rewrite files skip bench/ and examples/benchmarks/.
+  { id = "trailing-whitespace", exclude = "(?x)(^bench/|^examples/benchmarks/)" },
+  { id = "end-of-file-fixer", exclude = "(?x)(^bench/|^examples/benchmarks/)" },
   { id = "check-yaml" },
   { id = "check-toml" },
   { id = "check-merge-conflict" },
   { id = "check-added-large-files", args = ["--maxkb=1000"] },
   { id = "check-case-conflict" },
   { id = "detect-private-key" },
-  { id = "mixed-line-ending", args = ["--fix=lf"] },
+  { id = "mixed-line-ending", args = ["--fix=lf"], exclude = "(?x)(^bench/|^examples/benchmarks/)" },
 ]
 
 [[repos]]
