@@ -106,6 +106,41 @@ def test_campaign_log_is_replaced_not_appended(tmp_path: Path) -> None:
     assert path.read_text() == "commit sample\n"
 
 
+def test_state_path_includes_out(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(drv, "REPO", tmp_path)
+    monkeypatch.setattr(drv, "_readcon_core_lock_identity", lambda: "c" * 40)
+    (tmp_path / "build").mkdir()
+    left = drv.state_path(drv.state_scope(tmp_path / "one", 12))
+    right = drv.state_path(drv.state_scope(tmp_path / "two", 12))
+    assert left != right
+
+
+def test_state_path_includes_core_identity(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(drv, "REPO", tmp_path)
+    identities = iter(["c" * 40, "d" * 40])
+    monkeypatch.setattr(drv, "_readcon_core_lock_identity", lambda: next(identities))
+    out = tmp_path / "bench" / "db29"
+    assert drv.state_path(drv.state_scope(out, 12)) != drv.state_path(
+        drv.state_scope(out, 12)
+    )
+
+
+def test_load_state_rejects_a_mismatched_scope(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(drv, "REPO", tmp_path)
+    monkeypatch.setattr(drv, "_readcon_core_lock_identity", lambda: "c" * 40)
+    (tmp_path / "build").mkdir()
+    out = tmp_path / "bench" / "db29"
+    scope = drv.state_scope(out, 12)
+    path = drv.state_path(scope)
+    drv.save_state(drv.load_state(path, scope), path, scope)
+    tampered = json.loads(path.read_text())
+    tampered["out"] = str((tmp_path / "other").resolve())
+    tampered["readcon_core"] = "d" * 40
+    path.write_text(json.dumps(tampered))
+    with pytest.raises(SystemExit, match="state mismatch"):
+        drv.load_state(path, scope)
+
+
 def test_state_is_scoped_by_out_n_and_core(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(drv, "REPO", tmp_path)
     monkeypatch.setattr(drv, "_readcon_core_lock_identity", lambda: "c" * 40)
