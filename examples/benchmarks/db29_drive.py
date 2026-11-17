@@ -27,9 +27,9 @@ import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import db26_drive as drv
-import db28_drive as d28
-import fair_ase_protocol as fair
+import db26_drive as drv  # noqa: E402
+import db28_drive as d28  # noqa: E402
+import fair_ase_protocol as fair  # noqa: E402
 
 OUT = REPO / "bench" / "db29"
 ROOT = REPO / "build" / "db29-ab"
@@ -106,6 +106,11 @@ def load_state(path: Path, scope: dict[str, str | int]) -> dict:
 def save_state(state: dict, path: Path, scope: dict[str, str | int]) -> None:
     state.update(scope)
     path.write_text(json.dumps(state) + "\n")
+
+
+def open_campaign_log(path: Path):
+    """A new run replaces the campaign log. It does not append."""
+    return path.open("w")
 
 
 def wait_quiet() -> None:
@@ -479,7 +484,7 @@ def main() -> None:
     print(f"corpora for {commit}", flush=True)
     ensure_corpora(state, path, scope)
     log_path = REPO / "build" / "db29-campaign.log"
-    log = log_path.open("w")
+    log = open_campaign_log(log_path)
     log.write(f"commit {commit}\n")
     wait_quiet()
     for arm in d28.ARMS:

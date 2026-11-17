@@ -98,10 +98,12 @@ def test_driver_writes_policy_and_float32_sections(tmp_path) -> None:
     assert "policy" in ab and "bits" in ab
 
 
-def test_campaign_log_is_replaced_not_appended() -> None:
-    text = Path(drv.__file__).read_text()
-    assert 'log_path.open("w")' in text
-    assert 'log_path.open("a")' not in text
+def test_campaign_log_is_replaced_not_appended(tmp_path: Path) -> None:
+    path = tmp_path / "campaign.log"
+    path.write_text("previous run\n")
+    with drv.open_campaign_log(path) as log:
+        log.write("commit sample\n")
+    assert path.read_text() == "commit sample\n"
 
 
 def test_state_is_scoped_by_out_n_and_core(tmp_path, monkeypatch) -> None:

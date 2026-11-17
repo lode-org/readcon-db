@@ -393,18 +393,20 @@ def test_main_refuses_git_and_path_pins_before_registry_download(monkeypatch) ->
         "core_sha_is_pushed",
         lambda _sha, _repo=None: False,
     )
-    for source in (
-        "git+https://github.com/lode-org/readcon-core#1111111111111111111111111111111111111111",
-        "path+file:///tmp/readcon-core",
-    ):
+    pins = (
+        {
+            "name": "readcon-core",
+            "version": "0.23.3",
+            "source": "git+https://github.com/lode-org/readcon-core#" + ("1" * 40),
+        },
+        # A path dependency has no source line in Cargo.lock.
+        {"name": "readcon-core", "version": "0.23.3"},
+    )
+    for locked in pins:
         monkeypatch.setattr(
             rerun,
             "lock_readcon_core",
-            lambda source=source: {
-                "name": "readcon-core",
-                "version": "0.23.3",
-                "source": source,
-            },
+            lambda locked=locked: dict(locked),
         )
         try:
             rerun.main(["--synthetic", "--n", "6"])
@@ -412,7 +414,7 @@ def test_main_refuses_git_and_path_pins_before_registry_download(monkeypatch) ->
             text = str(exc)
             assert "refusing to export" in text
         else:
-            raise AssertionError(f"main accepted source {source}")
+            raise AssertionError(f"main accepted pin {locked!r}")
     assert called["urlopen"] == 0
 
 
@@ -463,11 +465,15 @@ def test_export_includes_ab_sidecar_files() -> None:
         assert name in rerun.EXPORT_NAMES
 
 
-def test_clean_check_tracks_all_untracked_files() -> None:
-    import rerun_release as rerun
-
-    text = Path(rerun.__file__).read_text()
-    assert 'git("status", "--porcelain", "--untracked-files=all")' in text
+def test_dirty_tree_names_files_inside_untracked_directories(tmp_path: Path) -> None:
+    repo = _isolated_clean_repo(tmp_path)
+    nested = repo / "scratch" / "notes.txt"
+    nested.parent.mkdir()
+    nested.write_text("x\n")
+    done = _run(repo, "--dry-run")
+    text = done.stdout + done.stderr
+    assert done.returncode != 0, text
+    assert "scratch/notes.txt" in text
 
 
 def test_run_command_relativizes_repo_paths(tmp_path: Path) -> None:
@@ -476,12 +482,13 @@ def test_run_command_relativizes_repo_paths(tmp_path: Path) -> None:
     log = tmp_path / "raw.log"
     out = tmp_path / "out"
     out.mkdir(parents=True)
+    script = rerun.REPO / "examples" / "benchmarks" / "rerun_release.py"
     rerun.run_command(
         [
-            sys.executable,
+            "/usr/bin/python3",
             "-c",
             "print('ok')",
-            str(rerun.REPO / "examples" / "benchmarks" / "rerun_release.py"),
+            str(script),
             str(out / "x"),
         ],
         os.environ.copy(),
@@ -489,8 +496,10 @@ def test_run_command_relativizes_repo_paths(tmp_path: Path) -> None:
         out,
     )
     body = log.read_text()
-    assert "/agent/" not in body
+    assert script.as_posix() not in body
+    assert "examples/benchmarks/rerun_release.py" in body
     assert str((out / "x").resolve()) not in body
+    assert "/usr/bin/python3" in body
 
 
 def test_configured_toolchain_prefers_rustup_env(monkeypatch) -> None:
