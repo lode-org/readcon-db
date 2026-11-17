@@ -546,20 +546,13 @@ def _object_exists(checkout: Path, sha: str) -> bool:
     return found.returncode == 0
 
 
-def _on_origin_main_or_release_tag(checkout: Path, sha: str) -> bool:
+def _remote_contains(checkout: Path, sha: str) -> bool:
+    """True when a fetched remote branch or any tag contains ``sha``."""
     branches = _git_lines(checkout, "branch", "-r", "--contains", sha)
-    if branches.returncode == 0:
-        names = [line.strip() for line in branches.stdout.splitlines() if line.strip()]
-        if "origin/main" in names:
-            return True
+    if branches.returncode == 0 and branches.stdout.strip():
+        return True
     tags = _git_lines(checkout, "tag", "--contains", sha)
-    if tags.returncode != 0:
-        return False
-    return any(
-        line.strip().startswith("v")
-        for line in tags.stdout.splitlines()
-        if line.strip()
-    )
+    return tags.returncode == 0 and bool(tags.stdout.strip())
 
 
 def core_checkout() -> Path:
@@ -586,19 +579,20 @@ def core_checkout() -> Path:
 
 
 def core_sha_is_pushed(sha: str, repo: Path | None = None) -> bool:
-    """True when ``sha`` is on ``origin/main`` or a release tag ``v*``.
+    """True when ``sha`` is on a remote branch or a tag of readcon-core.
 
     A commit that is already in the local checkout is judged from the
-    remote-tracking refs and tags. Fetching is only for a sha the checkout
-    does not have yet, and a fetch or clone failure is a clean refusal.
+    fetched remote-tracking branches and tags. Fetching is only for a sha
+    the checkout does not have yet, and a fetch or clone failure is a
+    clean refusal.
     """
     if repo is not None:
-        return _on_origin_main_or_release_tag(repo, sha)
+        return _remote_contains(repo, sha)
     dest = REPO / "build" / "readcon-core-git"
     if (dest / ".git").exists() and _object_exists(dest, sha):
-        return _on_origin_main_or_release_tag(dest, sha)
+        return _remote_contains(dest, sha)
     core_checkout()
-    return _on_origin_main_or_release_tag(dest, sha)
+    return _remote_contains(dest, sha)
 
 
 def pin_change(version: str, sha: str, ref: str) -> str:

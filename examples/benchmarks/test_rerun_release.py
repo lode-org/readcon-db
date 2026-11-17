@@ -335,7 +335,7 @@ def test_export_writes_each_run_to_one_path(tmp_path: Path) -> None:
 
 
 def test_unpushed_readcon_core_refuses_export(tmp_path: Path) -> None:
-    """A git pin that no remote branch or tag contains is not exported."""
+    """A remote feature branch or any tag is pushed. A local-only sha is not."""
     import rerun_release as rerun
 
     core = tmp_path / "core"
@@ -357,7 +357,19 @@ def test_unpushed_readcon_core_refuses_export(tmp_path: Path) -> None:
     _git(core, "commit", "-m", "two")
     feature = _git(core, "rev-parse", "HEAD").stdout.strip()
     _git(core, "update-ref", "refs/remotes/origin/feature", feature)
-    assert not rerun.core_sha_is_pushed(feature, core)
+    assert rerun.core_sha_is_pushed(feature, core)
+    detached = _git(core, "checkout", "--detach")
+    assert detached.returncode == 0, detached.stderr
+    (core / "readme").write_text("tagged\n")
+    _git(core, "add", "readme")
+    tagged_commit = _git(core, "commit", "-m", "tag only")
+    assert tagged_commit.returncode == 0, tagged_commit.stderr
+    tag_sha = _git(core, "rev-parse", "HEAD").stdout.strip()
+    assert tag_sha not in {pushed, feature}
+    assert not rerun.core_sha_is_pushed(tag_sha, core)
+    made = _git(core, "tag", "pinned", tag_sha)
+    assert made.returncode == 0, made.stderr
+    assert rerun.core_sha_is_pushed(tag_sha, core)
     missing = "b" * 40
     assert not rerun.core_sha_is_pushed(missing, core)
     try:
