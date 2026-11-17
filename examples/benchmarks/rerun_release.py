@@ -993,11 +993,11 @@ def main(argv: list[str] | None = None) -> None:
     refuse_saved(export)
     for step in STEPS:
         refuse_saved(root / step.paper)
-    locked = lock_readcon_core()
-    require_exportable_core(locked, args.readcon_core_ref)
     if args.dry_run and not args.readcon_core_ref:
         print_plan(root, export, args.n)
         return
+    locked = lock_readcon_core()
+    require_exportable_core(locked, args.readcon_core_ref)
     prov = provenance(commit, tree, locked)
     if prov["commit"] != commit or prov["tree"] != tree:
         raise SystemExit("provenance commit does not match HEAD")

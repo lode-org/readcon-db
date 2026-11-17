@@ -413,6 +413,60 @@ def test_unreachable_core_remote_is_a_clean_error(tmp_path: Path, monkeypatch) -
         rerun.core_sha_is_pushed("ab" * 20)
 
 
+def test_dry_run_without_ref_does_not_fetch_or_refuse(
+    tmp_path: Path, monkeypatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``--dry-run`` with no ref prints the plan and does not touch the pin."""
+    import rerun_release as rerun
+
+    monkeypatch.setattr(rerun, "require_clean_and_remote", lambda: ("a" * 40, "b" * 40))
+    monkeypatch.setattr(rerun, "REPO", tmp_path)
+    monkeypatch.setattr(rerun, "CORE_GIT", "https://127.0.0.1:9/readcon-core.git")
+    out = tmp_path / "plan"
+    pins = (
+        {
+            "name": "readcon-core",
+            "version": "0.23.2",
+            "source": "git+https://github.com/lode-org/readcon-core#" + ("ab" * 20),
+        },
+        {"name": "readcon-core", "version": "0.23.2"},
+    )
+    for locked in pins:
+        monkeypatch.setattr(
+            rerun, "lock_readcon_core", lambda locked=locked: dict(locked)
+        )
+        rerun.main(["--dry-run", "--n", "6", "--out", str(out)])
+        captured = capsys.readouterr()
+        assert "kind ab.json" in captured.out
+        assert "refusing to export" not in captured.out + captured.err
+        assert "could not clone" not in captured.out + captured.err
+        assert not out.exists()
+
+
+def test_dry_run_with_a_ref_still_checks_the_pin(tmp_path: Path, monkeypatch) -> None:
+    import rerun_release as rerun
+
+    monkeypatch.setattr(rerun, "require_clean_and_remote", lambda: ("a" * 40, "b" * 40))
+    monkeypatch.setattr(rerun, "REPO", tmp_path)
+    monkeypatch.setattr(
+        rerun,
+        "lock_readcon_core",
+        lambda: {"name": "readcon-core", "version": "0.23.2"},
+    )
+    with pytest.raises(SystemExit, match="refusing to export"):
+        rerun.main(
+            [
+                "--dry-run",
+                "--n",
+                "6",
+                "--readcon-core-ref",
+                "0.23.9",
+                "--out",
+                str(tmp_path / "plan"),
+            ]
+        )
+
+
 def test_registry_pin_accepts_a_git_sha_ref(tmp_path: Path, monkeypatch) -> None:
     """``--readcon-core-ref`` may be the crate git sha, not only the version."""
     import rerun_release as rerun
