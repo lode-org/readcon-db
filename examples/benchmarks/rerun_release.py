@@ -595,11 +595,10 @@ def core_sha_is_pushed(sha: str, repo: Path | None = None) -> bool:
     return _remote_contains(dest, sha)
 
 
-def pin_change(version: str, sha: str, ref: str) -> str:
-    """How to point the rerun at ``ref`` instead of the lock's pin."""
+def pin_instructions(version: str) -> str:
+    """How to point Cargo at a release or a pushed commit."""
     return (
-        f"refusing to export: Cargo.lock links readcon-core {version} ({sha}), "
-        f'not {ref}. The pin is `readcon-core = "={version}"` in Cargo.toml. '
+        f'The pin is `readcon-core = "={version}"` in Cargo.toml. '
         'For a crates.io release, set `readcon-core = "=<version>"` and run '
         "`cargo update -p readcon-core --precise <version>`. "
         "For a pushed commit, set "
@@ -607,6 +606,15 @@ def pin_change(version: str, sha: str, ref: str) -> str:
         'rev = "<sha>" }` and run `cargo update -p readcon-core`. '
         "Export accepts that registry source, or a git rev that "
         "`git branch -r --contains` or `git tag --contains` lists."
+    )
+
+
+def pin_change(version: str, sha: str, ref: str) -> str:
+    """How to point the rerun at ``ref`` instead of the lock's pin."""
+    shown = sha or version
+    return (
+        f"refusing to export: Cargo.lock links readcon-core {version} ({shown}), "
+        f"not {ref}. {pin_instructions(version)}"
     )
 
 
@@ -658,14 +666,14 @@ def require_exportable_core(
         raise SystemExit(
             f"refusing to export: linked readcon-core {version} ({sha}) from {shown} "
             "is not a crates.io release or a pushed commit. "
-            + pin_change(version, sha, ref or version)
+            + pin_instructions(version)
         )
-    if source.startswith("path+") or source.startswith("path:") or source == "":
+    if source.startswith(("path+", "path:")) or source == "":
         shown = source or "a path"
         raise SystemExit(
             f"refusing to export: linked readcon-core {version} from {shown}. "
             "Path dependencies are not exportable release inputs. "
-            + pin_change(version, sha, ref or version)
+            + pin_instructions(version)
         )
     shown = source or "a path"
     raise SystemExit(

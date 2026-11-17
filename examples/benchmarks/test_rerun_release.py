@@ -510,6 +510,22 @@ def test_registry_pin_accepts_a_git_sha_ref(tmp_path: Path, monkeypatch) -> None
         rerun.require_exportable_core(locked, "ab" * 20)
 
 
+def test_path_pin_refusal_does_not_contradict_itself() -> None:
+    import rerun_release as rerun
+
+    with pytest.raises(SystemExit) as caught:
+        rerun.require_exportable_core(
+            {"name": "readcon-core", "version": "0.23.99"},
+            None,
+        )
+    text = str(caught.value)
+    assert text.count("refusing to export:") == 1
+    assert "not 0.23.99" not in text
+    assert "(0.23.99)" not in text
+    assert "0.23.99" in text
+    assert "Path dependencies" in text
+
+
 def test_main_refuses_git_and_path_pins_before_registry_download(monkeypatch) -> None:
     import rerun_release as rerun
 
