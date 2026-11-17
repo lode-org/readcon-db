@@ -629,13 +629,13 @@ def _remote_contains(checkout: Path, sha: str) -> bool:
     missing_tips: list[tuple[str, str]] = []
     for remote in remotes:
         refs = _ls_remote_refs(checkout, remote)
-        for tip in set(refs.values()):
+        for tip in sorted(set(refs.values())):
             if tip == target:
                 return True
-            if not has_target:
-                continue
             if not _object_exists(checkout, tip):
                 missing_tips.append((remote, tip))
+                continue
+            if not has_target:
                 continue
             ancestor = _git_lines(checkout, "merge-base", "--is-ancestor", target, tip)
             if ancestor.returncode == 0:
@@ -691,7 +691,6 @@ def core_checkout() -> Path:
             "--quiet",
             "--no-tags",
             "--prune",
-            "--prune-tags",
             "origin",
             "+refs/heads/*:refs/remotes/origin/*",
             "+refs/tags/*:refs/remotes/origin/tags/*",
@@ -719,13 +718,7 @@ def core_sha_is_pushed(sha: str, repo: Path | None = None) -> bool:
     if repo is not None:
         return _remote_contains(repo, sha)
     dest = REPO / "build" / "readcon-core-git"
-    cached = (dest / ".git").exists()
-    try:
-        core_checkout()
-    except SystemExit:
-        if cached and _object_exists(dest, sha):
-            return False
-        raise
+    core_checkout()
     return _remote_tracking_contains(dest, sha)
 
 

@@ -387,6 +387,7 @@ def test_local_tag_only_is_refused(tmp_path: Path, monkeypatch) -> None:
     dest_sha = _git(dest, "rev-parse", "HEAD").stdout.strip()
     assert _git(dest, "tag", "local-only", dest_sha).returncode == 0
     assert not rerun.core_sha_is_pushed(dest_sha)
+    assert _git(dest, "show-ref", "--verify", "refs/tags/local-only").returncode == 0
 
 
 def test_pushed_branch_is_accepted(tmp_path: Path, monkeypatch) -> None:
@@ -520,6 +521,43 @@ def test_cached_checkout_refreshes_missing_remote_tag_refs(
     assert rerun.core_sha_is_pushed(tagged)
 
 
+def test_cached_checkout_prunes_a_deleted_remote_tag(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A stale remote-tracking tag must not make a deleted ref look pushed."""
+    import rerun_release as rerun
+
+    bare, core, _main_sha = _bare_and_clone(tmp_path)
+    assert _git(core, "checkout", "--detach").returncode == 0
+    (core / "readme").write_text("tagged\n")
+    assert _git(core, "add", "readme").returncode == 0
+    assert _git(core, "commit", "-m", "tagged").returncode == 0
+    tagged = _git(core, "rev-parse", "HEAD").stdout.strip()
+    assert _git(core, "tag", "v0.23.9", tagged).returncode == 0
+    assert _git(core, "push", "origin", "v0.23.9").returncode == 0
+
+    monkeypatch.setattr(rerun, "REPO", tmp_path / "work")
+    monkeypatch.setattr(rerun, "CORE_GIT", str(bare))
+    assert rerun.core_sha_is_pushed(tagged)
+    cached = rerun.REPO / "build" / "readcon-core-git"
+    assert (
+        _git(
+            cached, "show-ref", "--verify", "refs/remotes/origin/tags/v0.23.9"
+        ).returncode
+        == 0
+    )
+
+    deleted = _git(core, "push", "origin", ":refs/tags/v0.23.9")
+    assert deleted.returncode == 0, deleted.stderr
+    assert not rerun.core_sha_is_pushed(tagged)
+    assert (
+        _git(
+            cached, "show-ref", "--verify", "refs/remotes/origin/tags/v0.23.9"
+        ).returncode
+        != 0
+    )
+
+
 def test_no_remotes_is_refused(tmp_path: Path) -> None:
     """A repo with no configured remotes never counts local branches or tags."""
     import rerun_release as rerun
@@ -562,16 +600,17 @@ def _core_repo(path: Path, remote: str) -> str:
     return _git(path, "rev-parse", "HEAD").stdout.strip()
 
 
-def test_unpushed_pin_with_unreachable_remote_is_refused_cleanly(
+def test_cached_unpushed_pin_with_unreachable_remote_reports_fetch_failure(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """A cached unpushed commit is refused cleanly with the remote down."""
+    """A cached unpushed commit reports a fetch failure when the remote is down."""
     import rerun_release as rerun
 
     monkeypatch.setattr(rerun, "REPO", tmp_path)
     dest = tmp_path / "build" / "readcon-core-git"
     sha = _core_repo(dest, "https://127.0.0.1:9/readcon-core.git")
-    assert rerun.core_sha_is_pushed(sha) is False
+    with pytest.raises(SystemExit, match="could not fetch readcon-core"):
+        rerun.core_sha_is_pushed(sha)
 
 
 def test_unreachable_core_remote_is_a_clean_error(tmp_path: Path, monkeypatch) -> None:
