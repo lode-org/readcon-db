@@ -50,7 +50,15 @@ def test_fix_scaled_follows_an_axis_aligned_cell() -> None:
 def test_fix_scaled_rejects_a_tilted_cell_vector() -> None:
     atoms = _atoms([[1.0, 0.2, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
     atoms.set_constraint(FixScaled(a=[0], mask=(True, False, False)))
-    with pytest.raises(ValueError, match="cartesian axis"):
+    with pytest.raises(ValueError, match="diagonal"):
+        fair._fixed_mask(atoms)
+
+
+def test_fix_scaled_rejects_an_off_diagonal_partner_axis() -> None:
+    """``b`` changes ``x`` even though the fixed ``a`` lies on ``x``."""
+    atoms = _atoms([[10.0, 0.0, 0.0], [1.0, 10.0, 0.0], [0.0, 0.0, 12.0]])
+    atoms.set_constraint(FixScaled(a=[0], mask=(True, False, False)))
+    with pytest.raises(ValueError, match="diagonal"):
         fair._fixed_mask(atoms)
 
 

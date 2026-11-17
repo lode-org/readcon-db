@@ -1395,25 +1395,29 @@ def _symbol_runs(symbols: list[str]) -> list[tuple[str, int]]:
 
 
 def _scaled_to_cartesian(scaled_mask, cell) -> np.ndarray:
-    """Cartesian axes fixed by a ``FixScaled`` mask on this cell.
+    """Cartesian axes fixed by a ``FixScaled`` mask on a diagonal cell.
 
-    A fixed scaled axis is the cartesian axis its cell vector lies on.
-    A cell vector with more than one nonzero component is not a cartesian
-    flag, so this raises instead of storing the scaled mask as cartesian.
+    A non-diagonal cell is rejected. Fixing scaled axis 0 on
+    ``a=(10,0,0)``, ``b=(1,10,0)`` would otherwise report cartesian ``x``
+    even though a step along the unfixed ``b`` still changes ``x``.
+    On a diagonal cell, a fixed scaled axis is that cartesian axis.
     """
     matrix = np.asarray(cell, dtype=np.float64).reshape(3, 3)
+    off = matrix.copy()
+    np.fill_diagonal(off, 0.0)
+    scale = float(np.max(np.abs(matrix))) if matrix.size else 0.0
+    tolerance = scale * 1e-8 if scale else 0.0
+    if scale == 0.0 or np.any(np.abs(off) > tolerance):
+        raise ValueError("FixScaled requires a diagonal cell")
     scaled = np.asarray(scaled_mask, dtype=bool).reshape(3)
     cartesian = np.zeros(3, dtype=bool)
     for axis, fixed in enumerate(scaled):
         if not fixed:
             continue
         vector = matrix[axis]
-        scale = float(np.max(np.abs(vector)))
-        if scale == 0.0:
-            raise ValueError("FixScaled axis has a zero cell vector")
-        nonzero = np.abs(vector) > scale * 1e-8
+        nonzero = np.abs(vector) > tolerance
         if int(np.count_nonzero(nonzero)) != 1:
-            raise ValueError("FixScaled is not a single cartesian axis on this cell")
+            raise ValueError("FixScaled axis has no cartesian component")
         cartesian[int(np.flatnonzero(nonzero)[0])] = True
     return cartesian
 
@@ -1422,7 +1426,7 @@ def _fixed_mask(atoms) -> np.ndarray:
     """Per-axis cartesian fixed flags ASE stored on the row.
 
     ``FixAtoms`` fixes every cartesian axis. ``FixCartesian`` fixes the
-    axes in its mask. ``FixScaled`` is converted through the cell.
+    axes in its mask. ``FixScaled`` is converted only on a diagonal cell.
     ``FixBondLengths`` and any other constraint are left unset: the class
     is checked before any attribute those classes do not have.
     """
