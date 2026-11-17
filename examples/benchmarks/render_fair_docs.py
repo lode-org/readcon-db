@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import ast
 import json
+import re
+from collections import Counter
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -70,18 +72,109 @@ def cell(row: dict) -> str:
     return f"{fmt(row['median_s'])} (n={row['n']})"
 
 
+_COUNT_WORDS = {
+    1: "one",
+    2: "two",
+    3: "three",
+    4: "four",
+    5: "five",
+    6: "six",
+    7: "seven",
+    8: "eight",
+    9: "nine",
+    10: "ten",
+    11: "eleven",
+    12: "twelve",
+}
+_WARM_MILLION = re.compile(
+    r"sample protocol=fair workload=atoms-1000000 op=full_read "
+    r"tool=readcon-db cache=warm i=\d+ seconds=([0-9.eE+-]+) inner_n=(\d+)"
+)
+
+
+def _warm_million_groups(log_text: str) -> list[list[tuple[float, int]]]:
+    """One group per warm 1M readcon-db block in a campaign log."""
+    groups: list[list[tuple[float, int]]] = []
+    current: list[tuple[float, int]] = []
+    for line in log_text.splitlines():
+        if (
+            line.startswith("warmup ")
+            and "workload=atoms-1000000" in line
+            and "op=full_read" in line
+            and "tool=readcon-db" in line
+            and "cache=warm" in line
+        ):
+            if current:
+                groups.append(current)
+                current = []
+            continue
+        match = _WARM_MILLION.search(line)
+        if match:
+            current.append((float(match.group(1)), int(match.group(2))))
+    if current:
+        groups.append(current)
+    return groups
+
+
+def _inner_counts(results: Path, samples: list[float]) -> list[int]:
+    """inner_n for the warm row whose means are ``samples``.
+
+    The warm row in campaign.json stores the means and not inner_n. The
+    log next to that file has one inner_n per sample. The block whose
+    seconds match ``samples`` is the row.
+    """
+    groups = _warm_million_groups((results / "campaign.log").read_text())
+    for group in groups:
+        if len(group) == len(samples) and all(
+            abs(got - want) <= 1e-12 for (got, _count), want in zip(group, samples)
+        ):
+            return [count for _seconds, count in group]
+    raise SystemExit(f"{results.name} warm 1M samples are not in campaign.log")
+
+
+def _describe_inner(label: str, counts: list[int]) -> str:
+    n = len(counts)
+    tally = Counter(counts)
+    if len(tally) == 1:
+        value = counts[0]
+        return f"{label} has inner_n={value} on all {_COUNT_WORDS[n]}."
+    parts = []
+    for value, count in sorted(tally.items(), key=lambda item: (-item[1], -item[0])):
+        word = _COUNT_WORDS[count]
+        if count == 1:
+            parts.append(f"{word} at inner_n={value}")
+        else:
+            parts.append(f"{word} samples at inner_n={value}")
+    if len(parts) == 2:
+        body = f"{parts[0]} and {parts[1]}"
+    else:
+        body = ", ".join(parts[:-1]) + f", and {parts[-1]}"
+    return f"{label} has {body}."
+
+
 def million_warm_note(results_name: str) -> str:
     """Host range for the 1M warm one-thread cell. Only the fair-db31 prose."""
     if results_name != "fair-db31":
         return ""
+    # The committed campaigns, not the REPO the doc splice writes into.
+    root = Path(__file__).resolve().parents[2] / "examples" / "benchmarks"
+    current = load(root / "fair-db31")
+    earlier = load(root / "fair-db30")
+    row = pick(current["fair"], "atoms-1000000", "full_read", "warm", "readcon-db")
+    old = pick(earlier["fair"], "atoms-1000000", "full_read", "warm", "readcon-db")
+    low, high = sorted(
+        int(value * 1000) for value in (row["median_s"], old["median_s"])
+    )
+    now_counts = _inner_counts(root / "fair-db31", row["samples_s"])
+    old_counts = _inner_counts(root / "fair-db30", old["samples_s"])
     return (
         "The 10^6-atom warm one-thread full read in this table is the "
-        "fair-db31 median 1.9523e-02 s. On this host the same sampling "
-        "rule gave medians of about 19 ms to 34 ms across campaigns, so "
+        f"fair-db31 median {fmt(row['median_s'])} s. On this host the same sampling "
+        f"rule gave medians of about {low} ms to {high} ms across campaigns, so "
         "that cell is one end of the range. sample_operation repeats the "
         "call until the timed spans reach 50 ms and stores the mean. "
-        "fair-db30 has eleven samples at inner_n=2 and one at inner_n=1. "
-        "fair-db31 has inner_n=3 on all twelve. "
+        f"{_describe_inner('fair-db30', old_counts)} "
+        f"{_describe_inner('fair-db31', now_counts)} "
         "`bench/db31/ase` is the Cu2 stand-in. The equal comparison is "
         "fair-db31."
     )
