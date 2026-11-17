@@ -581,7 +581,11 @@ def test_provenance_uses_lock_sha_for_git_source(monkeypatch) -> None:
         lambda _locked: (_ for _ in ()).throw(AssertionError("no crate source")),
     )
     monkeypatch.setattr(rerun, "rustc_version", lambda: "rustc 1.88.0")
-    monkeypatch.setattr(rerun, "allocator_in_use", lambda _root: "mimalloc")
+    monkeypatch.setattr(
+        rerun,
+        "git_pin_source",
+        lambda _sha: "fn campaign() {}\n",
+    )
     monkeypatch.setattr(
         rerun,
         "host_facts",
@@ -599,6 +603,55 @@ def test_provenance_uses_lock_sha_for_git_source(monkeypatch) -> None:
     prov = rerun.provenance("a" * 40, "b" * 40, locked)
     assert prov["readcon_core"] == "0.23.3"
     assert prov["readcon_sha"] == "f" * 40
+    assert prov["allocator"] == "system"
+
+
+def test_git_pin_allocator_comes_from_lib_rs(tmp_path: Path, monkeypatch) -> None:
+    import rerun_release as rerun
+
+    repo = tmp_path / "build" / "readcon-core-git"
+    repo.mkdir(parents=True)
+    _git(repo, "init", "-b", "main")
+    (repo / "src").mkdir()
+    (repo / "src" / "lib.rs").write_text("fn campaign() {}\n")
+    _git(repo, "add", "src/lib.rs")
+    committed = _git(repo, "commit", "-m", "lib")
+    assert committed.returncode == 0, committed.stderr
+    sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(rerun, "REPO", tmp_path)
+    monkeypatch.setattr(rerun, "rustc_version", lambda: "rustc 1.88.0")
+    monkeypatch.setattr(
+        rerun,
+        "host_facts",
+        lambda: {
+            "cpu": "x",
+            "ncpu": 1,
+            "cpuinfo_mhz": 1.0,
+            "kernel": "k",
+            "family": "6",
+            "model": "85",
+            "mhz": 1.0,
+            "nproc": 1,
+        },
+    )
+    locked = {
+        "name": "readcon-core",
+        "version": "0.23.3",
+        "source": "git+https://github.com/lode-org/readcon-core#" + sha,
+    }
+    prov = rerun.provenance("a" * 40, "b" * 40, locked)
+    assert prov["readcon_sha"] == sha
+    assert prov["allocator"] == "system"
+    (repo / "src" / "lib.rs").write_text(
+        "#[global_allocator]\nstatic G: mimalloc::MiMalloc = mimalloc::MiMalloc;\n"
+    )
+    _git(repo, "add", "src/lib.rs")
+    again = _git(repo, "commit", "-m", "mimalloc")
+    assert again.returncode == 0, again.stderr
+    sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    locked["source"] = "git+https://github.com/lode-org/readcon-core#" + sha
+    prov = rerun.provenance("a" * 40, "b" * 40, locked)
+    assert prov["allocator"] == "mimalloc"
 
 
 def test_export_includes_ab_sidecar_files() -> None:

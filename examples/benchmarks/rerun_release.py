@@ -508,18 +508,54 @@ def lock_source_sha(locked: dict[str, str] | None = None) -> str:
     return ""
 
 
-def allocator_in_use(root: Path) -> str:
-    """The allocator these campaigns link.
+def allocator_from_source(text: str) -> str:
+    """The allocator named by ``src/lib.rs``.
 
     The rlib, the cdylib, and ``bench_corpus_ops`` link readcon-core without
     ``static_system_alloc``. That feature is the static archive only. When
     the crate installs mimalloc as the global allocator, that is the
     allocator in use.
     """
-    text = (root / "src" / "lib.rs").read_text()
     if "mimalloc::MiMalloc" in text and "global_allocator" in text:
         return "mimalloc"
     return "system"
+
+
+def allocator_in_use(root: Path) -> str:
+    return allocator_from_source((root / "src" / "lib.rs").read_text())
+
+
+def git_pin_source(sha: str) -> str:
+    """``src/lib.rs`` at ``sha`` from the local core checkout or cargo's cache."""
+    checkout = REPO / "build" / "readcon-core-git"
+    if (checkout / ".git").exists():
+        shown = subprocess.run(
+            ["git", "-C", str(checkout), "show", f"{sha}:src/lib.rs"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if shown.returncode == 0:
+            return shown.stdout
+    home = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo"))
+    checkouts = home / "git" / "checkouts"
+    if checkouts.is_dir():
+        for root in sorted(checkouts.glob("readcon-core-*/*")):
+            lib = root / "src" / "lib.rs"
+            if not lib.is_file():
+                continue
+            head = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if head.returncode == 0 and head.stdout.strip().lower() == sha.lower():
+                return lib.read_text()
+    raise SystemExit(
+        "refusing to stamp provenance: no local readcon-core checkout "
+        f"contains src/lib.rs at {sha}"
+    )
 
 
 def ref_matches(version: str, sha: str, ref: str) -> bool:
@@ -713,11 +749,12 @@ def provenance(commit: str, tree: str, locked: dict[str, str]) -> dict[str, obje
     if source.startswith("registry+"):
         root = crate_root(locked)
         sha = git_sha_of_crate(root)
+        allocator = allocator_in_use(root)
     elif source.startswith("git+"):
         sha = lock_source_sha(locked)
         if not sha:
             raise SystemExit("Cargo.lock readcon-core git source has no pinned sha")
-        root = None
+        allocator = allocator_from_source(git_pin_source(sha))
     else:
         raise SystemExit(
             f"refusing to stamp provenance for non-exportable readcon-core source: {source or 'path'}"
@@ -730,7 +767,7 @@ def provenance(commit: str, tree: str, locked: dict[str, str]) -> dict[str, obje
         "readcon_sha": sha,
         "rustc": rustc,
         "python": f"Python {platform.python_version()}",
-        "allocator": allocator_in_use(root) if root is not None else "unknown",
+        "allocator": allocator,
         "host": host_facts(),
     }
 
