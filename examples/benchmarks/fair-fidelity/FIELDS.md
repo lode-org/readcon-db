@@ -24,6 +24,11 @@ CON keeps one mass per symbol, so the mass does not vary inside the frame.
 | fixed flags | yes | yes |
 | velocities | yes | yes |
 | forces | yes | yes |
+
+The ASE database keeps the force array on the row and `Atoms.get_forces()` zeros the components on fixed axes.
+
+| field | readcon-db kept? | ASE kept? |
+| --- | --- | --- |
 | frame index | yes | yes |
 | atom ids | yes | no |
 | atomic numbers | yes | yes |

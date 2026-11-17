@@ -397,6 +397,17 @@ def render_markdown(rows: list[dict]) -> str:
             left = _yes(row["readcon"])
             right = _yes(row["ase"])
         lines.append(f"| {row['field']} | {left} | {right} |")
+        if row["field"] == "forces":
+            lines.extend(
+                [
+                    "",
+                    "The ASE database keeps the force array on the row and "
+                    "`Atoms.get_forces()` zeros the components on fixed axes.",
+                    "",
+                    "| field | readcon-db kept? | ASE kept? |",
+                    "| --- | --- | --- |",
+                ]
+            )
     lines.append("")
     return "\n".join(lines)
 

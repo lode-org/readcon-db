@@ -9,6 +9,9 @@ false, ``velocities_set`` and ``pbc_set`` are true, and ``n_frames`` and
 ``n_atoms`` match the fixture. ``materialize_ase`` energy is that same
 unset pair. CON units metadata matches the written units. Atom ids are
 exact on the CON frames and are whatever ``ase_atom_id`` read back.
+The rendered table places one sentence after the forces row: the ASE
+database keeps the force array, and ``Atoms.get_forces`` zeros the
+components on fixed axes.
 """
 
 from __future__ import annotations
@@ -200,4 +203,9 @@ def test_paper_frames_round_trip_each_field(tmp_path: Path) -> None:
     assert by_name["float precision"]["readcon_text"] == "bit-exact"
     assert by_name["float precision"]["ase_text"] == "bit-exact"
     text = fair_fidelity.render_markdown(rows)
+    note = (
+        "The ASE database keeps the force array on the row and "
+        "`Atoms.get_forces()` zeros the components on fixed axes."
+    )
+    assert text.index(note) > text.index("| forces |")
     assert text == fair_fidelity.FIELDS_PATH.read_text()
