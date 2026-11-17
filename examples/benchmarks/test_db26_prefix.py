@@ -10,6 +10,35 @@ pytest.importorskip("readcon_db")
 import db26_drive as drv
 
 
+def test_highbyte_keeps_an_explicit_rustup_toolchain(monkeypatch, tmp_path) -> None:
+    import db26_highbyte as high
+
+    monkeypatch.setattr(high.fair, "require_pushed_commit", lambda repo=None: None)
+    monkeypatch.setattr(high.fair, "git_out", lambda *_args: "a" * 40)
+    monkeypatch.setenv("RUSTUP_TOOLCHAIN", "1.91.0")
+    seen: dict[str, str] = {}
+
+    def run(*_args, **kwargs):
+        seen["toolchain"] = kwargs["env"]["RUSTUP_TOOLCHAIN"]
+
+        class Proc:
+            stdout = '{"ok": true}\n'
+            stderr = ""
+
+        return Proc()
+
+    monkeypatch.setattr(high.subprocess, "run", run)
+    high.main(tmp_path / "high_byte.json")
+    assert seen["toolchain"] == "1.91.0"
+
+
+def test_env_base_keeps_an_explicit_rustup_toolchain(monkeypatch) -> None:
+    monkeypatch.setenv("RUSTUP_TOOLCHAIN", "1.91.0")
+    assert drv.env_base()["RUSTUP_TOOLCHAIN"] == "1.91.0"
+    monkeypatch.delenv("RUSTUP_TOOLCHAIN")
+    assert drv.env_base()["RUSTUP_TOOLCHAIN"] == "1.88.0"
+
+
 def test_two_commits_build_from_two_worktrees(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(drv, "REPO", tmp_path)
     monkeypatch.setattr(drv.fair, "prefix_ready", lambda prefix, commit: False)

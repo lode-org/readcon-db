@@ -53,6 +53,16 @@ BOOT_SEED = 0
 N = 12
 
 
+def toolchain() -> str:
+    """Rustc toolchain for a campaign build.
+
+    ``RUSTUP_TOOLCHAIN`` is kept when it is set. The recorded runs use
+    1.88.0 when it is unset.
+    """
+    value = os.environ.get("RUSTUP_TOOLCHAIN", "").strip()
+    return value or "1.88.0"
+
+
 def sample_count() -> int:
     """Read ``READCON_DB24_N`` when a run starts, not at import.
 
@@ -125,7 +135,7 @@ def ensure_prefix(kind: str, commit: str) -> str:
         shutil.rmtree(prefix)
     prefix.mkdir(parents=True)
     env = os.environ.copy()
-    env["RUSTUP_TOOLCHAIN"] = "1.88.0"
+    env["RUSTUP_TOOLCHAIN"] = toolchain()
     if kind == "db18":
         src_tree = REPO / "build" / "src-db18"
         env["CARGO_TARGET_DIR"] = str(REPO / "build" / "target-db18")
@@ -512,7 +522,7 @@ def pack(series, keys) -> dict:
 
 def run_levers(log) -> dict:
     env = os.environ.copy()
-    env["RUSTUP_TOOLCHAIN"] = "1.88.0"
+    env["RUSTUP_TOOLCHAIN"] = toolchain()
     proc = subprocess.run(
         [
             "cargo",

@@ -46,7 +46,7 @@ def env_base() -> dict:
     env["PATH"] = home + os.pathsep + env.get("PATH", "")
     env["TMPDIR"] = str(REPO / "build" / "tmp")
     Path(env["TMPDIR"]).mkdir(parents=True, exist_ok=True)
-    env["RUSTUP_TOOLCHAIN"] = "1.88.0"
+    env["RUSTUP_TOOLCHAIN"] = fair.toolchain()
     env.pop("RAYON_NUM_THREADS", None)
     fair.pin_blas_env(env)
     return env

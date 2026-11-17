@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import os
 import subprocess
 import sys
@@ -87,6 +88,36 @@ def test_main_outside_rerun_does_not_apply_the_floor(
     with pytest.raises(RuntimeError, match="passed-floor"):
         drv.main()
     assert drv.N == 6
+
+
+def test_builds_keep_an_explicit_rustup_toolchain(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("RUSTUP_TOOLCHAIN", "1.91.0")
+    monkeypatch.setattr(drv, "REPO", tmp_path)
+    monkeypatch.setattr(drv, "prefix_ready", lambda prefix, commit: False)
+    monkeypatch.setattr(drv, "site_packages", lambda prefix: prefix)
+    seen: dict[str, str] = {}
+
+    def pip_install(prefix, src, env) -> None:
+        seen["prefix"] = env["RUSTUP_TOOLCHAIN"]
+
+    monkeypatch.setattr(drv, "pip_install", pip_install)
+    drv.ensure_prefix("db24", "a" * 40)
+    assert seen["prefix"] == "1.91.0"
+
+    def run(*_args, **kwargs):
+        seen["levers"] = kwargs["env"]["RUSTUP_TOOLCHAIN"]
+
+        class Proc:
+            stdout = "{}\n"
+            stderr = ""
+
+        return Proc()
+
+    monkeypatch.setattr(drv.subprocess, "run", run)
+    drv.run_levers(io.StringIO())
+    assert seen["levers"] == "1.91.0"
+    monkeypatch.delenv("RUSTUP_TOOLCHAIN")
+    assert drv.toolchain() == "1.88.0"
 
 
 def test_help_says_the_floor_is_only_for_rerun_or_release(monkeypatch, capsys) -> None:

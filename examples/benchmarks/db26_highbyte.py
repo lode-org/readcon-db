@@ -25,7 +25,7 @@ def main(out: Path | None = None) -> dict:
     dest = OUT if out is None else out
     env = os.environ.copy()
     env["PATH"] = str(Path.home() / ".local" / "bin") + os.pathsep + env.get("PATH", "")
-    env["RUSTUP_TOOLCHAIN"] = "1.88.0"
+    env["RUSTUP_TOOLCHAIN"] = fair.toolchain()
     env["TMPDIR"] = str(REPO / "build" / "tmp")
     env.setdefault("DB26_COMMIT", fair.git_out("rev-parse", "HEAD"))
     (REPO / "build" / "tmp").mkdir(parents=True, exist_ok=True)
