@@ -1058,9 +1058,14 @@ def export_records(root: Path, export: Path, commit: str) -> None:
     refuse_saved(export)
     require_one_export_path()
     written: list[str] = []
+    copies: list[tuple[Path, Path]] = []
+    notes: list[tuple[Path, str]] = []
+    planned_targets: set[Path] = set()
     for step in STEPS:
         rel = record_rel(step)
         src = root / step.paper
+        if not src.is_dir():
+            raise SystemExit(f"export is missing {rel}")
         extras = sorted(
             item.name
             for item in src.iterdir()
@@ -1072,8 +1077,9 @@ def export_records(root: Path, export: Path, commit: str) -> None:
                 f"refusing to export: {listed} would be dropped; "
                 "add the name to EXPORT_NAMES"
             )
+        if not (src / step.record_name).is_file():
+            raise SystemExit(f"export is missing {rel}")
         dest = export / step.paper
-        dest.mkdir(parents=True, exist_ok=True)
         record = dest / step.record_name
         refuse_existing(record)
         for name in EXPORT_NAMES:
@@ -1081,9 +1087,12 @@ def export_records(root: Path, export: Path, commit: str) -> None:
             if path.is_file():
                 target = dest / name
                 refuse_existing(target)
-                shutil.copy2(path, target)
-        if not record.is_file():
-            raise SystemExit(f"export is missing {rel}")
+                if target in planned_targets:
+                    raise SystemExit(
+                        f"refusing to export: {target} would be written twice"
+                    )
+                planned_targets.add(target)
+                copies.append((path, target))
         written.append(rel)
         for old in step.supersedes:
             old_record = export / old / step.record_name
@@ -1091,12 +1100,20 @@ def export_records(root: Path, export: Path, commit: str) -> None:
                 raise SystemExit(f"refusing to leave a second copy at {old_record}")
             note = export / old / "SUPERSEDED.md"
             refuse_existing(note)
-            note.parent.mkdir(parents=True, exist_ok=True)
-            note.write_text(superseded_note(old, rel, commit))
+            if note in planned_targets:
+                raise SystemExit(f"refusing to export: {note} would be written twice")
+            planned_targets.add(note)
+            notes.append((note, superseded_note(old, rel, commit)))
     if len(written) != len(set(written)):
         raise SystemExit(
             "refusing to export: one run was written to more than one path"
         )
+    for src_path, dst_path in copies:
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src_path, dst_path)
+    for note_path, text in notes:
+        note_path.parent.mkdir(parents=True, exist_ok=True)
+        note_path.write_text(text)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

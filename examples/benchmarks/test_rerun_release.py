@@ -760,6 +760,35 @@ def test_export_copies_listed_sidecars_and_refuses_the_rest(tmp_path: Path) -> N
     assert not again.exists()
 
 
+def test_export_preflight_refuses_last_step_without_writing_anything(
+    tmp_path: Path,
+) -> None:
+    """A disallowed file in the last step refuses before any export file is written."""
+    import rerun_release as rerun
+
+    root = tmp_path / "out"
+    rerun.write_synthetic(root, _synthetic_prov(), 6)
+    last_step = rerun.STEPS[-1]
+    dropped = root / last_step.paper / "notes.txt"
+    dropped.write_text("x\n")
+
+    fresh = tmp_path / "export-fresh"
+    with pytest.raises(SystemExit, match=f"{last_step.paper}/notes.txt"):
+        rerun.export_records(root, fresh, "a" * 40)
+    assert not fresh.exists()
+
+    existing = tmp_path / "export-existing"
+    existing.mkdir()
+    sentinel = existing / "keep.txt"
+    sentinel.write_text("stay\n")
+    with pytest.raises(SystemExit, match=f"{last_step.paper}/notes.txt"):
+        rerun.export_records(root, existing, "a" * 40)
+    assert [p.relative_to(existing).as_posix() for p in existing.rglob("*")] == [
+        "keep.txt"
+    ]
+    assert sentinel.read_text() == "stay\n"
+
+
 def test_dirty_tree_names_files_inside_untracked_directories(tmp_path: Path) -> None:
     repo = _isolated_clean_repo(tmp_path)
     nested = repo / "scratch" / "notes.txt"
