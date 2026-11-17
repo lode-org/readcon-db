@@ -174,7 +174,7 @@ Type-7 medians from `examples/benchmarks/fair-db31/campaign.json`, in seconds. n
 | 8 atoms, 10^4 frames | one frame | cold | 4.4252e-05 (n=12) | 3.8061e-03 (n=12) | readcon-db |
 | 8 atoms, 10^4 frames | insert | cold-file | 3.2152e-01 (n=12) | 3.0469e+00 (n=12) | readcon-db |
 
-The 10^6-atom warm one-thread full read in this table is the fair-db31 median 1.9523e-02 s. On this host the same sampling rule gave medians of about 19 ms to 34 ms across campaigns, so that cell is one end of the range. sample_operation repeats the call until the timed spans reach 50 ms and stores the mean. fair-db30 has eleven samples at inner_n=2 and one at inner_n=1. fair-db31 has inner_n=3 on all twelve. `bench/db31/ase` is the Cu2 stand-in. The equal comparison is fair-db31.
+The 10^6-atom warm one-thread full read in this table is the fair-db31 median 1.9523e-02 s. On this host the same sampling rule gave medians of 1.939e-02 s to 3.447e-02 s across campaigns. sample_operation repeats the call until the timed spans reach 50 ms and stores the mean. fair-db30 has eleven samples at inner_n=2 and one at inner_n=1. fair-db31 has inner_n=3 on all twelve. `bench/db31/ase` is the Cu2 stand-in. The equal comparison is fair-db31.
 
 The large inserts do not share a winner (10^4 atoms, 1 frame: readcon-db 3.6841e-03 (n=12), ASE 3.7112e-03 (n=12), readcon-db is faster; 10^5 atoms, 1 frame: readcon-db 2.5725e-02 (n=12), ASE 2.4346e-02 (n=12), ASE is faster; 10^6 atoms, 1 frame: readcon-db 2.8672e-01 (n=12), ASE 2.4002e-01 (n=12), ASE is faster).
 readcon-db is faster on every full read and single-frame query in this table.

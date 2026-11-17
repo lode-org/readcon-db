@@ -152,26 +152,58 @@ def _describe_inner(label: str, counts: list[int]) -> str:
     return f"{label} has {body}."
 
 
+def _sig4(value: float) -> str:
+    """Scientific notation with four significant figures."""
+    return f"{value:.3e}"
+
+
+def _million_warm_medians(repo: Path) -> list[float]:
+    """One-thread 1M warm medians recorded with n=12 and a 50 ms span."""
+    found = []
+    for base in (repo / "bench", repo / "examples" / "benchmarks"):
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("campaign.json")):
+            data = json.loads(path.read_text())
+            rows = data.get("fair")
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if (
+                    row.get("workload") == "atoms-1000000"
+                    and row.get("op") == "full_read"
+                    and row.get("cache") == "warm"
+                    and row.get("tool") == "readcon-db"
+                    and row.get("rayon_num_threads") == "1"
+                    and row.get("n") == 12
+                    and row.get("span_s") == 0.05
+                ):
+                    found.append(float(row["median_s"]))
+    if not found:
+        raise SystemExit("no 1M warm one-thread medians under the 50 ms rule")
+    return found
+
+
 def million_warm_note(results_name: str) -> str:
     """Host range for the 1M warm one-thread cell. Only the fair-db31 prose."""
     if results_name != "fair-db31":
         return ""
     # The committed campaigns, not the REPO the doc splice writes into.
-    root = Path(__file__).resolve().parents[2] / "examples" / "benchmarks"
+    repo = Path(__file__).resolve().parents[2]
+    root = repo / "examples" / "benchmarks"
     current = load(root / "fair-db31")
     earlier = load(root / "fair-db30")
     row = pick(current["fair"], "atoms-1000000", "full_read", "warm", "readcon-db")
     old = pick(earlier["fair"], "atoms-1000000", "full_read", "warm", "readcon-db")
-    low, high = sorted(
-        int(value * 1000) for value in (row["median_s"], old["median_s"])
-    )
+    medians = _million_warm_medians(repo)
+    low, high = min(medians), max(medians)
     now_counts = _inner_counts(root / "fair-db31", row["samples_s"])
     old_counts = _inner_counts(root / "fair-db30", old["samples_s"])
     return (
         "The 10^6-atom warm one-thread full read in this table is the "
         f"fair-db31 median {fmt(row['median_s'])} s. On this host the same sampling "
-        f"rule gave medians of about {low} ms to {high} ms across campaigns, so "
-        "that cell is one end of the range. sample_operation repeats the "
+        f"rule gave medians of {_sig4(low)} s to {_sig4(high)} s across campaigns. "
+        "sample_operation repeats the "
         "call until the timed spans reach 50 ms and stores the mean. "
         f"{_describe_inner('fair-db30', old_counts)} "
         f"{_describe_inner('fair-db31', now_counts)} "
