@@ -155,28 +155,30 @@ The published CPC samples in `published_db_v2` (40 frames of 8 Cu, n=6) are read
 ASE committed and fsynced once per frame.
 
 <!-- fair-docs:begin readme-fair -->
-Type-7 medians from `examples/benchmarks/fair-db30/campaign.json`, in seconds. n is the stored sample count.
+Type-7 medians from `examples/benchmarks/fair-db31/campaign.json`, in seconds. n is the stored sample count.
 
 | workload | op | cache | readcon-db | ASE sqlite | faster |
 | --- | --- | --- | --- | --- | --- |
-| 10^3 atoms, 1 frame | full read | warm | 1.6890e-05 (n=12) | 5.2462e-04 (n=12) | readcon-db |
-| 10^3 atoms, 1 frame | full read | cold | 3.3484e-05 (n=12) | 1.1799e-03 (n=12) | readcon-db |
-| 10^4 atoms, 1 frame | full read | warm | 2.7837e-04 (n=12) | 3.3116e-03 (n=12) | readcon-db |
-| 10^4 atoms, 1 frame | full read | cold | 2.9667e-04 (n=12) | 5.4029e-03 (n=12) | readcon-db |
-| 10^5 atoms, 1 frame | full read | warm | 2.5096e-03 (n=12) | 2.9690e-02 (n=12) | readcon-db |
-| 10^5 atoms, 1 frame | full read | cold | 5.7563e-03 (n=12) | 4.2325e-02 (n=12) | readcon-db |
-| 10^6 atoms, 1 frame | full read | warm | 3.4467e-02 (n=12) | 3.2899e-01 (n=12) | readcon-db |
-| 10^6 atoms, 1 frame | full read | cold | 5.7957e-02 (n=12) | 3.6177e-01 (n=12) | readcon-db |
-| 10^6 atoms, 1 frame | one frame | cold | 6.3359e-02 (n=12) | 3.5050e-01 (n=12) | readcon-db |
-| 10^6 atoms, 1 frame | insert | cold-file | 3.1385e-01 (n=12) | 2.6371e-01 (n=12) | ASE |
-| 8 atoms, 10^4 frames | full read | warm | 6.3953e-03 (n=12) | 9.5912e-01 (n=12) | readcon-db |
-| 8 atoms, 10^4 frames | full read | cold | 6.2129e-03 (n=12) | 9.3665e-01 (n=12) | readcon-db |
-| 8 atoms, 10^4 frames | one frame | cold | 4.3610e-05 (n=12) | 3.8396e-03 (n=12) | readcon-db |
-| 8 atoms, 10^4 frames | insert | cold-file | 3.2544e-01 (n=12) | 2.9928e+00 (n=12) | readcon-db |
+| 10^3 atoms, 1 frame | full read | warm | 1.6289e-05 (n=12) | 5.2822e-04 (n=12) | readcon-db |
+| 10^3 atoms, 1 frame | full read | cold | 3.1071e-05 (n=12) | 2.5292e-03 (n=12) | readcon-db |
+| 10^4 atoms, 1 frame | full read | warm | 2.6799e-04 (n=12) | 3.5971e-03 (n=12) | readcon-db |
+| 10^4 atoms, 1 frame | full read | cold | 2.9262e-04 (n=12) | 5.0335e-03 (n=12) | readcon-db |
+| 10^5 atoms, 1 frame | full read | warm | 2.5425e-03 (n=12) | 2.9110e-02 (n=12) | readcon-db |
+| 10^5 atoms, 1 frame | full read | cold | 5.2342e-03 (n=12) | 3.4039e-02 (n=12) | readcon-db |
+| 10^6 atoms, 1 frame | full read | warm | 1.9523e-02 (n=12) | 3.0455e-01 (n=12) | readcon-db |
+| 10^6 atoms, 1 frame | full read | cold | 6.4952e-02 (n=12) | 3.6831e-01 (n=12) | readcon-db |
+| 10^6 atoms, 1 frame | one frame | cold | 5.5127e-02 (n=12) | 3.3654e-01 (n=12) | readcon-db |
+| 10^6 atoms, 1 frame | insert | cold-file | 2.8672e-01 (n=12) | 2.4002e-01 (n=12) | ASE |
+| 8 atoms, 10^4 frames | full read | warm | 6.1211e-03 (n=12) | 9.0138e-01 (n=12) | readcon-db |
+| 8 atoms, 10^4 frames | full read | cold | 6.0743e-03 (n=12) | 9.0206e-01 (n=12) | readcon-db |
+| 8 atoms, 10^4 frames | one frame | cold | 4.4252e-05 (n=12) | 3.8061e-03 (n=12) | readcon-db |
+| 8 atoms, 10^4 frames | insert | cold-file | 3.2152e-01 (n=12) | 3.0469e+00 (n=12) | readcon-db |
 
-The large inserts do not share a winner (10^4 atoms, 1 frame: readcon-db 3.7192e-03 (n=12), ASE 3.5448e-03 (n=12), ASE is faster; 10^5 atoms, 1 frame: readcon-db 2.5689e-02 (n=12), ASE 2.6448e-02 (n=12), readcon-db is faster; 10^6 atoms, 1 frame: readcon-db 3.1385e-01 (n=12), ASE 2.6371e-01 (n=12), ASE is faster).
+The 10^6-atom warm one-thread full read in this table is the fair-db31 median 1.9523e-02 s. On this host the same sampling rule gave medians of about 19 ms to 34 ms across campaigns, so that cell is one end of the range. sample_operation repeats the call until the timed spans reach 50 ms and stores the mean. fair-db30 has eleven samples at inner_n=2 and one at inner_n=1. fair-db31 has inner_n=3 on all twelve. `bench/db31/ase` is the Cu2 stand-in. The equal comparison is fair-db31.
+
+The large inserts do not share a winner (10^4 atoms, 1 frame: readcon-db 3.6841e-03 (n=12), ASE 3.7112e-03 (n=12), readcon-db is faster; 10^5 atoms, 1 frame: readcon-db 2.5725e-02 (n=12), ASE 2.4346e-02 (n=12), ASE is faster; 10^6 atoms, 1 frame: readcon-db 2.8672e-01 (n=12), ASE 2.4002e-01 (n=12), ASE is faster).
 readcon-db is faster on every full read and single-frame query in this table.
-The full ladder is [`examples/benchmarks/fair-db30/RESULTS.md`](examples/benchmarks/fair-db30/RESULTS.md).
+The full ladder is [`examples/benchmarks/fair-db31/RESULTS.md`](examples/benchmarks/fair-db31/RESULTS.md).
 <!-- fair-docs:end readme-fair -->
 
 ## Questions and bug reports

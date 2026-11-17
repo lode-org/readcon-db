@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-DEFAULT_RESULTS = REPO / "examples" / "benchmarks" / "fair-db30"
+DEFAULT_RESULTS = REPO / "examples" / "benchmarks" / "fair-db31"
 
 LADDER = (
     ("atoms-1000", "10^3 atoms, 1 frame"),
@@ -68,6 +68,23 @@ def faster(left: dict, right: dict) -> str:
 
 def cell(row: dict) -> str:
     return f"{fmt(row['median_s'])} (n={row['n']})"
+
+
+def million_warm_note(results_name: str) -> str:
+    """Host range for the 1M warm one-thread cell. Only the fair-db31 prose."""
+    if results_name != "fair-db31":
+        return ""
+    return (
+        "The 10^6-atom warm one-thread full read in this table is the "
+        "fair-db31 median 1.9523e-02 s. On this host the same sampling "
+        "rule gave medians of about 19 ms to 34 ms across campaigns, so "
+        "that cell is one end of the range. sample_operation repeats the "
+        "call until the timed spans reach 50 ms and stores the mean. "
+        "fair-db30 has eleven samples at inner_n=2 and one at inner_n=1. "
+        "fair-db31 has inner_n=3 on all twelve. "
+        "`bench/db31/ase` is the Cu2 stand-in. The equal comparison is "
+        "fair-db31."
+    )
 
 
 def comparison_table(
@@ -294,6 +311,12 @@ def fairness_block(data: dict, results_name: str) -> str:
         "",
         *comparison_table(rows, reads),
         "",
+    ]
+    note = million_warm_note(results_name)
+    if note:
+        lines.append(note)
+        lines.append("")
+    lines += [
         insert_claim(rows),
         read_and_other_claim(rows, reads),
         "",
@@ -354,8 +377,10 @@ def readme_block(data: dict, results_name: str) -> str:
         lines.append(
             f"| {label} | {op_label} | {cache} | {cell(db)} | {cell(ase)} | {faster(db, ase)} |"
         )
+    note = million_warm_note(results_name)
     lines += [
         "",
+        *([note, ""] if note else []),
         insert_claim(rows),
         query_claim(rows, specs),
         (
