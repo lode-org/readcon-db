@@ -1,0 +1,111 @@
+Preparing worktree (detached HEAD 9e56824)
+HEAD is now at 9e56824 test: record the db15 scale head-to-head
+Processing ./python
+Building wheels for collected packages: readcon-db
+Successfully built readcon-db
+Installing collected packages: readcon-db
+Successfully installed readcon-db-0.2.1
+Processing ./python
+Building wheels for collected packages: readcon-db
+Successfully built readcon-db
+Installing collected packages: readcon-db
+Successfully installed readcon-db-0.2.1
+digest db15 7de5a24426cd90dd38e36bfb3020666d3a69d072a053db21ded662b5e10bef6c
+digest tip 2484c3521b86c8e3d6c0b0ed37782e2590fa1434c4bc3644ec59102e13d21d70
+corpus bytes 342003712
+selected 0 db15 1.010246e-02
+selected 0 tip 9.480139e-03
+selected 1 db15 1.014782e-02
+selected 1 tip 8.861135e-03
+selected 2 db15 8.175691e-03
+selected 2 tip 9.459891e-03
+selected 3 db15 5.611308e-03
+selected 3 tip 7.714447e-03
+selected 4 db15 8.947560e-03
+selected 4 tip 8.537460e-03
+selected 5 db15 8.866654e-03
+selected 5 tip 8.022585e-03
+selected 6 db15 9.258537e-03
+selected 6 tip 9.289806e-03
+selected 7 db15 8.784019e-03
+selected 7 tip 8.868421e-03
+selected 8 db15 9.263751e-03
+selected 8 tip 8.644104e-03
+selected 9 db15 9.005269e-03
+selected 9 tip 9.296197e-03
+selected 10 db15 7.553864e-03
+selected 10 tip 8.952196e-03
+selected 11 db15 8.023515e-03
+selected 11 tip 9.507094e-03
+range 0 db15 3.046137e-01
+range 0 tip 2.870484e-01
+range 1 db15 2.181829e-01
+range 1 tip 2.480575e-01
+range 2 db15 2.070618e-01
+range 2 tip 2.661953e-01
+range 3 db15 2.275661e-01
+range 3 tip 2.136101e-01
+range 4 db15 2.217224e-01
+range 4 tip 3.223763e-01
+range 5 db15 2.504455e-01
+range 5 tip 1.900223e-01
+range 6 db15 3.136122e-01
+range 6 tip 2.212150e-01
+range 7 db15 1.947549e-01
+range 7 tip 2.001600e-01
+range 8 db15 2.379921e-01
+range 8 tip 1.764979e-01
+range 9 db15 2.057993e-01
+range 9 tip 2.670801e-01
+range 10 db15 2.064783e-01
+range 10 tip 1.689897e-01
+range 11 db15 2.206399e-01
+range 11 tip 1.738199e-01
+metadata 0 db15 3.171662e-04
+metadata 0 tip 3.186874e-04
+metadata 1 db15 3.227775e-04
+metadata 1 tip 2.328345e-04
+metadata 2 db15 3.182798e-04
+metadata 2 tip 3.334621e-04
+metadata 3 db15 2.166099e-04
+metadata 3 tip 3.341726e-04
+metadata 4 db15 3.245524e-04
+metadata 4 tip 3.400734e-04
+metadata 5 db15 3.226422e-04
+metadata 5 tip 2.532886e-04
+metadata 6 db15 3.268373e-04
+metadata 6 tip 2.917888e-04
+metadata 7 db15 2.857872e-04
+metadata 7 tip 3.131764e-04
+metadata 8 db15 2.893188e-04
+metadata 8 tip 2.367608e-04
+metadata 9 db15 3.472937e-04
+metadata 9 tip 2.732614e-04
+metadata 10 db15 2.810008e-04
+metadata 10 tip 3.147999e-04
+metadata 11 db15 3.105008e-04
+metadata 11 tip 2.839746e-04
+metadata_reverse 0 tip 3.052488e-04
+metadata_reverse 0 db15 2.773923e-04
+metadata_reverse 1 tip 2.247259e-04
+metadata_reverse 1 db15 3.444858e-04
+metadata_reverse 2 tip 3.013295e-04
+metadata_reverse 2 db15 2.120460e-04
+metadata_reverse 3 tip 2.961250e-04
+metadata_reverse 3 db15 2.166425e-04
+metadata_reverse 4 tip 3.290432e-04
+metadata_reverse 4 db15 3.288216e-04
+metadata_reverse 5 tip 2.528673e-04
+metadata_reverse 5 db15 3.228042e-04
+metadata_reverse 6 tip 3.117706e-04
+metadata_reverse 6 db15 3.188735e-04
+metadata_reverse 7 tip 2.911633e-04
+metadata_reverse 7 db15 3.251316e-04
+metadata_reverse 8 tip 2.049697e-04
+metadata_reverse 8 db15 2.978784e-04
+metadata_reverse 9 tip 3.077365e-04
+metadata_reverse 9 db15 2.857923e-04
+metadata_reverse 10 tip 2.966591e-04
+metadata_reverse 10 db15 2.623166e-04
+metadata_reverse 11 tip 1.719665e-04
+metadata_reverse 11 db15 3.125389e-04

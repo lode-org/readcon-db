@@ -1,0 +1,13 @@
+{
+  "commit": "043c3091c9606293a920311a73a8a622d4638746",
+  "hostname": "host",
+  "n": 12,
+  "rayon_num_threads": "1",
+  "omp_num_threads": "1",
+  "openblas_num_threads": "1",
+  "mkl_num_threads": "1",
+  "library_sha256": {
+    "db15": "7de5a24426cd90dd38e36bfb3020666d3a69d072a053db21ded662b5e10bef6c",
+    "tip": "2484c3521b86c8e3d6c0b0ed37782e2590fa1434c4bc3644ec59102e13d21d70"
+  }
+}

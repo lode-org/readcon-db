@@ -1,0 +1,241 @@
+[
+  {
+    "workload": "frames-100",
+    "file_bytes": 65536,
+    "page_bytes": 45056,
+    "overhead_bytes": 20480,
+    "tables": [
+      {
+        "name": "frames",
+        "entries": 100,
+        "key_bytes": 1200,
+        "value_bytes": 4818,
+        "leaf_pages": 2,
+        "branch_pages": 1,
+        "overflow_pages": 1,
+        "page_size": 4096,
+        "page_bytes": 16384
+      },
+      {
+        "name": "traj_meta",
+        "entries": 1,
+        "key_bytes": 8,
+        "value_bytes": 130,
+        "leaf_pages": 1,
+        "branch_pages": 0,
+        "overflow_pages": 0,
+        "page_size": 4096,
+        "page_bytes": 4096
+      },
+      {
+        "name": "idx_natoms",
+        "entries": 0,
+        "key_bytes": 0,
+        "value_bytes": 0,
+        "leaf_pages": 0,
+        "branch_pages": 0,
+        "overflow_pages": 0,
+        "page_size": 4096,
+        "page_bytes": 0
+      },
+      {
+        "name": "idx_symbol",
+        "entries": 0,
+        "key_bytes": 0,
+        "value_bytes": 0,
+        "leaf_pages": 0,
+        "branch_pages": 0,
+        "overflow_pages": 0,
+        "page_size": 4096,
+        "page_bytes": 0
+      },
+      {
+        "name": "idx_energy",
+        "entries": 0,
+        "key_bytes": 0,
+        "value_bytes": 0,
+        "leaf_pages": 0,
+        "branch_pages": 0,
+        "overflow_pages": 0,
+        "page_size": 4096,
+        "page_bytes": 0
+      },
+      {
+        "name": "idx_flags",
+        "entries": 0,
+        "key_bytes": 0,
+        "value_bytes": 0,
+        "leaf_pages": 0,
+        "branch_pages": 0,
+        "overflow_pages": 0,
+        "page_size": 4096,
+        "page_bytes": 0
+      },
+      {
+        "name": "idx_elem_count",
+        "entries": 0,
+        "key_bytes": 0,
+        "value_bytes": 0,
+        "leaf_pages": 0,
+        "branch_pages": 0,
+        "overflow_pages": 0,
+        "page_size": 4096,
+        "page_bytes": 0
+      },
+      {
+        "name": "idx_formula",
+        "entries": 0,
+        "key_bytes": 0,
+        "value_bytes": 0,
+        "leaf_pages": 0,
+        "branch_pages": 0,
+        "overflow_pages": 0,
+        "page_size": 4096,
+        "page_bytes": 0
+      },
+      {
+        "name": "idx_fmax",
+        "entries": 0,
+        "key_bytes": 0,
+        "value_bytes": 0,
+        "leaf_pages": 0,
+        "branch_pages": 0,
+        "overflow_pages": 0,
+        "page_size": 4096,
+        "page_bytes": 0
+      },
+      {
+        "name": "idx_mass",
+        "entries": 0,
+        "key_bytes": 0,
+        "value_bytes": 0,
+        "leaf_pages": 0,
+        "branch_pages": 0,
+        "overflow_pages": 0,
+        "page_size": 4096,
+        "page_bytes": 0
+      },
+      {
+        "name": "idx_volume",
+        "entries": 0,
+        "key_bytes": 0,
+        "value_bytes": 0,
+        "leaf_pages": 0,
+        "branch_pages": 0,
+        "overflow_pages": 0,
+        "page_size": 4096,
+        "page_bytes": 0
+      },
+      {
+        "name": "idx_pbc",
+        "entries": 0,
+        "key_bytes": 0,
+        "value_bytes": 0,
+        "leaf_pages": 0,
+        "branch_pages": 0,
+        "overflow_pages": 0,
+        "page_size": 4096,
+        "page_bytes": 0
+      },
+      {
+        "name": "idx_meta",
+        "entries": 0,
+        "key_bytes": 0,
+        "value_bytes": 0,
+        "leaf_pages": 0,
+        "branch_pages": 0,
+        "overflow_pages": 0,
+        "page_size": 4096,
+        "page_bytes": 0
+      },
+      {
+        "name": "frame_by_hash",
+        "entries": 100,
+        "key_bytes": 1600,
+        "value_bytes": 1200,
+        "leaf_pages": 1,
+        "branch_pages": 0,
+        "overflow_pages": 0,
+        "page_size": 4096,
+        "page_bytes": 4096
+      },
+      {
+        "name": "hash_by_frame",
+        "entries": 0,
+        "key_bytes": 0,
+        "value_bytes": 0,
+        "leaf_pages": 0,
+        "branch_pages": 0,
+        "overflow_pages": 0,
+        "page_size": 4096,
+        "page_bytes": 0
+      },
+      {
+        "name": "frames_soa",
+        "entries": 2,
+        "key_bytes": 24,
+        "value_bytes": 2420,
+        "leaf_pages": 1,
+        "branch_pages": 0,
+        "overflow_pages": 0,
+        "page_size": 4096,
+        "page_bytes": 4096
+      },
+      {
+        "name": "idx_cols",
+        "entries": 1,
+        "key_bytes": 8,
+        "value_bytes": 11908,
+        "leaf_pages": 1,
+        "branch_pages": 0,
+        "overflow_pages": 3,
+        "page_size": 4096,
+        "page_bytes": 16384
+      },
+      {
+        "name": "idx_topo",
+        "entries": 0,
+        "key_bytes": 0,
+        "value_bytes": 0,
+        "leaf_pages": 0,
+        "branch_pages": 0,
+        "overflow_pages": 0,
+        "page_size": 4096,
+        "page_bytes": 0
+      },
+      {
+        "name": "topo_by_frame",
+        "entries": 0,
+        "key_bytes": 0,
+        "value_bytes": 0,
+        "leaf_pages": 0,
+        "branch_pages": 0,
+        "overflow_pages": 0,
+        "page_size": 4096,
+        "page_bytes": 0
+      },
+      {
+        "name": "idx_canon",
+        "entries": 0,
+        "key_bytes": 0,
+        "value_bytes": 0,
+        "leaf_pages": 0,
+        "branch_pages": 0,
+        "overflow_pages": 0,
+        "page_size": 4096,
+        "page_bytes": 0
+      },
+      {
+        "name": "canon_by_frame",
+        "entries": 0,
+        "key_bytes": 0,
+        "value_bytes": 0,
+        "leaf_pages": 0,
+        "branch_pages": 0,
+        "overflow_pages": 0,
+        "page_size": 4096,
+        "page_bytes": 0
+      }
+    ]
+  }
+]

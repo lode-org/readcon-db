@@ -1,0 +1,52 @@
+[
+  {
+    "backend": "readcon-db",
+    "concurrent_8readers_extract_s": 0.004098412,
+    "extract_all_mean_s": 0.0000789919,
+    "extract_frames_per_s": 126595.2585011881,
+    "insert_frames_per_s": 1502.497526513447,
+    "insert_s": 0.006655585,
+    "n_frames": 10,
+    "select_cu_mean_s": 1.7821399999999999e-6
+  },
+  {
+    "backend": "readcon-db",
+    "concurrent_8readers_extract_s": 0.005029976,
+    "extract_all_mean_s": 0.00107848465,
+    "extract_frames_per_s": 92722.69197340918,
+    "insert_frames_per_s": 21251.35185161966,
+    "insert_s": 0.004705583,
+    "n_frames": 100,
+    "select_cu_mean_s": 0.000010384540000000001
+  },
+  {
+    "backend": "readcon-db",
+    "concurrent_8readers_extract_s": 0.004882694,
+    "extract_all_mean_s": 0.0022429194,
+    "extract_frames_per_s": 89169.49935873755,
+    "insert_frames_per_s": 32089.661080231053,
+    "insert_s": 0.006232537,
+    "n_frames": 200,
+    "select_cu_mean_s": 0.000018665540000000002
+  },
+  {
+    "backend": "readcon-db",
+    "concurrent_8readers_extract_s": 0.000978967,
+    "extract_all_mean_s": 0.00052833765,
+    "extract_frames_per_s": 94636.45076212153,
+    "insert_frames_per_s": 12324.57204156043,
+    "insert_s": 0.004056936,
+    "n_frames": 50,
+    "select_cu_mean_s": 5.85228e-6
+  },
+  {
+    "backend": "readcon-db",
+    "concurrent_8readers_extract_s": 0.006374014,
+    "extract_all_mean_s": 0.0056543712,
+    "extract_frames_per_s": 88427.16233416017,
+    "insert_frames_per_s": 34950.42666432359,
+    "insert_s": 0.014305977,
+    "n_frames": 500,
+    "select_cu_mean_s": 0.0000446191
+  }
+]

@@ -1,0 +1,1089 @@
+rev_parse 043c3091c9606293a920311a73a8a622d4638746
+date_utc 2026-11-16T20:03:06Z
+host host
+uname Linux-6.12.113+-x86_64-with-glibc2.39
+machine x86_64
+cpu Intel(R) Xeon(R) Processor
+nproc 8
+python 3.12.3
+warmup 1
+samples 12
+quantile type-7 (numpy percentile method=linear)
+order serial, tools alternate each sample index, no parallel samples
+threads: the paired rows set RAYON_NUM_THREADS=1 for readcon-db and run ASE in one process; readcon-db is also recorded with RAYON_NUM_THREADS unset; OMP, OpenBLAS, and MKL threads are 1 on every row
+timer: directory fsync, fadvise, mincore, the element-wise check, and the collector stay outside; the clock covers the commit, or the query; cold-open also times the open
+gc: automatic collection is off for every read row, for both tools, and restored when the row returns
+timer_short: a read shorter than 50 ms is repeated until the timed spans add to 50 ms; the sample is that mean
+timer_insert: a commit shorter than 2 s is repeated until the timed spans add to 2 s, because commit fsyncs stay correlated past 250 ms
+page_cache insert: unlink and create the database file outside the timer, one commit fsync inside
+page_cache read_cold: posix_fadvise DONTNEED, then mincore, outside the timer; retry until resident fraction is 0
+page_cache read_cold_label: a sample that stays resident is labeled and omitted from the cold median
+page_cache drop_caches: /proc/sys/vm/drop_caches is not writable here, so it is not used
+page_cache read_warm: one warmup read on the open store, then time the read
+lmdb MDB_NOSYNC unset, one write transaction and one commit fsync for the whole insert; a long trajectory puts one 64-frame group at a time and drops that group's cooked blob and decompressed text after the put
+ase one write transaction, journal_mode=DELETE, synchronous=FULL, one commit fsync; ASE's 5000-row commit is disabled
+cold: page cache dropped and mincore 0, then open outside the clock, then the query; a readcon-db open under 1 MiB is one pread before the environment map
+warm-after-open: page cache dropped, then open outside the clock, then the query; a readcon-db open under 1 MiB includes one pread
+cold-open: page cache dropped outside the clock, then open and the query inside the clock, both tools
+validation element-wise outside the timer; a mismatch aborts the run
+ase_settings {"ase_version": "3.29.0", "backend": "sqlite", "fsync": "synchronous=FULL on that commit", "journal_mode": "delete", "sqlite_version": "3.45.1", "synchronous": "FULL", "transactions": "one commit for the whole insert (ASE's 5000-row commit disabled)"}
+workload frames-1000 frames=1000 atoms=8 build_start
+workload frames-1000 bytes=751496 build_done
+warmup protocol=fair workload=frames-1000 op=insert tool=readcon-db
+sample protocol=fair workload=frames-1000 op=insert tool=readcon-db cache=cold-file i=0 seconds=0.03408574657571419 inner_n=59 timed_span_s=2.011059 disk_bytes=356352
+sample protocol=fair workload=frames-1000 op=insert tool=readcon-db cache=cold-file i=1 seconds=0.03405776272885012 inner_n=59 timed_span_s=2.009408 disk_bytes=356352
+sample protocol=fair workload=frames-1000 op=insert tool=readcon-db cache=cold-file i=2 seconds=0.033413525766688205 inner_n=60 timed_span_s=2.004812 disk_bytes=356352
+sample protocol=fair workload=frames-1000 op=insert tool=readcon-db cache=cold-file i=3 seconds=0.034040921780214665 inner_n=59 timed_span_s=2.008414 disk_bytes=356352
+sample protocol=fair workload=frames-1000 op=insert tool=readcon-db cache=cold-file i=4 seconds=0.033368924278412856 inner_n=61 timed_span_s=2.035504 disk_bytes=356352
+sample protocol=fair workload=frames-1000 op=insert tool=readcon-db cache=cold-file i=5 seconds=0.03391315150780059 inner_n=59 timed_span_s=2.000876 disk_bytes=356352
+sample protocol=fair workload=frames-1000 op=insert tool=readcon-db cache=cold-file i=6 seconds=0.03465192896604502 inner_n=58 timed_span_s=2.009812 disk_bytes=356352
+sample protocol=fair workload=frames-1000 op=insert tool=readcon-db cache=cold-file i=7 seconds=0.033692298083406055 inner_n=60 timed_span_s=2.021538 disk_bytes=356352
+sample protocol=fair workload=frames-1000 op=insert tool=readcon-db cache=cold-file i=8 seconds=0.03405272223743989 inner_n=59 timed_span_s=2.009111 disk_bytes=356352
+sample protocol=fair workload=frames-1000 op=insert tool=readcon-db cache=cold-file i=9 seconds=0.03342466553270545 inner_n=60 timed_span_s=2.005480 disk_bytes=356352
+sample protocol=fair workload=frames-1000 op=insert tool=readcon-db cache=cold-file i=10 seconds=0.03339312103332001 inner_n=60 timed_span_s=2.003587 disk_bytes=356352
+sample protocol=fair workload=frames-1000 op=insert tool=readcon-db cache=cold-file i=11 seconds=0.03341231076592521 inner_n=60 timed_span_s=2.004739 disk_bytes=356352
+warmup protocol=fair workload=frames-1000 op=insert tool=ase.db
+sample protocol=fair workload=frames-1000 op=insert tool=ase.db cache=cold-file i=0 seconds=0.30059048857323695 inner_n=7 timed_span_s=2.104133 disk_bytes=1146880
+sample protocol=fair workload=frames-1000 op=insert tool=ase.db cache=cold-file i=1 seconds=0.30424403385612614 inner_n=7 timed_span_s=2.129708 disk_bytes=1138688
+sample protocol=fair workload=frames-1000 op=insert tool=ase.db cache=cold-file i=2 seconds=0.29995108457036884 inner_n=7 timed_span_s=2.099658 disk_bytes=1155072
+sample protocol=fair workload=frames-1000 op=insert tool=ase.db cache=cold-file i=3 seconds=0.3000220939990998 inner_n=7 timed_span_s=2.100155 disk_bytes=1146880
+sample protocol=fair workload=frames-1000 op=insert tool=ase.db cache=cold-file i=4 seconds=0.301399331571052 inner_n=7 timed_span_s=2.109795 disk_bytes=1146880
+sample protocol=fair workload=frames-1000 op=insert tool=ase.db cache=cold-file i=5 seconds=0.30093824714276707 inner_n=7 timed_span_s=2.106568 disk_bytes=1146880
+sample protocol=fair workload=frames-1000 op=insert tool=ase.db cache=cold-file i=6 seconds=0.30161850128830076 inner_n=7 timed_span_s=2.111330 disk_bytes=1146880
+sample protocol=fair workload=frames-1000 op=insert tool=ase.db cache=cold-file i=7 seconds=0.29539675028666224 inner_n=7 timed_span_s=2.067777 disk_bytes=1138688
+sample protocol=fair workload=frames-1000 op=insert tool=ase.db cache=cold-file i=8 seconds=0.29467868771462236 inner_n=7 timed_span_s=2.062751 disk_bytes=1146880
+sample protocol=fair workload=frames-1000 op=insert tool=ase.db cache=cold-file i=9 seconds=0.2961767685711883 inner_n=7 timed_span_s=2.073237 disk_bytes=1146880
+sample protocol=fair workload=frames-1000 op=insert tool=ase.db cache=cold-file i=10 seconds=0.2943299082845832 inner_n=7 timed_span_s=2.060309 disk_bytes=1138688
+sample protocol=fair workload=frames-1000 op=insert tool=ase.db cache=cold-file i=11 seconds=0.29371442599845715 inner_n=7 timed_span_s=2.056001 disk_bytes=1146880
+warmup protocol=fair workload=frames-1000 op=insert tool=readcon-db
+sample protocol=fair workload=frames-1000 op=insert tool=readcon-db cache=cold-file i=0 seconds=0.03306894129527194 inner_n=61 timed_span_s=2.017205 disk_bytes=356352
+sample protocol=fair workload=frames-1000 op=insert tool=readcon-db cache=cold-file i=1 seconds=0.03330487458986711 inner_n=61 timed_span_s=2.031597 disk_bytes=356352
+sample protocol=fair workload=frames-1000 op=insert tool=readcon-db cache=cold-file i=2 seconds=0.03325437311501506 inner_n=61 timed_span_s=2.028517 disk_bytes=356352
+sample protocol=fair workload=frames-1000 op=insert tool=readcon-db cache=cold-file i=3 seconds=0.03331047636048857 inner_n=61 timed_span_s=2.031939 disk_bytes=356352
+sample protocol=fair workload=frames-1000 op=insert tool=readcon-db cache=cold-file i=4 seconds=0.033539327299877186 inner_n=60 timed_span_s=2.012360 disk_bytes=356352
+sample protocol=fair workload=frames-1000 op=insert tool=readcon-db cache=cold-file i=5 seconds=0.033354539949990186 inner_n=60 timed_span_s=2.001272 disk_bytes=356352
+sample protocol=fair workload=frames-1000 op=insert tool=readcon-db cache=cold-file i=6 seconds=0.03319668339409858 inner_n=61 timed_span_s=2.024998 disk_bytes=356352
+sample protocol=fair workload=frames-1000 op=insert tool=readcon-db cache=cold-file i=7 seconds=0.0324566354358995 inner_n=62 timed_span_s=2.012311 disk_bytes=356352
+sample protocol=fair workload=frames-1000 op=insert tool=readcon-db cache=cold-file i=8 seconds=0.03260504385510895 inner_n=62 timed_span_s=2.021513 disk_bytes=356352
+sample protocol=fair workload=frames-1000 op=insert tool=readcon-db cache=cold-file i=9 seconds=0.03370148974972835 inner_n=60 timed_span_s=2.022089 disk_bytes=356352
+sample protocol=fair workload=frames-1000 op=insert tool=readcon-db cache=cold-file i=10 seconds=0.03346414983388968 inner_n=60 timed_span_s=2.007849 disk_bytes=356352
+sample protocol=fair workload=frames-1000 op=insert tool=readcon-db cache=cold-file i=11 seconds=0.03298732211427347 inner_n=61 timed_span_s=2.012227 disk_bytes=356352
+warmup protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold i=0 seconds=0.0004398980082968544 inner_n=114 timed_span_s=0.050148 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold i=1 seconds=0.0004607504767065637 inner_n=109 timed_span_s=0.050222 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold i=2 seconds=0.0004341160947033445 inner_n=116 timed_span_s=0.050357 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold i=3 seconds=0.00044448146920041305 inner_n=113 timed_span_s=0.050226 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold i=4 seconds=0.0004472859734830438 inner_n=112 timed_span_s=0.050096 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold i=5 seconds=0.0004463105129471576 inner_n=113 timed_span_s=0.050433 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold i=6 seconds=0.0004471630357199631 inner_n=112 timed_span_s=0.050082 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold i=7 seconds=0.00043456620670471676 inner_n=116 timed_span_s=0.050410 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold i=8 seconds=0.0004427430885859386 inner_n=113 timed_span_s=0.050030 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold i=9 seconds=0.0004404201223989826 inner_n=114 timed_span_s=0.050208 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold i=10 seconds=0.00043845239092859075 inner_n=115 timed_span_s=0.050422 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold i=11 seconds=0.00044293584067949335 inner_n=113 timed_span_s=0.050052 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=cold
+sample protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=cold i=0 seconds=0.10778639400086831 inner_n=1 timed_span_s=0.107786 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=cold i=1 seconds=0.09934529100428335 inner_n=1 timed_span_s=0.099345 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=cold i=2 seconds=0.09820123900135513 inner_n=1 timed_span_s=0.098201 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=cold i=3 seconds=0.1027563059979002 inner_n=1 timed_span_s=0.102756 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=cold i=4 seconds=0.10575942799914628 inner_n=1 timed_span_s=0.105759 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=cold i=5 seconds=0.09926135599380359 inner_n=1 timed_span_s=0.099261 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=cold i=6 seconds=0.10492479400272714 inner_n=1 timed_span_s=0.104925 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=cold i=7 seconds=0.09913604699977441 inner_n=1 timed_span_s=0.099136 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=cold i=8 seconds=0.10403447700082324 inner_n=1 timed_span_s=0.104034 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=cold i=9 seconds=0.10200688099575927 inner_n=1 timed_span_s=0.102007 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=cold i=10 seconds=0.09925828899577027 inner_n=1 timed_span_s=0.099258 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=cold i=11 seconds=0.09746629599976586 inner_n=1 timed_span_s=0.097466 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold i=0 seconds=0.00044494113336014353 inner_n=113 timed_span_s=0.050278 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold i=1 seconds=0.0004634996852541075 inner_n=108 timed_span_s=0.050058 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold i=2 seconds=0.00044233726338573255 inner_n=114 timed_span_s=0.050426 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold i=3 seconds=0.000440022675639627 inner_n=114 timed_span_s=0.050163 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold i=4 seconds=0.0004485644553824386 inner_n=112 timed_span_s=0.050239 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold i=5 seconds=0.0004468686158491307 inner_n=112 timed_span_s=0.050049 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold i=6 seconds=0.000445050115100071 inner_n=113 timed_span_s=0.050291 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold i=7 seconds=0.00045097032420312027 inner_n=111 timed_span_s=0.050058 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold i=8 seconds=0.0004457823448738215 inner_n=113 timed_span_s=0.050373 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold i=9 seconds=0.0004441699915719054 inner_n=113 timed_span_s=0.050191 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold i=10 seconds=0.000445622291706453 inner_n=113 timed_span_s=0.050355 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=cold i=11 seconds=0.00044340132734381834 inner_n=113 timed_span_s=0.050104 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold i=0 seconds=3.581242946884212e-05 inner_n=1397 timed_span_s=0.050030 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold i=1 seconds=3.600397770466716e-05 inner_n=1389 timed_span_s=0.050010 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold i=2 seconds=3.6397571353303825e-05 inner_n=1374 timed_span_s=0.050010 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold i=3 seconds=3.68791916733213e-05 inner_n=1357 timed_span_s=0.050045 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold i=4 seconds=3.624585510081396e-05 inner_n=1380 timed_span_s=0.050019 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold i=5 seconds=3.6524093429774996e-05 inner_n=1369 timed_span_s=0.050001 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold i=6 seconds=3.668127419720465e-05 inner_n=1364 timed_span_s=0.050033 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold i=7 seconds=3.678206105499104e-05 inner_n=1360 timed_span_s=0.050024 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold i=8 seconds=3.5747035810821426e-05 inner_n=1399 timed_span_s=0.050010 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold i=9 seconds=3.6063739671872116e-05 inner_n=1387 timed_span_s=0.050020 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold i=10 seconds=3.6932025779050015e-05 inner_n=1354 timed_span_s=0.050006 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold i=11 seconds=3.6005513219828626e-05 inner_n=1389 timed_span_s=0.050012 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=frames-1000 op=selected tool=ase.db cache=cold
+sample protocol=fair workload=frames-1000 op=selected tool=ase.db cache=cold i=0 seconds=0.0015801786248630378 inner_n=32 timed_span_s=0.050566 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=ase.db cache=cold i=1 seconds=0.001301818948540574 inner_n=39 timed_span_s=0.050771 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=ase.db cache=cold i=2 seconds=0.001286124564686384 inner_n=39 timed_span_s=0.050159 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=ase.db cache=cold i=3 seconds=0.0012197166829648223 inner_n=41 timed_span_s=0.050008 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=ase.db cache=cold i=4 seconds=0.0013309270260307177 inner_n=38 timed_span_s=0.050575 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=ase.db cache=cold i=5 seconds=0.0017619712253367798 inner_n=31 timed_span_s=0.054621 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=ase.db cache=cold i=6 seconds=0.0012920579234233652 inner_n=39 timed_span_s=0.050390 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=ase.db cache=cold i=7 seconds=0.001495124441348975 inner_n=34 timed_span_s=0.050834 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=ase.db cache=cold i=8 seconds=0.0021875042606868942 inner_n=23 timed_span_s=0.050313 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=ase.db cache=cold i=9 seconds=0.0011125322222748462 inner_n=45 timed_span_s=0.050064 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=ase.db cache=cold i=10 seconds=0.0012844345123411561 inner_n=39 timed_span_s=0.050093 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=ase.db cache=cold i=11 seconds=0.0013984282235873656 inner_n=36 timed_span_s=0.050343 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold i=0 seconds=3.654357417648348e-05 inner_n=1369 timed_span_s=0.050028 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold i=1 seconds=3.6585836068947814e-05 inner_n=1367 timed_span_s=0.050013 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold i=2 seconds=3.642947778997886e-05 inner_n=1373 timed_span_s=0.050018 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold i=3 seconds=3.585515131879311e-05 inner_n=1395 timed_span_s=0.050018 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold i=4 seconds=3.5960294084201986e-05 inner_n=1391 timed_span_s=0.050021 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold i=5 seconds=3.607548592118956e-05 inner_n=1387 timed_span_s=0.050037 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold i=6 seconds=3.712740317867715e-05 inner_n=1347 timed_span_s=0.050011 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold i=7 seconds=3.678620136912179e-05 inner_n=1360 timed_span_s=0.050029 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold i=8 seconds=3.580091762786955e-05 inner_n=1397 timed_span_s=0.050014 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold i=9 seconds=3.6069047621966e-05 inner_n=1387 timed_span_s=0.050028 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold i=10 seconds=3.536491857716798e-05 inner_n=1414 timed_span_s=0.050006 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=cold i=11 seconds=3.509629274240548e-05 inner_n=1425 timed_span_s=0.050012 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold i=0 seconds=0.00016446285900186564 inner_n=305 timed_span_s=0.050161 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold i=1 seconds=0.00016439860960044974 inner_n=305 timed_span_s=0.050142 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold i=2 seconds=0.00016458351290949444 inner_n=304 timed_span_s=0.050033 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold i=3 seconds=0.00016721218341748075 inner_n=300 timed_span_s=0.050164 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold i=4 seconds=0.000168236053975349 inner_n=298 timed_span_s=0.050134 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold i=5 seconds=0.00016915828035888735 inner_n=296 timed_span_s=0.050071 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold i=6 seconds=0.00017136509604700234 inner_n=292 timed_span_s=0.050039 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold i=7 seconds=0.00016895797317202605 inner_n=296 timed_span_s=0.050012 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold i=8 seconds=0.00016706358634110074 inner_n=300 timed_span_s=0.050119 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold i=9 seconds=0.00017012682975310243 inner_n=294 timed_span_s=0.050017 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold i=10 seconds=0.00016912022270057728 inner_n=296 timed_span_s=0.050060 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold i=11 seconds=0.00016455946058014983 inner_n=304 timed_span_s=0.050026 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=frames-1000 op=range tool=ase.db cache=cold
+sample protocol=fair workload=frames-1000 op=range tool=ase.db cache=cold i=0 seconds=0.028681292496912647 inner_n=2 timed_span_s=0.057363 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=ase.db cache=cold i=1 seconds=0.03024758150058915 inner_n=2 timed_span_s=0.060495 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=ase.db cache=cold i=2 seconds=0.028435407002689317 inner_n=2 timed_span_s=0.056871 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=ase.db cache=cold i=3 seconds=0.029509572999813827 inner_n=2 timed_span_s=0.059019 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=ase.db cache=cold i=4 seconds=0.029826586003764533 inner_n=2 timed_span_s=0.059653 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=ase.db cache=cold i=5 seconds=0.02701576349863899 inner_n=2 timed_span_s=0.054032 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=ase.db cache=cold i=6 seconds=0.027529810497071594 inner_n=2 timed_span_s=0.055060 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=ase.db cache=cold i=7 seconds=0.030353956502949586 inner_n=2 timed_span_s=0.060708 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=ase.db cache=cold i=8 seconds=0.028261813498829724 inner_n=2 timed_span_s=0.056524 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=ase.db cache=cold i=9 seconds=0.027135671996802557 inner_n=2 timed_span_s=0.054271 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=ase.db cache=cold i=10 seconds=0.027588449502218282 inner_n=2 timed_span_s=0.055177 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=ase.db cache=cold i=11 seconds=0.029672012497030664 inner_n=2 timed_span_s=0.059344 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold i=0 seconds=0.00017389255534302114 inner_n=288 timed_span_s=0.050081 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold i=1 seconds=0.00018471965672705164 inner_n=271 timed_span_s=0.050059 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold i=2 seconds=0.00016802783579653093 inner_n=298 timed_span_s=0.050072 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold i=3 seconds=0.00016612003323296395 inner_n=301 timed_span_s=0.050002 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold i=4 seconds=0.00016379012065038717 inner_n=306 timed_span_s=0.050120 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold i=5 seconds=0.0001649279541341361 inner_n=304 timed_span_s=0.050138 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold i=6 seconds=0.00017635742257022082 inner_n=284 timed_span_s=0.050086 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold i=7 seconds=0.00016846147471014255 inner_n=297 timed_span_s=0.050033 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold i=8 seconds=0.00016636484041709478 inner_n=301 timed_span_s=0.050076 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold i=9 seconds=0.00016801057048626368 inner_n=298 timed_span_s=0.050067 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold i=10 seconds=0.00016551234981463146 inner_n=303 timed_span_s=0.050150 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=cold i=11 seconds=0.00017008975860056925 inner_n=294 timed_span_s=0.050006 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold i=0 seconds=3.410728792156478e-05 inner_n=1466 timed_span_s=0.050001 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold i=1 seconds=3.66790622634157e-05 inner_n=1364 timed_span_s=0.050030 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold i=2 seconds=3.4008458273776224e-05 inner_n=1471 timed_span_s=0.050026 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold i=3 seconds=3.281002304699453e-05 inner_n=1524 timed_span_s=0.050002 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold i=4 seconds=3.335109140122465e-05 inner_n=1500 timed_span_s=0.050027 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold i=5 seconds=3.2412934008601276e-05 inner_n=1543 timed_span_s=0.050013 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold i=6 seconds=3.311212317147314e-05 inner_n=1511 timed_span_s=0.050032 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold i=7 seconds=3.3066421000856936e-05 inner_n=1513 timed_span_s=0.050029 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold i=8 seconds=3.33223789983859e-05 inner_n=1501 timed_span_s=0.050017 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold i=9 seconds=3.2713239433457365e-05 inner_n=1529 timed_span_s=0.050019 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold i=10 seconds=3.357205765349978e-05 inner_n=1490 timed_span_s=0.050022 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold i=11 seconds=3.354653924772151e-05 inner_n=1491 timed_span_s=0.050018 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=cold
+sample protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=cold i=0 seconds=0.005522370200196747 inner_n=10 timed_span_s=0.055224 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=cold i=1 seconds=0.005426642399834236 inner_n=10 timed_span_s=0.054266 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=cold i=2 seconds=0.005139863699878333 inner_n=10 timed_span_s=0.051399 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=cold i=3 seconds=0.006172949111108513 inner_n=9 timed_span_s=0.055557 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=cold i=4 seconds=0.0055849298870372065 inner_n=9 timed_span_s=0.050264 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=cold i=5 seconds=0.004654395272320306 inner_n=11 timed_span_s=0.051198 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=cold i=6 seconds=0.004550839545448649 inner_n=11 timed_span_s=0.050059 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=cold i=7 seconds=0.004811551728132393 inner_n=11 timed_span_s=0.052927 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=cold i=8 seconds=0.006264292124797066 inner_n=8 timed_span_s=0.050114 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=cold i=9 seconds=0.006840237626420276 inner_n=8 timed_span_s=0.054722 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=cold i=10 seconds=0.006732843251484155 inner_n=8 timed_span_s=0.053863 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=cold i=11 seconds=0.005600916332494105 inner_n=9 timed_span_s=0.050408 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold i=0 seconds=3.474958237264463e-05 inner_n=1439 timed_span_s=0.050005 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold i=1 seconds=3.3532775529145626e-05 inner_n=1492 timed_span_s=0.050031 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold i=2 seconds=3.379471347363653e-05 inner_n=1480 timed_span_s=0.050016 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold i=3 seconds=3.260362460883577e-05 inner_n=1534 timed_span_s=0.050014 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold i=4 seconds=3.2864626816445756e-05 inner_n=1522 timed_span_s=0.050020 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold i=5 seconds=3.284454630607267e-05 inner_n=1523 timed_span_s=0.050022 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold i=6 seconds=3.6501798466065505e-05 inner_n=1370 timed_span_s=0.050007 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold i=7 seconds=3.2999321304350456e-05 inner_n=1516 timed_span_s=0.050027 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold i=8 seconds=3.196242371032508e-05 inner_n=1565 timed_span_s=0.050021 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold i=9 seconds=3.2060671228697544e-05 inner_n=1560 timed_span_s=0.050015 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold i=10 seconds=3.239057320612694e-05 inner_n=1544 timed_span_s=0.050011 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=cold i=11 seconds=3.3168589575433875e-05 inner_n=1508 timed_span_s=0.050018 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm i=0 seconds=0.00041967907521514765 inner_n=120 timed_span_s=0.050361
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm i=1 seconds=0.0004244343304520244 inner_n=118 timed_span_s=0.050083
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm i=2 seconds=0.00043554353051940384 inner_n=115 timed_span_s=0.050088
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm i=3 seconds=0.0004191675498683859 inner_n=120 timed_span_s=0.050300
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm i=4 seconds=0.00041106390181383057 inner_n=122 timed_span_s=0.050150
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm i=5 seconds=0.0004938080195393459 inner_n=102 timed_span_s=0.050368
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm i=6 seconds=0.0004304513594799309 inner_n=117 timed_span_s=0.050363
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm i=7 seconds=0.0006766121215470186 inner_n=74 timed_span_s=0.050069
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm i=8 seconds=0.0007625924247832065 inner_n=66 timed_span_s=0.050331
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm i=9 seconds=0.00045974837575233843 inner_n=109 timed_span_s=0.050113
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm i=10 seconds=0.0004236167985843221 inner_n=119 timed_span_s=0.050410
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm i=11 seconds=0.00042439366111697596 inner_n=118 timed_span_s=0.050078
+warmup protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=warm
+sample protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=warm i=0 seconds=0.09059465199970873 inner_n=1 timed_span_s=0.090595
+sample protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=warm i=1 seconds=0.08766572800232098 inner_n=1 timed_span_s=0.087666
+sample protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=warm i=2 seconds=0.08774306499981321 inner_n=1 timed_span_s=0.087743
+sample protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=warm i=3 seconds=0.08887956100079464 inner_n=1 timed_span_s=0.088880
+sample protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=warm i=4 seconds=0.08903382299467921 inner_n=1 timed_span_s=0.089034
+sample protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=warm i=5 seconds=0.09156846300174948 inner_n=1 timed_span_s=0.091568
+sample protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=warm i=6 seconds=0.08953595600178232 inner_n=1 timed_span_s=0.089536
+sample protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=warm i=7 seconds=0.09108144300262211 inner_n=1 timed_span_s=0.091081
+sample protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=warm i=8 seconds=0.09408974699908867 inner_n=1 timed_span_s=0.094090
+sample protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=warm i=9 seconds=0.0925366910014418 inner_n=1 timed_span_s=0.092537
+sample protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=warm i=10 seconds=0.09136917800060473 inner_n=1 timed_span_s=0.091369
+sample protocol=fair workload=frames-1000 op=full_read tool=ase.db cache=warm i=11 seconds=0.09209892200306058 inner_n=1 timed_span_s=0.092099
+warmup protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm i=0 seconds=0.00040376616978450797 inner_n=124 timed_span_s=0.050067
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm i=1 seconds=0.00040004332026001067 inner_n=125 timed_span_s=0.050005
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm i=2 seconds=0.00040874466663453637 inner_n=123 timed_span_s=0.050276
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm i=3 seconds=0.00040055643231607974 inner_n=125 timed_span_s=0.050070
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm i=4 seconds=0.0004017063443316147 inner_n=125 timed_span_s=0.050213
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm i=5 seconds=0.0004029906957875937 inner_n=125 timed_span_s=0.050374
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm i=6 seconds=0.0004008241038536653 inner_n=125 timed_span_s=0.050103
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm i=7 seconds=0.0004027601682464592 inner_n=125 timed_span_s=0.050345
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm i=8 seconds=0.0004027666005422361 inner_n=125 timed_span_s=0.050346
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm i=9 seconds=0.00041337857006766164 inner_n=121 timed_span_s=0.050019
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm i=10 seconds=0.00039955018280399225 inner_n=126 timed_span_s=0.050343
+sample protocol=fair workload=frames-1000 op=full_read tool=readcon-db cache=warm i=11 seconds=0.0003999388729483591 inner_n=126 timed_span_s=0.050392
+warmup protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm i=0 seconds=9.553207477310372e-06 inner_n=5234 timed_span_s=0.050001
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm i=1 seconds=9.278027037690361e-06 inner_n=5390 timed_span_s=0.050009
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm i=2 seconds=9.413122159523744e-06 inner_n=5312 timed_span_s=0.050003
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm i=3 seconds=9.48257277935782e-06 inner_n=5290 timed_span_s=0.050163
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm i=4 seconds=9.320482590987858e-06 inner_n=5365 timed_span_s=0.050004
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm i=5 seconds=9.27659964059559e-06 inner_n=5390 timed_span_s=0.050001
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm i=6 seconds=9.266946451422455e-06 inner_n=5396 timed_span_s=0.050004
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm i=7 seconds=9.559204004880498e-06 inner_n=5231 timed_span_s=0.050004
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm i=8 seconds=9.363501881585414e-06 inner_n=5340 timed_span_s=0.050001
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm i=9 seconds=9.366972840225091e-06 inner_n=5338 timed_span_s=0.050001
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm i=10 seconds=9.347662691673403e-06 inner_n=5349 timed_span_s=0.050001
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm i=11 seconds=9.306013527987641e-06 inner_n=5373 timed_span_s=0.050001
+warmup protocol=fair workload=frames-1000 op=selected tool=ase.db cache=warm
+sample protocol=fair workload=frames-1000 op=selected tool=ase.db cache=warm i=0 seconds=0.00022849563654083548 inner_n=220 timed_span_s=0.050269
+sample protocol=fair workload=frames-1000 op=selected tool=ase.db cache=warm i=1 seconds=0.00023180232367142 inner_n=216 timed_span_s=0.050069
+sample protocol=fair workload=frames-1000 op=selected tool=ase.db cache=warm i=2 seconds=0.0002277673593198415 inner_n=220 timed_span_s=0.050109
+sample protocol=fair workload=frames-1000 op=selected tool=ase.db cache=warm i=3 seconds=0.00022572677010651427 inner_n=222 timed_span_s=0.050111
+sample protocol=fair workload=frames-1000 op=selected tool=ase.db cache=warm i=4 seconds=0.0002410953945680096 inner_n=208 timed_span_s=0.050148
+sample protocol=fair workload=frames-1000 op=selected tool=ase.db cache=warm i=5 seconds=0.00023258640004462713 inner_n=215 timed_span_s=0.050006
+sample protocol=fair workload=frames-1000 op=selected tool=ase.db cache=warm i=6 seconds=0.00023002248180500412 inner_n=218 timed_span_s=0.050145
+sample protocol=fair workload=frames-1000 op=selected tool=ase.db cache=warm i=7 seconds=0.00022856849758698687 inner_n=219 timed_span_s=0.050057
+sample protocol=fair workload=frames-1000 op=selected tool=ase.db cache=warm i=8 seconds=0.0002236305359214644 inner_n=224 timed_span_s=0.050093
+sample protocol=fair workload=frames-1000 op=selected tool=ase.db cache=warm i=9 seconds=0.00022541959920131417 inner_n=222 timed_span_s=0.050043
+sample protocol=fair workload=frames-1000 op=selected tool=ase.db cache=warm i=10 seconds=0.00022654219922173464 inner_n=221 timed_span_s=0.050066
+sample protocol=fair workload=frames-1000 op=selected tool=ase.db cache=warm i=11 seconds=0.00022663361102798785 inner_n=221 timed_span_s=0.050086
+warmup protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm i=0 seconds=9.37339748465827e-06 inner_n=5335 timed_span_s=0.050007
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm i=1 seconds=9.318460462741766e-06 inner_n=5366 timed_span_s=0.050003
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm i=2 seconds=9.491159054856785e-06 inner_n=5269 timed_span_s=0.050009
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm i=3 seconds=9.361875669095119e-06 inner_n=5341 timed_span_s=0.050002
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm i=4 seconds=9.531352461712117e-06 inner_n=5246 timed_span_s=0.050001
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm i=5 seconds=1.115184735954001e-05 inner_n=4484 timed_span_s=0.050005
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm i=6 seconds=1.1360975235561713e-05 inner_n=4402 timed_span_s=0.050011
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm i=7 seconds=9.682715966103913e-06 inner_n=5164 timed_span_s=0.050002
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm i=8 seconds=9.424396922216931e-06 inner_n=5306 timed_span_s=0.050006
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm i=9 seconds=9.434242078810404e-06 inner_n=5300 timed_span_s=0.050001
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm i=10 seconds=9.386893208010581e-06 inner_n=5327 timed_span_s=0.050004
+sample protocol=fair workload=frames-1000 op=selected tool=readcon-db cache=warm i=11 seconds=9.275219987378566e-06 inner_n=5391 timed_span_s=0.050003
+warmup protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm i=0 seconds=0.00011128375117550605 inner_n=450 timed_span_s=0.050078
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm i=1 seconds=0.00011065179187909028 inner_n=452 timed_span_s=0.050015
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm i=2 seconds=0.00011087344475237311 inner_n=452 timed_span_s=0.050115
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm i=3 seconds=0.00011184688181791509 inner_n=448 timed_span_s=0.050107
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm i=4 seconds=0.00011177355379134366 inner_n=448 timed_span_s=0.050075
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm i=5 seconds=0.00011116527572287142 inner_n=450 timed_span_s=0.050024
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm i=6 seconds=0.00011115410230963284 inner_n=450 timed_span_s=0.050019
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm i=7 seconds=0.00011105496679835884 inner_n=451 timed_span_s=0.050086
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm i=8 seconds=0.00011371146821065023 inner_n=440 timed_span_s=0.050033
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm i=9 seconds=0.00011442568860692345 inner_n=437 timed_span_s=0.050004
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm i=10 seconds=0.00011046214116118935 inner_n=453 timed_span_s=0.050039
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm i=11 seconds=0.0001121530536648409 inner_n=447 timed_span_s=0.050132
+warmup protocol=fair workload=frames-1000 op=range tool=ase.db cache=warm
+sample protocol=fair workload=frames-1000 op=range tool=ase.db cache=warm i=0 seconds=0.021367606333418127 inner_n=3 timed_span_s=0.064103
+sample protocol=fair workload=frames-1000 op=range tool=ase.db cache=warm i=1 seconds=0.02140322633689114 inner_n=3 timed_span_s=0.064210
+sample protocol=fair workload=frames-1000 op=range tool=ase.db cache=warm i=2 seconds=0.02138863366417354 inner_n=3 timed_span_s=0.064166
+sample protocol=fair workload=frames-1000 op=range tool=ase.db cache=warm i=3 seconds=0.021430004664580338 inner_n=3 timed_span_s=0.064290
+sample protocol=fair workload=frames-1000 op=range tool=ase.db cache=warm i=4 seconds=0.02166287266542592 inner_n=3 timed_span_s=0.064989
+sample protocol=fair workload=frames-1000 op=range tool=ase.db cache=warm i=5 seconds=0.021641606668708846 inner_n=3 timed_span_s=0.064925
+sample protocol=fair workload=frames-1000 op=range tool=ase.db cache=warm i=6 seconds=0.021483719002086826 inner_n=3 timed_span_s=0.064451
+sample protocol=fair workload=frames-1000 op=range tool=ase.db cache=warm i=7 seconds=0.0215426466675126 inner_n=3 timed_span_s=0.064628
+sample protocol=fair workload=frames-1000 op=range tool=ase.db cache=warm i=8 seconds=0.021539104665862396 inner_n=3 timed_span_s=0.064617
+sample protocol=fair workload=frames-1000 op=range tool=ase.db cache=warm i=9 seconds=0.021736807003132224 inner_n=3 timed_span_s=0.065210
+sample protocol=fair workload=frames-1000 op=range tool=ase.db cache=warm i=10 seconds=0.02210432900028536 inner_n=3 timed_span_s=0.066313
+sample protocol=fair workload=frames-1000 op=range tool=ase.db cache=warm i=11 seconds=0.021535940667187486 inner_n=3 timed_span_s=0.064608
+warmup protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm i=0 seconds=0.0001136096009897235 inner_n=441 timed_span_s=0.050102
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm i=1 seconds=0.00011184330146209374 inner_n=448 timed_span_s=0.050106
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm i=2 seconds=0.0001120597404688003 inner_n=447 timed_span_s=0.050091
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm i=3 seconds=0.00011219738568834472 inner_n=446 timed_span_s=0.050040
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm i=4 seconds=0.00012295355756680712 inner_n=407 timed_span_s=0.050042
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm i=5 seconds=0.00011725821067465674 inner_n=427 timed_span_s=0.050069
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm i=6 seconds=0.00011329667647848564 inner_n=442 timed_span_s=0.050077
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm i=7 seconds=0.00011516434241530496 inner_n=435 timed_span_s=0.050096
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm i=8 seconds=0.00012141577189167153 inner_n=412 timed_span_s=0.050023
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm i=9 seconds=0.00011205706934593576 inner_n=447 timed_span_s=0.050090
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm i=10 seconds=0.00011322738011001516 inner_n=442 timed_span_s=0.050047
+sample protocol=fair workload=frames-1000 op=range tool=readcon-db cache=warm i=11 seconds=0.000125239027383941 inner_n=400 timed_span_s=0.050096
+warmup protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm i=0 seconds=1.2256699772157897e-05 inner_n=4080 timed_span_s=0.050007
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm i=1 seconds=1.2181481022056506e-05 inner_n=4105 timed_span_s=0.050005
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm i=2 seconds=1.2258527004298692e-05 inner_n=4079 timed_span_s=0.050003
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm i=3 seconds=1.2635408997725241e-05 inner_n=3958 timed_span_s=0.050011
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm i=4 seconds=1.2684625325224682e-05 inner_n=3942 timed_span_s=0.050003
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm i=5 seconds=1.2270388005235649e-05 inner_n=4075 timed_span_s=0.050002
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm i=6 seconds=1.2406177708713457e-05 inner_n=4031 timed_span_s=0.050009
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm i=7 seconds=1.2200201787675382e-05 inner_n=4099 timed_span_s=0.050009
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm i=8 seconds=1.2503277887713661e-05 inner_n=3999 timed_span_s=0.050001
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm i=9 seconds=1.2311146923366995e-05 inner_n=4062 timed_span_s=0.050008
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm i=10 seconds=1.2279006875301244e-05 inner_n=4072 timed_span_s=0.050000
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm i=11 seconds=1.2363749336795501e-05 inner_n=4045 timed_span_s=0.050011
+warmup protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=warm
+sample protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=warm i=0 seconds=0.002779659110173169 inner_n=18 timed_span_s=0.050034
+sample protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=warm i=1 seconds=0.002798427110974444 inner_n=18 timed_span_s=0.050372
+sample protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=warm i=2 seconds=0.0028833196099892827 inner_n=18 timed_span_s=0.051900
+sample protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=warm i=3 seconds=0.0028305172777941656 inner_n=18 timed_span_s=0.050949
+sample protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=warm i=4 seconds=0.0027879862775282366 inner_n=18 timed_span_s=0.050184
+sample protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=warm i=5 seconds=0.002785280555447874 inner_n=18 timed_span_s=0.050135
+sample protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=warm i=6 seconds=0.0028784988329183156 inner_n=18 timed_span_s=0.051813
+sample protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=warm i=7 seconds=0.002802135277710881 inner_n=18 timed_span_s=0.050438
+sample protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=warm i=8 seconds=0.0027894236114257686 inner_n=18 timed_span_s=0.050210
+sample protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=warm i=9 seconds=0.002789857222928226 inner_n=18 timed_span_s=0.050217
+sample protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=warm i=10 seconds=0.0027802529435171485 inner_n=18 timed_span_s=0.050045
+sample protocol=fair workload=frames-1000 op=metadata tool=ase.db cache=warm i=11 seconds=0.0028114447777625173 inner_n=18 timed_span_s=0.050606
+warmup protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm i=0 seconds=1.2251107061565508e-05 inner_n=4082 timed_span_s=0.050009
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm i=1 seconds=1.2350987202772988e-05 inner_n=4049 timed_span_s=0.050009
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm i=2 seconds=1.2345529035653024e-05 inner_n=4051 timed_span_s=0.050012
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm i=3 seconds=1.2267409203400637e-05 inner_n=4076 timed_span_s=0.050002
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm i=4 seconds=1.2341822023970178e-05 inner_n=4052 timed_span_s=0.050009
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm i=5 seconds=1.2534340042801794e-05 inner_n=3990 timed_span_s=0.050012
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm i=6 seconds=1.2193350947655168e-05 inner_n=4101 timed_span_s=0.050005
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm i=7 seconds=1.2244728523722497e-05 inner_n=4084 timed_span_s=0.050007
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm i=8 seconds=1.2273647229347326e-05 inner_n=4074 timed_span_s=0.050003
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm i=9 seconds=1.2291423231540724e-05 inner_n=4068 timed_span_s=0.050002
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm i=10 seconds=1.2248975715765023e-05 inner_n=4082 timed_span_s=0.050000
+sample protocol=fair workload=frames-1000 op=metadata tool=readcon-db cache=warm i=11 seconds=1.2288837501499161e-05 inner_n=4069 timed_span_s=0.050003
+workload frames-10000 frames=10000 atoms=8 build_start
+workload frames-10000 bytes=7674467 build_done
+warmup protocol=fair workload=frames-10000 op=insert tool=readcon-db
+sample protocol=fair workload=frames-10000 op=insert tool=readcon-db cache=cold-file i=0 seconds=0.32504405328654684 inner_n=7 timed_span_s=2.275308 disk_bytes=3362816
+sample protocol=fair workload=frames-10000 op=insert tool=readcon-db cache=cold-file i=1 seconds=0.32305575800169856 inner_n=7 timed_span_s=2.261390 disk_bytes=3362816
+sample protocol=fair workload=frames-10000 op=insert tool=readcon-db cache=cold-file i=2 seconds=0.32405727371432086 inner_n=7 timed_span_s=2.268401 disk_bytes=3362816
+sample protocol=fair workload=frames-10000 op=insert tool=readcon-db cache=cold-file i=3 seconds=0.32203506485633887 inner_n=7 timed_span_s=2.254245 disk_bytes=3362816
+sample protocol=fair workload=frames-10000 op=insert tool=readcon-db cache=cold-file i=4 seconds=0.3309927375719001 inner_n=7 timed_span_s=2.316949 disk_bytes=3362816
+sample protocol=fair workload=frames-10000 op=insert tool=readcon-db cache=cold-file i=5 seconds=0.33453403183375485 inner_n=6 timed_span_s=2.007204 disk_bytes=3362816
+sample protocol=fair workload=frames-10000 op=insert tool=readcon-db cache=cold-file i=6 seconds=0.3337155740009621 inner_n=6 timed_span_s=2.002293 disk_bytes=3362816
+sample protocol=fair workload=frames-10000 op=insert tool=readcon-db cache=cold-file i=7 seconds=0.3250323614296836 inner_n=7 timed_span_s=2.275227 disk_bytes=3362816
+sample protocol=fair workload=frames-10000 op=insert tool=readcon-db cache=cold-file i=8 seconds=0.325009581716066 inner_n=7 timed_span_s=2.275067 disk_bytes=3362816
+sample protocol=fair workload=frames-10000 op=insert tool=readcon-db cache=cold-file i=9 seconds=0.3282324729994538 inner_n=7 timed_span_s=2.297627 disk_bytes=3362816
+sample protocol=fair workload=frames-10000 op=insert tool=readcon-db cache=cold-file i=10 seconds=0.32310477242780117 inner_n=7 timed_span_s=2.261733 disk_bytes=3362816
+sample protocol=fair workload=frames-10000 op=insert tool=readcon-db cache=cold-file i=11 seconds=0.3222357414269936 inner_n=7 timed_span_s=2.255650 disk_bytes=3362816
+warmup protocol=fair workload=frames-10000 op=insert tool=ase.db
+sample protocol=fair workload=frames-10000 op=insert tool=ase.db cache=cold-file i=0 seconds=3.2157742399940616 inner_n=1 timed_span_s=3.215774 disk_bytes=10809344
+sample protocol=fair workload=frames-10000 op=insert tool=ase.db cache=cold-file i=1 seconds=3.0381592999983695 inner_n=1 timed_span_s=3.038159 disk_bytes=10817536
+sample protocol=fair workload=frames-10000 op=insert tool=ase.db cache=cold-file i=2 seconds=3.1208437430032063 inner_n=1 timed_span_s=3.120844 disk_bytes=10825728
+sample protocol=fair workload=frames-10000 op=insert tool=ase.db cache=cold-file i=3 seconds=3.0388175640036934 inner_n=1 timed_span_s=3.038818 disk_bytes=10817536
+sample protocol=fair workload=frames-10000 op=insert tool=ase.db cache=cold-file i=4 seconds=3.0974856579996413 inner_n=1 timed_span_s=3.097486 disk_bytes=10817536
+sample protocol=fair workload=frames-10000 op=insert tool=ase.db cache=cold-file i=5 seconds=3.0235151469969423 inner_n=1 timed_span_s=3.023515 disk_bytes=10801152
+sample protocol=fair workload=frames-10000 op=insert tool=ase.db cache=cold-file i=6 seconds=3.013513520003471 inner_n=1 timed_span_s=3.013514 disk_bytes=10809344
+sample protocol=fair workload=frames-10000 op=insert tool=ase.db cache=cold-file i=7 seconds=3.3007519120001234 inner_n=1 timed_span_s=3.300752 disk_bytes=10825728
+sample protocol=fair workload=frames-10000 op=insert tool=ase.db cache=cold-file i=8 seconds=3.1092979149980238 inner_n=1 timed_span_s=3.109298 disk_bytes=10809344
+sample protocol=fair workload=frames-10000 op=insert tool=ase.db cache=cold-file i=9 seconds=3.167164808997768 inner_n=1 timed_span_s=3.167165 disk_bytes=10801152
+sample protocol=fair workload=frames-10000 op=insert tool=ase.db cache=cold-file i=10 seconds=3.1471336129980045 inner_n=1 timed_span_s=3.147134 disk_bytes=10809344
+sample protocol=fair workload=frames-10000 op=insert tool=ase.db cache=cold-file i=11 seconds=3.1337115360001917 inner_n=1 timed_span_s=3.133712 disk_bytes=10825728
+warmup protocol=fair workload=frames-10000 op=insert tool=readcon-db
+sample protocol=fair workload=frames-10000 op=insert tool=readcon-db cache=cold-file i=0 seconds=0.3232981131430798 inner_n=7 timed_span_s=2.263087 disk_bytes=3362816
+sample protocol=fair workload=frames-10000 op=insert tool=readcon-db cache=cold-file i=1 seconds=0.32142167685690637 inner_n=7 timed_span_s=2.249952 disk_bytes=3362816
+sample protocol=fair workload=frames-10000 op=insert tool=readcon-db cache=cold-file i=2 seconds=0.32418001914213945 inner_n=7 timed_span_s=2.269260 disk_bytes=3362816
+sample protocol=fair workload=frames-10000 op=insert tool=readcon-db cache=cold-file i=3 seconds=0.3259307107166803 inner_n=7 timed_span_s=2.281515 disk_bytes=3362816
+sample protocol=fair workload=frames-10000 op=insert tool=readcon-db cache=cold-file i=4 seconds=0.3240129971423552 inner_n=7 timed_span_s=2.268091 disk_bytes=3362816
+sample protocol=fair workload=frames-10000 op=insert tool=readcon-db cache=cold-file i=5 seconds=0.32137454342799693 inner_n=7 timed_span_s=2.249622 disk_bytes=3362816
+sample protocol=fair workload=frames-10000 op=insert tool=readcon-db cache=cold-file i=6 seconds=0.3259877998571028 inner_n=7 timed_span_s=2.281915 disk_bytes=3362816
+sample protocol=fair workload=frames-10000 op=insert tool=readcon-db cache=cold-file i=7 seconds=0.323692694287664 inner_n=7 timed_span_s=2.265849 disk_bytes=3362816
+sample protocol=fair workload=frames-10000 op=insert tool=readcon-db cache=cold-file i=8 seconds=0.32257800242743023 inner_n=7 timed_span_s=2.258046 disk_bytes=3362816
+sample protocol=fair workload=frames-10000 op=insert tool=readcon-db cache=cold-file i=9 seconds=0.31867433942742146 inner_n=7 timed_span_s=2.230720 disk_bytes=3362816
+sample protocol=fair workload=frames-10000 op=insert tool=readcon-db cache=cold-file i=10 seconds=0.3211128515717324 inner_n=7 timed_span_s=2.247790 disk_bytes=3362816
+sample protocol=fair workload=frames-10000 op=insert tool=readcon-db cache=cold-file i=11 seconds=0.3251693035719135 inner_n=7 timed_span_s=2.276185 disk_bytes=3362816
+warmup protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold i=0 seconds=0.007394392143136689 inner_n=7 timed_span_s=0.051761 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold i=1 seconds=0.006128619665913802 inner_n=9 timed_span_s=0.055158 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold i=2 seconds=0.006134595333908995 inner_n=9 timed_span_s=0.055211 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold i=3 seconds=0.006068756999512617 inner_n=9 timed_span_s=0.054619 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold i=4 seconds=0.006524984500174469 inner_n=8 timed_span_s=0.052200 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold i=5 seconds=0.006077404889058218 inner_n=9 timed_span_s=0.054697 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold i=6 seconds=0.006115180555853941 inner_n=9 timed_span_s=0.055037 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold i=7 seconds=0.006320200112693581 inner_n=9 timed_span_s=0.056882 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold i=8 seconds=0.006902090626681456 inner_n=8 timed_span_s=0.055217 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold i=9 seconds=0.006183656445096454 inner_n=9 timed_span_s=0.055653 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold i=10 seconds=0.006122368336137798 inner_n=9 timed_span_s=0.055101 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold i=11 seconds=0.006082248888560571 inner_n=9 timed_span_s=0.054740 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=cold
+sample protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=cold i=0 seconds=0.983737161004683 inner_n=1 timed_span_s=0.983737 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=cold i=1 seconds=0.9579345750025823 inner_n=1 timed_span_s=0.957935 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=cold i=2 seconds=1.0034276749938726 inner_n=1 timed_span_s=1.003428 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=cold i=3 seconds=1.0294210110005224 inner_n=1 timed_span_s=1.029421 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=cold i=4 seconds=1.0219259629957378 inner_n=1 timed_span_s=1.021926 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=cold i=5 seconds=0.9809225790013443 inner_n=1 timed_span_s=0.980923 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=cold i=6 seconds=1.0290291750061442 inner_n=1 timed_span_s=1.029029 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=cold i=7 seconds=1.0215322860021843 inner_n=1 timed_span_s=1.021532 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=cold i=8 seconds=1.0407141799951205 inner_n=1 timed_span_s=1.040714 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=cold i=9 seconds=1.024075162000372 inner_n=1 timed_span_s=1.024075 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=cold i=10 seconds=1.0754291789999115 inner_n=1 timed_span_s=1.075429 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=cold i=11 seconds=1.024755249003647 inner_n=1 timed_span_s=1.024755 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold i=0 seconds=0.0071851101425376585 inner_n=7 timed_span_s=0.050296 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold i=1 seconds=0.006180130332520801 inner_n=9 timed_span_s=0.055621 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold i=2 seconds=0.006188235556085904 inner_n=9 timed_span_s=0.055694 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold i=3 seconds=0.006124488331907842 inner_n=9 timed_span_s=0.055120 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold i=4 seconds=0.0063432539982386515 inner_n=8 timed_span_s=0.050746 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold i=5 seconds=0.0061650780003724825 inner_n=9 timed_span_s=0.055486 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold i=6 seconds=0.006176244111783389 inner_n=9 timed_span_s=0.055586 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold i=7 seconds=0.006170679001014732 inner_n=9 timed_span_s=0.055536 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold i=8 seconds=0.006152841777495471 inner_n=9 timed_span_s=0.055376 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold i=9 seconds=0.006406738999430672 inner_n=8 timed_span_s=0.051254 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold i=10 seconds=0.006168854667016098 inner_n=9 timed_span_s=0.055520 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=cold i=11 seconds=0.006147708113227661 inner_n=9 timed_span_s=0.055329 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold i=0 seconds=4.5008248382913995e-05 inner_n=1111 timed_span_s=0.050004 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold i=1 seconds=4.59086844885034e-05 inner_n=1090 timed_span_s=0.050040 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold i=2 seconds=4.565274187629868e-05 inner_n=1096 timed_span_s=0.050035 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold i=3 seconds=4.487698656927602e-05 inner_n=1115 timed_span_s=0.050038 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold i=4 seconds=4.547696898622565e-05 inner_n=1100 timed_span_s=0.050025 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold i=5 seconds=4.4896449743282246e-05 inner_n=1114 timed_span_s=0.050015 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold i=6 seconds=4.579186083285408e-05 inner_n=1092 timed_span_s=0.050005 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold i=7 seconds=4.559647414309916e-05 inner_n=1097 timed_span_s=0.050019 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold i=8 seconds=4.607968316805801e-05 inner_n=1086 timed_span_s=0.050043 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold i=9 seconds=4.556732321978048e-05 inner_n=1098 timed_span_s=0.050033 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold i=10 seconds=4.447643284220248e-05 inner_n=1125 timed_span_s=0.050036 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold i=11 seconds=4.628856601797701e-05 inner_n=1081 timed_span_s=0.050038 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=frames-10000 op=selected tool=ase.db cache=cold
+sample protocol=fair workload=frames-10000 op=selected tool=ase.db cache=cold i=0 seconds=0.0051317279998329465 inner_n=10 timed_span_s=0.051317 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=ase.db cache=cold i=1 seconds=0.00744059600089843 inner_n=7 timed_span_s=0.052084 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=ase.db cache=cold i=2 seconds=0.005887370445836698 inner_n=9 timed_span_s=0.052986 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=ase.db cache=cold i=3 seconds=0.0038557411552084466 inner_n=13 timed_span_s=0.050125 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=ase.db cache=cold i=4 seconds=0.0037035470003112486 inner_n=14 timed_span_s=0.051850 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=ase.db cache=cold i=5 seconds=0.006527018626002246 inner_n=8 timed_span_s=0.052216 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=ase.db cache=cold i=6 seconds=0.0037999235703734613 inner_n=14 timed_span_s=0.053199 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=ase.db cache=cold i=7 seconds=0.00438624324912477 inner_n=12 timed_span_s=0.052635 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=ase.db cache=cold i=8 seconds=0.00704080937703111 inner_n=8 timed_span_s=0.056326 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=ase.db cache=cold i=9 seconds=0.005702794889253305 inner_n=9 timed_span_s=0.051325 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=ase.db cache=cold i=10 seconds=0.00496061427309707 inner_n=11 timed_span_s=0.054567 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=ase.db cache=cold i=11 seconds=0.0063085452502491535 inner_n=8 timed_span_s=0.050468 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold i=0 seconds=4.579281767458406e-05 inner_n=1092 timed_span_s=0.050006 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold i=1 seconds=4.559462449783774e-05 inner_n=1097 timed_span_s=0.050017 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold i=2 seconds=4.4797981087445223e-05 inner_n=1117 timed_span_s=0.050039 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold i=3 seconds=4.5044269075298234e-05 inner_n=1111 timed_span_s=0.050044 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold i=4 seconds=4.491754845283212e-05 inner_n=1114 timed_span_s=0.050038 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold i=5 seconds=4.46305722154369e-05 inner_n=1122 timed_span_s=0.050076 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold i=6 seconds=4.583865508961398e-05 inner_n=1093 timed_span_s=0.050102 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold i=7 seconds=4.79149829763656e-05 inner_n=1044 timed_span_s=0.050023 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold i=8 seconds=4.562202181400906e-05 inner_n=1096 timed_span_s=0.050002 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold i=9 seconds=4.4996824622005155e-05 inner_n=1112 timed_span_s=0.050036 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold i=10 seconds=4.4996191561347704e-05 inner_n=1112 timed_span_s=0.050036 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=cold i=11 seconds=4.497410235599876e-05 inner_n=1112 timed_span_s=0.050011 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold i=0 seconds=0.0021273637506358987 inner_n=24 timed_span_s=0.051057 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold i=1 seconds=0.001844812392456723 inner_n=28 timed_span_s=0.051655 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold i=2 seconds=0.00180809942893185 inner_n=28 timed_span_s=0.050627 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold i=3 seconds=0.0017480052747173588 inner_n=29 timed_span_s=0.050692 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold i=4 seconds=0.001786182964289245 inner_n=28 timed_span_s=0.050013 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold i=5 seconds=0.001785899464396477 inner_n=28 timed_span_s=0.050005 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold i=6 seconds=0.0017860591428221337 inner_n=28 timed_span_s=0.050010 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold i=7 seconds=0.001762724896252621 inner_n=29 timed_span_s=0.051119 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold i=8 seconds=0.001826098714445834 inner_n=28 timed_span_s=0.051131 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold i=9 seconds=0.0017094565669443303 inner_n=30 timed_span_s=0.051284 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold i=10 seconds=0.0017927810692746225 inner_n=29 timed_span_s=0.051991 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold i=11 seconds=0.0017338034135875582 inner_n=29 timed_span_s=0.050280 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=frames-10000 op=range tool=ase.db cache=cold
+sample protocol=fair workload=frames-10000 op=range tool=ase.db cache=cold i=0 seconds=0.24790000899520237 inner_n=1 timed_span_s=0.247900 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=ase.db cache=cold i=1 seconds=0.2511609130015131 inner_n=1 timed_span_s=0.251161 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=ase.db cache=cold i=2 seconds=0.24466076499811606 inner_n=1 timed_span_s=0.244661 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=ase.db cache=cold i=3 seconds=0.25136713999381755 inner_n=1 timed_span_s=0.251367 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=ase.db cache=cold i=4 seconds=0.2541972800026997 inner_n=1 timed_span_s=0.254197 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=ase.db cache=cold i=5 seconds=0.2592461620006361 inner_n=1 timed_span_s=0.259246 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=ase.db cache=cold i=6 seconds=0.265267851005774 inner_n=1 timed_span_s=0.265268 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=ase.db cache=cold i=7 seconds=0.2467518499979633 inner_n=1 timed_span_s=0.246752 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=ase.db cache=cold i=8 seconds=0.25062449099641526 inner_n=1 timed_span_s=0.250624 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=ase.db cache=cold i=9 seconds=0.25227061600162415 inner_n=1 timed_span_s=0.252271 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=ase.db cache=cold i=10 seconds=0.2686376019992167 inner_n=1 timed_span_s=0.268638 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=ase.db cache=cold i=11 seconds=0.2531166970002232 inner_n=1 timed_span_s=0.253117 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold i=0 seconds=0.0020614193196524864 inner_n=25 timed_span_s=0.051535 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold i=1 seconds=0.0016662674522282736 inner_n=31 timed_span_s=0.051654 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold i=2 seconds=0.001836284392993548 inner_n=28 timed_span_s=0.051416 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold i=3 seconds=0.0017720451041582394 inner_n=29 timed_span_s=0.051389 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold i=4 seconds=0.0017344676884461258 inner_n=29 timed_span_s=0.050300 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold i=5 seconds=0.0018294646067390982 inner_n=28 timed_span_s=0.051225 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold i=6 seconds=0.0017547731386630089 inner_n=29 timed_span_s=0.050888 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold i=7 seconds=0.0017334110686125972 inner_n=29 timed_span_s=0.050269 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold i=8 seconds=0.0018252469659013773 inner_n=28 timed_span_s=0.051107 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold i=9 seconds=0.0017951722139904242 inner_n=28 timed_span_s=0.050265 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold i=10 seconds=0.0020647619996452702 inner_n=25 timed_span_s=0.051619 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=cold i=11 seconds=0.001793085000307266 inner_n=28 timed_span_s=0.050206 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold i=0 seconds=0.00015136103342382908 inner_n=331 timed_span_s=0.050101 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold i=1 seconds=0.00014571996799468464 inner_n=344 timed_span_s=0.050128 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold i=2 seconds=0.00015302360838739094 inner_n=327 timed_span_s=0.050039 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold i=3 seconds=0.00014403280195323135 inner_n=348 timed_span_s=0.050123 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold i=4 seconds=0.00014796949995023105 inner_n=338 timed_span_s=0.050014 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold i=5 seconds=0.0001417972236219068 inner_n=353 timed_span_s=0.050054 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold i=6 seconds=0.00014929854619028323 inner_n=335 timed_span_s=0.050015 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold i=7 seconds=0.00014932080286680094 inner_n=335 timed_span_s=0.050022 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold i=8 seconds=0.00014199625195970985 inner_n=353 timed_span_s=0.050125 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold i=9 seconds=0.0001439927613339922 inner_n=348 timed_span_s=0.050109 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold i=10 seconds=0.0001499939103513917 inner_n=334 timed_span_s=0.050098 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold i=11 seconds=0.00015472445675972446 inner_n=324 timed_span_s=0.050131 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=cold
+sample protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=cold i=0 seconds=0.043120656002429314 inner_n=2 timed_span_s=0.086241 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=cold i=1 seconds=0.040930993996880716 inner_n=2 timed_span_s=0.081862 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=cold i=2 seconds=0.038655712000036146 inner_n=2 timed_span_s=0.077311 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=cold i=3 seconds=0.04026740299741505 inner_n=2 timed_span_s=0.080535 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=cold i=4 seconds=0.04395258850490791 inner_n=2 timed_span_s=0.087905 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=cold i=5 seconds=0.040859826000087196 inner_n=2 timed_span_s=0.081720 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=cold i=6 seconds=0.04226698699858389 inner_n=2 timed_span_s=0.084534 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=cold i=7 seconds=0.039701215995592065 inner_n=2 timed_span_s=0.079402 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=cold i=8 seconds=0.042990006499167066 inner_n=2 timed_span_s=0.085980 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=cold i=9 seconds=0.041122380000160774 inner_n=2 timed_span_s=0.082245 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=cold i=10 seconds=0.04137049000200932 inner_n=2 timed_span_s=0.082741 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=cold i=11 seconds=0.03786762799791177 inner_n=2 timed_span_s=0.075735 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold i=0 seconds=0.0001491540712690732 inner_n=336 timed_span_s=0.050116 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold i=1 seconds=0.0001452907538159575 inner_n=345 timed_span_s=0.050125 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold i=2 seconds=0.0001447122975602824 inner_n=346 timed_span_s=0.050070 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold i=3 seconds=0.00014462845379872264 inner_n=346 timed_span_s=0.050041 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold i=4 seconds=0.00014485924542885587 inner_n=346 timed_span_s=0.050121 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold i=5 seconds=0.0001494475492231075 inner_n=335 timed_span_s=0.050065 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold i=6 seconds=0.0001503798288052661 inner_n=333 timed_span_s=0.050076 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold i=7 seconds=0.00015130069507236714 inner_n=331 timed_span_s=0.050081 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold i=8 seconds=0.00015148630176158763 inner_n=331 timed_span_s=0.050142 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold i=9 seconds=0.00015089441565425046 inner_n=332 timed_span_s=0.050097 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold i=10 seconds=0.000157427679414754 inner_n=318 timed_span_s=0.050062 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=cold i=11 seconds=0.0001529143207671978 inner_n=327 timed_span_s=0.050003 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm i=0 seconds=0.008833728667620258 inner_n=6 timed_span_s=0.053002
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm i=1 seconds=0.006326857500425831 inner_n=8 timed_span_s=0.050615
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm i=2 seconds=0.006293273499068164 inner_n=8 timed_span_s=0.050346
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm i=3 seconds=0.006304186747911444 inner_n=8 timed_span_s=0.050433
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm i=4 seconds=0.006173586553712893 inner_n=9 timed_span_s=0.055562
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm i=5 seconds=0.006199880890360671 inner_n=9 timed_span_s=0.055799
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm i=6 seconds=0.006155827331693015 inner_n=9 timed_span_s=0.055402
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm i=7 seconds=0.007052198126075382 inner_n=8 timed_span_s=0.056418
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm i=8 seconds=0.006373703748977277 inner_n=8 timed_span_s=0.050990
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm i=9 seconds=0.006684042999950179 inner_n=8 timed_span_s=0.053472
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm i=10 seconds=0.0063833078909535995 inner_n=9 timed_span_s=0.057450
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm i=11 seconds=0.006178906112230227 inner_n=9 timed_span_s=0.055610
+warmup protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=warm
+sample protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=warm i=0 seconds=0.9838809260036214 inner_n=1 timed_span_s=0.983881
+sample protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=warm i=1 seconds=0.9865234610042535 inner_n=1 timed_span_s=0.986523
+sample protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=warm i=2 seconds=0.9721704859985039 inner_n=1 timed_span_s=0.972170
+sample protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=warm i=3 seconds=0.9686237109999638 inner_n=1 timed_span_s=0.968624
+sample protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=warm i=4 seconds=0.9698312010004884 inner_n=1 timed_span_s=0.969831
+sample protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=warm i=5 seconds=0.9530915700015612 inner_n=1 timed_span_s=0.953092
+sample protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=warm i=6 seconds=0.9512431139955879 inner_n=1 timed_span_s=0.951243
+sample protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=warm i=7 seconds=0.9661157769951387 inner_n=1 timed_span_s=0.966116
+sample protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=warm i=8 seconds=0.949488354002824 inner_n=1 timed_span_s=0.949488
+sample protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=warm i=9 seconds=0.953736891002336 inner_n=1 timed_span_s=0.953737
+sample protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=warm i=10 seconds=0.9561593749967869 inner_n=1 timed_span_s=0.956159
+sample protocol=fair workload=frames-10000 op=full_read tool=ase.db cache=warm i=11 seconds=0.9723802779990365 inner_n=1 timed_span_s=0.972380
+warmup protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm i=0 seconds=0.008587265167686079 inner_n=6 timed_span_s=0.051524
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm i=1 seconds=0.006279635623286595 inner_n=8 timed_span_s=0.050237
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm i=2 seconds=0.006271064375141577 inner_n=8 timed_span_s=0.050169
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm i=3 seconds=0.006300788251792255 inner_n=8 timed_span_s=0.050406
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm i=4 seconds=0.006143586668056539 inner_n=9 timed_span_s=0.055292
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm i=5 seconds=0.0061306011104736375 inner_n=9 timed_span_s=0.055175
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm i=6 seconds=0.006093387555059356 inner_n=9 timed_span_s=0.054840
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm i=7 seconds=0.00648089600053936 inner_n=8 timed_span_s=0.051847
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm i=8 seconds=0.006153528999776527 inner_n=9 timed_span_s=0.055382
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm i=9 seconds=0.00613455777622423 inner_n=9 timed_span_s=0.055211
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm i=10 seconds=0.006145464001747314 inner_n=9 timed_span_s=0.055309
+sample protocol=fair workload=frames-10000 op=full_read tool=readcon-db cache=warm i=11 seconds=0.006088363110999732 inner_n=9 timed_span_s=0.054795
+warmup protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm i=0 seconds=1.0256255347016871e-05 inner_n=4876 timed_span_s=0.050010
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm i=1 seconds=1.0205726223886108e-05 inner_n=4900 timed_span_s=0.050008
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm i=2 seconds=1.085261266887806e-05 inner_n=4608 timed_span_s=0.050009
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm i=3 seconds=1.4203121853900162e-05 inner_n=3521 timed_span_s=0.050009
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm i=4 seconds=1.0215573850745646e-05 inner_n=4895 timed_span_s=0.050005
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm i=5 seconds=1.0145577592239559e-05 inner_n=4929 timed_span_s=0.050008
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm i=6 seconds=1.0281934198874956e-05 inner_n=4863 timed_span_s=0.050001
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm i=7 seconds=1.0141723791305055e-05 inner_n=4931 timed_span_s=0.050009
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm i=8 seconds=1.011593927559909e-05 inner_n=4943 timed_span_s=0.050003
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm i=9 seconds=1.0062923728970821e-05 inner_n=4969 timed_span_s=0.050003
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm i=10 seconds=1.0159707271269467e-05 inner_n=4922 timed_span_s=0.050006
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm i=11 seconds=1.0139101115579393e-05 inner_n=4932 timed_span_s=0.050006
+warmup protocol=fair workload=frames-10000 op=selected tool=ase.db cache=warm
+sample protocol=fair workload=frames-10000 op=selected tool=ase.db cache=warm i=0 seconds=0.000736275308607968 inner_n=68 timed_span_s=0.050067
+sample protocol=fair workload=frames-10000 op=selected tool=ase.db cache=warm i=1 seconds=0.0007322283330511815 inner_n=69 timed_span_s=0.050524
+sample protocol=fair workload=frames-10000 op=selected tool=ase.db cache=warm i=2 seconds=0.0007327739131405774 inner_n=69 timed_span_s=0.050561
+sample protocol=fair workload=frames-10000 op=selected tool=ase.db cache=warm i=3 seconds=0.0007301848555748027 inner_n=69 timed_span_s=0.050383
+sample protocol=fair workload=frames-10000 op=selected tool=ase.db cache=warm i=4 seconds=0.0007321530583135757 inner_n=69 timed_span_s=0.050519
+sample protocol=fair workload=frames-10000 op=selected tool=ase.db cache=warm i=5 seconds=0.0007314173192793058 inner_n=69 timed_span_s=0.050468
+sample protocol=fair workload=frames-10000 op=selected tool=ase.db cache=warm i=6 seconds=0.0007279649714515814 inner_n=69 timed_span_s=0.050230
+sample protocol=fair workload=frames-10000 op=selected tool=ase.db cache=warm i=7 seconds=0.000748483820752338 inner_n=67 timed_span_s=0.050148
+sample protocol=fair workload=frames-10000 op=selected tool=ase.db cache=warm i=8 seconds=0.0007306353769651479 inner_n=69 timed_span_s=0.050414
+sample protocol=fair workload=frames-10000 op=selected tool=ase.db cache=warm i=9 seconds=0.000728586797038957 inner_n=69 timed_span_s=0.050272
+sample protocol=fair workload=frames-10000 op=selected tool=ase.db cache=warm i=10 seconds=0.0007330852458835579 inner_n=69 timed_span_s=0.050583
+sample protocol=fair workload=frames-10000 op=selected tool=ase.db cache=warm i=11 seconds=0.0007304339419731506 inner_n=69 timed_span_s=0.050400
+warmup protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm i=0 seconds=9.952735099200456e-06 inner_n=5024 timed_span_s=0.050003
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm i=1 seconds=9.501939988772503e-06 inner_n=5263 timed_span_s=0.050009
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm i=2 seconds=9.74620677134123e-06 inner_n=5131 timed_span_s=0.050008
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm i=3 seconds=9.538556050378364e-06 inner_n=5242 timed_span_s=0.050001
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm i=4 seconds=9.837637259228679e-06 inner_n=5083 timed_span_s=0.050005
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm i=5 seconds=9.498244058827233e-06 inner_n=5265 timed_span_s=0.050008
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm i=6 seconds=9.547898274095821e-06 inner_n=5237 timed_span_s=0.050002
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm i=7 seconds=9.503426657852366e-06 inner_n=5262 timed_span_s=0.050007
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm i=8 seconds=9.407319021295614e-06 inner_n=5316 timed_span_s=0.050009
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm i=9 seconds=9.444412858664245e-06 inner_n=5295 timed_span_s=0.050008
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm i=10 seconds=9.473937212356058e-06 inner_n=5278 timed_span_s=0.050003
+sample protocol=fair workload=frames-10000 op=selected tool=readcon-db cache=warm i=11 seconds=9.412517009297977e-06 inner_n=5313 timed_span_s=0.050009
+warmup protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm i=0 seconds=0.0014719617945101002 inner_n=34 timed_span_s=0.050047
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm i=1 seconds=0.0017300026896730836 inner_n=29 timed_span_s=0.050170
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm i=2 seconds=0.0016754539671334594 inner_n=30 timed_span_s=0.050264
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm i=3 seconds=0.0012879547946981918 inner_n=39 timed_span_s=0.050230
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm i=4 seconds=0.0012863134875377186 inner_n=39 timed_span_s=0.050166
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm i=5 seconds=0.0012846010771075573 inner_n=39 timed_span_s=0.050099
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm i=6 seconds=0.0012962435898654617 inner_n=39 timed_span_s=0.050554
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm i=7 seconds=0.0013255052631154143 inner_n=38 timed_span_s=0.050369
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm i=8 seconds=0.0012975506152799472 inner_n=39 timed_span_s=0.050604
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm i=9 seconds=0.0012866036150416431 inner_n=39 timed_span_s=0.050178
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm i=10 seconds=0.0013117220509089888 inner_n=39 timed_span_s=0.051157
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm i=11 seconds=0.001324656500257429 inner_n=38 timed_span_s=0.050337
+warmup protocol=fair workload=frames-10000 op=range tool=ase.db cache=warm
+sample protocol=fair workload=frames-10000 op=range tool=ase.db cache=warm i=0 seconds=0.2222953829987091 inner_n=1 timed_span_s=0.222295
+sample protocol=fair workload=frames-10000 op=range tool=ase.db cache=warm i=1 seconds=0.2325217010002234 inner_n=1 timed_span_s=0.232522
+sample protocol=fair workload=frames-10000 op=range tool=ase.db cache=warm i=2 seconds=0.2352625290004653 inner_n=1 timed_span_s=0.235263
+sample protocol=fair workload=frames-10000 op=range tool=ase.db cache=warm i=3 seconds=0.22886480900342576 inner_n=1 timed_span_s=0.228865
+sample protocol=fair workload=frames-10000 op=range tool=ase.db cache=warm i=4 seconds=0.22914341500290902 inner_n=1 timed_span_s=0.229143
+sample protocol=fair workload=frames-10000 op=range tool=ase.db cache=warm i=5 seconds=0.2336012669984484 inner_n=1 timed_span_s=0.233601
+sample protocol=fair workload=frames-10000 op=range tool=ase.db cache=warm i=6 seconds=0.23719942399475258 inner_n=1 timed_span_s=0.237199
+sample protocol=fair workload=frames-10000 op=range tool=ase.db cache=warm i=7 seconds=0.23806334199616686 inner_n=1 timed_span_s=0.238063
+sample protocol=fair workload=frames-10000 op=range tool=ase.db cache=warm i=8 seconds=0.23139807999541517 inner_n=1 timed_span_s=0.231398
+sample protocol=fair workload=frames-10000 op=range tool=ase.db cache=warm i=9 seconds=0.25332438699842896 inner_n=1 timed_span_s=0.253324
+sample protocol=fair workload=frames-10000 op=range tool=ase.db cache=warm i=10 seconds=0.23486567500367528 inner_n=1 timed_span_s=0.234866
+sample protocol=fair workload=frames-10000 op=range tool=ase.db cache=warm i=11 seconds=0.23429422599292593 inner_n=1 timed_span_s=0.234294
+warmup protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm i=0 seconds=0.001671875300235115 inner_n=30 timed_span_s=0.050156
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm i=1 seconds=0.0016577344520614602 inner_n=31 timed_span_s=0.051390
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm i=2 seconds=0.0016932663335561908 inner_n=30 timed_span_s=0.050798
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm i=3 seconds=0.0016524748707231465 inner_n=31 timed_span_s=0.051227
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm i=4 seconds=0.001667749432575268 inner_n=30 timed_span_s=0.050032
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm i=5 seconds=0.0016591668067004292 inner_n=31 timed_span_s=0.051434
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm i=6 seconds=0.0016532152902425056 inner_n=31 timed_span_s=0.051250
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm i=7 seconds=0.0016994183674493494 inner_n=30 timed_span_s=0.050983
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm i=8 seconds=0.0016801993665770472 inner_n=30 timed_span_s=0.050406
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm i=9 seconds=0.0016673650662899794 inner_n=30 timed_span_s=0.050021
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm i=10 seconds=0.001679603333711081 inner_n=30 timed_span_s=0.050388
+sample protocol=fair workload=frames-10000 op=range tool=readcon-db cache=warm i=11 seconds=0.0016623491610516794 inner_n=31 timed_span_s=0.051533
+warmup protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm i=0 seconds=9.617501168227486e-05 inner_n=520 timed_span_s=0.050011
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm i=1 seconds=9.785082014441606e-05 inner_n=511 timed_span_s=0.050002
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm i=2 seconds=0.00010221335105597973 inner_n=490 timed_span_s=0.050085
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm i=3 seconds=0.00013748822807478923 inner_n=364 timed_span_s=0.050046
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm i=4 seconds=0.00011062141383850774 inner_n=452 timed_span_s=0.050001
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm i=5 seconds=9.904360779881533e-05 inner_n=505 timed_span_s=0.050017
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm i=6 seconds=9.51433137210596e-05 inner_n=526 timed_span_s=0.050045
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm i=7 seconds=9.529965707943554e-05 inner_n=525 timed_span_s=0.050032
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm i=8 seconds=9.52870341799488e-05 inner_n=525 timed_span_s=0.050026
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm i=9 seconds=9.619619609461202e-05 inner_n=520 timed_span_s=0.050022
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm i=10 seconds=9.585209379853124e-05 inner_n=522 timed_span_s=0.050035
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm i=11 seconds=9.477256234083941e-05 inner_n=528 timed_span_s=0.050040
+warmup protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=warm
+sample protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=warm i=0 seconds=0.028558292506204452 inner_n=2 timed_span_s=0.057117
+sample protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=warm i=1 seconds=0.02861401050176937 inner_n=2 timed_span_s=0.057228
+sample protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=warm i=2 seconds=0.028616777497518342 inner_n=2 timed_span_s=0.057234
+sample protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=warm i=3 seconds=0.028484366503107594 inner_n=2 timed_span_s=0.056969
+sample protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=warm i=4 seconds=0.028467953998188023 inner_n=2 timed_span_s=0.056936
+sample protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=warm i=5 seconds=0.02867714899548446 inner_n=2 timed_span_s=0.057354
+sample protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=warm i=6 seconds=0.02836897700035479 inner_n=2 timed_span_s=0.056738
+sample protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=warm i=7 seconds=0.02851300800102763 inner_n=2 timed_span_s=0.057026
+sample protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=warm i=8 seconds=0.02834181900107069 inner_n=2 timed_span_s=0.056684
+sample protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=warm i=9 seconds=0.028629812004510313 inner_n=2 timed_span_s=0.057260
+sample protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=warm i=10 seconds=0.028480128501541913 inner_n=2 timed_span_s=0.056960
+sample protocol=fair workload=frames-10000 op=metadata tool=ase.db cache=warm i=11 seconds=0.028446348002034938 inner_n=2 timed_span_s=0.056893
+warmup protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm i=0 seconds=9.582361862753872e-05 inner_n=522 timed_span_s=0.050020
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm i=1 seconds=9.626129435323842e-05 inner_n=520 timed_span_s=0.050056
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm i=2 seconds=9.649358945775343e-05 inner_n=519 timed_span_s=0.050080
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm i=3 seconds=9.59295634700162e-05 inner_n=522 timed_span_s=0.050075
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm i=4 seconds=9.570574374775087e-05 inner_n=523 timed_span_s=0.050054
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm i=5 seconds=9.659580296646214e-05 inner_n=518 timed_span_s=0.050037
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm i=6 seconds=9.610185796212166e-05 inner_n=521 timed_span_s=0.050069
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm i=7 seconds=9.508359317276928e-05 inner_n=526 timed_span_s=0.050014
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm i=8 seconds=9.519637444425292e-05 inner_n=526 timed_span_s=0.050073
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm i=9 seconds=9.524318859413533e-05 inner_n=525 timed_span_s=0.050003
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm i=10 seconds=9.530963029690265e-05 inner_n=525 timed_span_s=0.050038
+sample protocol=fair workload=frames-10000 op=metadata tool=readcon-db cache=warm i=11 seconds=9.490598850345426e-05 inner_n=527 timed_span_s=0.050015
+workload traj-100k frames=64 atoms=100000 build_start
+workload traj-100k bytes=330580906 build_done
+warmup protocol=fair workload=traj-100k op=insert tool=readcon-db
+sample protocol=fair workload=traj-100k op=insert tool=readcon-db cache=cold-file i=0 seconds=2.266914257997996 inner_n=1 timed_span_s=2.266914 disk_bytes=341966848
+sample protocol=fair workload=traj-100k op=insert tool=readcon-db cache=cold-file i=1 seconds=2.403807369999413 inner_n=1 timed_span_s=2.403807 disk_bytes=341966848
+sample protocol=fair workload=traj-100k op=insert tool=readcon-db cache=cold-file i=2 seconds=2.26791558900004 inner_n=1 timed_span_s=2.267916 disk_bytes=341966848
+sample protocol=fair workload=traj-100k op=insert tool=readcon-db cache=cold-file i=3 seconds=2.2736355069937417 inner_n=1 timed_span_s=2.273636 disk_bytes=341966848
+sample protocol=fair workload=traj-100k op=insert tool=readcon-db cache=cold-file i=4 seconds=2.594227759997011 inner_n=1 timed_span_s=2.594228 disk_bytes=341966848
+sample protocol=fair workload=traj-100k op=insert tool=readcon-db cache=cold-file i=5 seconds=2.2212130410043756 inner_n=1 timed_span_s=2.221213 disk_bytes=341966848
+sample protocol=fair workload=traj-100k op=insert tool=readcon-db cache=cold-file i=6 seconds=2.5151524160028202 inner_n=1 timed_span_s=2.515152 disk_bytes=341966848
+sample protocol=fair workload=traj-100k op=insert tool=readcon-db cache=cold-file i=7 seconds=2.273482325996156 inner_n=1 timed_span_s=2.273482 disk_bytes=341966848
+sample protocol=fair workload=traj-100k op=insert tool=readcon-db cache=cold-file i=8 seconds=2.4883319809960085 inner_n=1 timed_span_s=2.488332 disk_bytes=341966848
+sample protocol=fair workload=traj-100k op=insert tool=readcon-db cache=cold-file i=9 seconds=2.400333285993838 inner_n=1 timed_span_s=2.400333 disk_bytes=341966848
+sample protocol=fair workload=traj-100k op=insert tool=readcon-db cache=cold-file i=10 seconds=2.4734352780069457 inner_n=1 timed_span_s=2.473435 disk_bytes=341966848
+sample protocol=fair workload=traj-100k op=insert tool=readcon-db cache=cold-file i=11 seconds=2.3853477419979754 inner_n=1 timed_span_s=2.385348 disk_bytes=341966848
+warmup protocol=fair workload=traj-100k op=insert tool=ase.db
+sample protocol=fair workload=traj-100k op=insert tool=ase.db cache=cold-file i=0 seconds=1.3655117345042527 inner_n=2 timed_span_s=2.731023 disk_bytes=384503808
+sample protocol=fair workload=traj-100k op=insert tool=ase.db cache=cold-file i=1 seconds=1.3844432385012624 inner_n=2 timed_span_s=2.768886 disk_bytes=384503808
+sample protocol=fair workload=traj-100k op=insert tool=ase.db cache=cold-file i=2 seconds=1.3620352360012475 inner_n=2 timed_span_s=2.724070 disk_bytes=384503808
+sample protocol=fair workload=traj-100k op=insert tool=ase.db cache=cold-file i=3 seconds=1.4259171205012535 inner_n=2 timed_span_s=2.851834 disk_bytes=384503808
+sample protocol=fair workload=traj-100k op=insert tool=ase.db cache=cold-file i=4 seconds=1.3935667629993986 inner_n=2 timed_span_s=2.787134 disk_bytes=384503808
+sample protocol=fair workload=traj-100k op=insert tool=ase.db cache=cold-file i=5 seconds=1.3544268964978983 inner_n=2 timed_span_s=2.708854 disk_bytes=384503808
+sample protocol=fair workload=traj-100k op=insert tool=ase.db cache=cold-file i=6 seconds=1.3660392570018303 inner_n=2 timed_span_s=2.732079 disk_bytes=384503808
+sample protocol=fair workload=traj-100k op=insert tool=ase.db cache=cold-file i=7 seconds=1.35628926550271 inner_n=2 timed_span_s=2.712579 disk_bytes=384503808
+sample protocol=fair workload=traj-100k op=insert tool=ase.db cache=cold-file i=8 seconds=1.3749103129994182 inner_n=2 timed_span_s=2.749821 disk_bytes=384503808
+sample protocol=fair workload=traj-100k op=insert tool=ase.db cache=cold-file i=9 seconds=1.389966340499086 inner_n=2 timed_span_s=2.779933 disk_bytes=384503808
+sample protocol=fair workload=traj-100k op=insert tool=ase.db cache=cold-file i=10 seconds=1.384392124000442 inner_n=2 timed_span_s=2.768784 disk_bytes=384503808
+sample protocol=fair workload=traj-100k op=insert tool=ase.db cache=cold-file i=11 seconds=1.3956305679967045 inner_n=2 timed_span_s=2.791261 disk_bytes=384503808
+warmup protocol=fair workload=traj-100k op=insert tool=readcon-db
+sample protocol=fair workload=traj-100k op=insert tool=readcon-db cache=cold-file i=0 seconds=2.2163098720047856 inner_n=1 timed_span_s=2.216310 disk_bytes=341966848
+sample protocol=fair workload=traj-100k op=insert tool=readcon-db cache=cold-file i=1 seconds=2.4095884389971616 inner_n=1 timed_span_s=2.409588 disk_bytes=341966848
+sample protocol=fair workload=traj-100k op=insert tool=readcon-db cache=cold-file i=2 seconds=2.3903297299984843 inner_n=1 timed_span_s=2.390330 disk_bytes=341966848
+sample protocol=fair workload=traj-100k op=insert tool=readcon-db cache=cold-file i=3 seconds=2.3287260990036884 inner_n=1 timed_span_s=2.328726 disk_bytes=341966848
+sample protocol=fair workload=traj-100k op=insert tool=readcon-db cache=cold-file i=4 seconds=2.230984982998052 inner_n=1 timed_span_s=2.230985 disk_bytes=341966848
+sample protocol=fair workload=traj-100k op=insert tool=readcon-db cache=cold-file i=5 seconds=2.2062173309968784 inner_n=1 timed_span_s=2.206217 disk_bytes=341966848
+sample protocol=fair workload=traj-100k op=insert tool=readcon-db cache=cold-file i=6 seconds=2.187245144996268 inner_n=1 timed_span_s=2.187245 disk_bytes=341966848
+sample protocol=fair workload=traj-100k op=insert tool=readcon-db cache=cold-file i=7 seconds=2.3038331249990733 inner_n=1 timed_span_s=2.303833 disk_bytes=341966848
+sample protocol=fair workload=traj-100k op=insert tool=readcon-db cache=cold-file i=8 seconds=2.2540483359989594 inner_n=1 timed_span_s=2.254048 disk_bytes=341966848
+sample protocol=fair workload=traj-100k op=insert tool=readcon-db cache=cold-file i=9 seconds=2.2804772350064013 inner_n=1 timed_span_s=2.280477 disk_bytes=341966848
+sample protocol=fair workload=traj-100k op=insert tool=readcon-db cache=cold-file i=10 seconds=2.2377090769950883 inner_n=1 timed_span_s=2.237709 disk_bytes=341966848
+sample protocol=fair workload=traj-100k op=insert tool=readcon-db cache=cold-file i=11 seconds=2.2159695029986324 inner_n=1 timed_span_s=2.215970 disk_bytes=341966848
+warmup protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold i=0 seconds=0.654478915996151 inner_n=1 timed_span_s=0.654479 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold i=1 seconds=0.4632678970010602 inner_n=1 timed_span_s=0.463268 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold i=2 seconds=0.49937405200034846 inner_n=1 timed_span_s=0.499374 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold i=3 seconds=0.47415449599793646 inner_n=1 timed_span_s=0.474154 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold i=4 seconds=0.4939244819979649 inner_n=1 timed_span_s=0.493924 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold i=5 seconds=0.6475334139977349 inner_n=1 timed_span_s=0.647533 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold i=6 seconds=0.5137074939993909 inner_n=1 timed_span_s=0.513707 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold i=7 seconds=0.5212581800005864 inner_n=1 timed_span_s=0.521258 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold i=8 seconds=0.4970088289992418 inner_n=1 timed_span_s=0.497009 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold i=9 seconds=0.5407110810047016 inner_n=1 timed_span_s=0.540711 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold i=10 seconds=0.5215851239991025 inner_n=1 timed_span_s=0.521585 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold i=11 seconds=0.5214060169964796 inner_n=1 timed_span_s=0.521406 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=traj-100k op=full_read tool=ase.db cache=cold
+sample protocol=fair workload=traj-100k op=full_read tool=ase.db cache=cold i=0 seconds=2.287563288999081 inner_n=1 timed_span_s=2.287563 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=ase.db cache=cold i=1 seconds=2.161523857001157 inner_n=1 timed_span_s=2.161524 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=ase.db cache=cold i=2 seconds=2.049764891999075 inner_n=1 timed_span_s=2.049765 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=ase.db cache=cold i=3 seconds=2.0007389550009975 inner_n=1 timed_span_s=2.000739 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=ase.db cache=cold i=4 seconds=1.9995838530012406 inner_n=1 timed_span_s=1.999584 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=ase.db cache=cold i=5 seconds=2.459068912001385 inner_n=1 timed_span_s=2.459069 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=ase.db cache=cold i=6 seconds=2.179600023002422 inner_n=1 timed_span_s=2.179600 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=ase.db cache=cold i=7 seconds=2.071832738998637 inner_n=1 timed_span_s=2.071833 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=ase.db cache=cold i=8 seconds=2.121474871004466 inner_n=1 timed_span_s=2.121475 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=ase.db cache=cold i=9 seconds=2.21400692199677 inner_n=1 timed_span_s=2.214007 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=ase.db cache=cold i=10 seconds=2.13178388599772 inner_n=1 timed_span_s=2.131784 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=ase.db cache=cold i=11 seconds=2.108117376003065 inner_n=1 timed_span_s=2.108117 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold i=0 seconds=0.5777532569991308 inner_n=1 timed_span_s=0.577753 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold i=1 seconds=0.5244375319962273 inner_n=1 timed_span_s=0.524438 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold i=2 seconds=0.5820918020035606 inner_n=1 timed_span_s=0.582092 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold i=3 seconds=0.5384174969949527 inner_n=1 timed_span_s=0.538417 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold i=4 seconds=0.6412621440031216 inner_n=1 timed_span_s=0.641262 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold i=5 seconds=0.440330596997228 inner_n=1 timed_span_s=0.440331 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold i=6 seconds=0.4622376249972149 inner_n=1 timed_span_s=0.462238 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold i=7 seconds=0.5261550630020793 inner_n=1 timed_span_s=0.526155 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold i=8 seconds=0.45753923899610527 inner_n=1 timed_span_s=0.457539 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold i=9 seconds=0.4489303500013193 inner_n=1 timed_span_s=0.448930 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold i=10 seconds=0.48612327400041977 inner_n=1 timed_span_s=0.486123 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=cold i=11 seconds=0.48415050900075585 inner_n=1 timed_span_s=0.484151 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold i=0 seconds=0.007029266251265653 inner_n=8 timed_span_s=0.056234 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold i=1 seconds=0.007193952874331444 inner_n=8 timed_span_s=0.057552 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold i=2 seconds=0.005900354333991547 inner_n=9 timed_span_s=0.053103 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold i=3 seconds=0.005968112334408538 inner_n=9 timed_span_s=0.053713 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold i=4 seconds=0.0064716355000200565 inner_n=8 timed_span_s=0.051773 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold i=5 seconds=0.006327173251520435 inner_n=8 timed_span_s=0.050617 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold i=6 seconds=0.006951271999241726 inner_n=8 timed_span_s=0.055610 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold i=7 seconds=0.006604551498639921 inner_n=8 timed_span_s=0.052836 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold i=8 seconds=0.008344730570180607 inner_n=7 timed_span_s=0.058413 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold i=9 seconds=0.006756342375410895 inner_n=8 timed_span_s=0.054051 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold i=10 seconds=0.006765890249880613 inner_n=8 timed_span_s=0.054127 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold i=11 seconds=0.006036079110344872 inner_n=9 timed_span_s=0.054325 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=traj-100k op=selected tool=ase.db cache=cold
+sample protocol=fair workload=traj-100k op=selected tool=ase.db cache=cold i=0 seconds=0.03706250750110485 inner_n=2 timed_span_s=0.074125 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=ase.db cache=cold i=1 seconds=0.037065879500005394 inner_n=2 timed_span_s=0.074132 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=ase.db cache=cold i=2 seconds=0.03472803000113345 inner_n=2 timed_span_s=0.069456 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=ase.db cache=cold i=3 seconds=0.03580790500200237 inner_n=2 timed_span_s=0.071616 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=ase.db cache=cold i=4 seconds=0.03684172249995754 inner_n=2 timed_span_s=0.073683 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=ase.db cache=cold i=5 seconds=0.03745228550178581 inner_n=2 timed_span_s=0.074905 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=ase.db cache=cold i=6 seconds=0.03744749150064308 inner_n=2 timed_span_s=0.074895 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=ase.db cache=cold i=7 seconds=0.03515531500306679 inner_n=2 timed_span_s=0.070311 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=ase.db cache=cold i=8 seconds=0.03652525800498552 inner_n=2 timed_span_s=0.073051 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=ase.db cache=cold i=9 seconds=0.036068597499252064 inner_n=2 timed_span_s=0.072137 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=ase.db cache=cold i=10 seconds=0.035738953498366755 inner_n=2 timed_span_s=0.071478 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=ase.db cache=cold i=11 seconds=0.03711051700520329 inner_n=2 timed_span_s=0.074221 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold i=0 seconds=0.0077330835712408385 inner_n=7 timed_span_s=0.054132 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold i=1 seconds=0.007948772858071607 inner_n=7 timed_span_s=0.055641 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold i=2 seconds=0.008242683429021522 inner_n=7 timed_span_s=0.057699 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold i=3 seconds=0.0071611641438461705 inner_n=7 timed_span_s=0.050128 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold i=4 seconds=0.00747744228283409 inner_n=7 timed_span_s=0.052342 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold i=5 seconds=0.007859637286206375 inner_n=7 timed_span_s=0.055017 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold i=6 seconds=0.0081366442869434 inner_n=7 timed_span_s=0.056957 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold i=7 seconds=0.008094212857291236 inner_n=7 timed_span_s=0.056659 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold i=8 seconds=0.007574988431380396 inner_n=7 timed_span_s=0.053025 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold i=9 seconds=0.00841436966705563 inner_n=6 timed_span_s=0.050486 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold i=10 seconds=0.009473352667555446 inner_n=6 timed_span_s=0.056840 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=cold i=11 seconds=0.008115825142470254 inner_n=7 timed_span_s=0.056811 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold i=0 seconds=0.16630581000208622 inner_n=1 timed_span_s=0.166306 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold i=1 seconds=0.13547296600154368 inner_n=1 timed_span_s=0.135473 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold i=2 seconds=0.14910551999491872 inner_n=1 timed_span_s=0.149106 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold i=3 seconds=0.13236635399516672 inner_n=1 timed_span_s=0.132366 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold i=4 seconds=0.12723433100472903 inner_n=1 timed_span_s=0.127234 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold i=5 seconds=0.13155499199638143 inner_n=1 timed_span_s=0.131555 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold i=6 seconds=0.14775075700163143 inner_n=1 timed_span_s=0.147751 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold i=7 seconds=0.1285169059992768 inner_n=1 timed_span_s=0.128517 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold i=8 seconds=0.12386313800379867 inner_n=1 timed_span_s=0.123863 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold i=9 seconds=0.13110661000246182 inner_n=1 timed_span_s=0.131107 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold i=10 seconds=0.15369010800350225 inner_n=1 timed_span_s=0.153690 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold i=11 seconds=0.13358860700100195 inner_n=1 timed_span_s=0.133589 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=traj-100k op=range tool=ase.db cache=cold
+sample protocol=fair workload=traj-100k op=range tool=ase.db cache=cold i=0 seconds=0.5425051040001563 inner_n=1 timed_span_s=0.542505 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=ase.db cache=cold i=1 seconds=0.5398390280024614 inner_n=1 timed_span_s=0.539839 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=ase.db cache=cold i=2 seconds=0.517479722002463 inner_n=1 timed_span_s=0.517480 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=ase.db cache=cold i=3 seconds=0.5224767580002663 inner_n=1 timed_span_s=0.522477 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=ase.db cache=cold i=4 seconds=0.5355610489932587 inner_n=1 timed_span_s=0.535561 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=ase.db cache=cold i=5 seconds=0.5245889440047904 inner_n=1 timed_span_s=0.524589 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=ase.db cache=cold i=6 seconds=0.5312544929984142 inner_n=1 timed_span_s=0.531254 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=ase.db cache=cold i=7 seconds=0.5465631089973613 inner_n=1 timed_span_s=0.546563 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=ase.db cache=cold i=8 seconds=0.5524998779947055 inner_n=1 timed_span_s=0.552500 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=ase.db cache=cold i=9 seconds=0.6518094060011208 inner_n=1 timed_span_s=0.651809 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=ase.db cache=cold i=10 seconds=0.5582064260015613 inner_n=1 timed_span_s=0.558206 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=ase.db cache=cold i=11 seconds=0.5495344379960443 inner_n=1 timed_span_s=0.549534 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold i=0 seconds=0.13196732500364305 inner_n=1 timed_span_s=0.131967 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold i=1 seconds=0.16114247999939835 inner_n=1 timed_span_s=0.161142 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold i=2 seconds=0.1403955979985767 inner_n=1 timed_span_s=0.140396 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold i=3 seconds=0.12220519500260707 inner_n=1 timed_span_s=0.122205 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold i=4 seconds=0.13203651599906152 inner_n=1 timed_span_s=0.132037 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold i=5 seconds=0.1301472599952831 inner_n=1 timed_span_s=0.130147 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold i=6 seconds=0.17145829900255194 inner_n=1 timed_span_s=0.171458 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold i=7 seconds=0.13502825100295013 inner_n=1 timed_span_s=0.135028 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold i=8 seconds=0.12495034099993063 inner_n=1 timed_span_s=0.124950 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold i=9 seconds=0.140940015000524 inner_n=1 timed_span_s=0.140940 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold i=10 seconds=0.1350057919989922 inner_n=1 timed_span_s=0.135006 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=cold i=11 seconds=0.1377364520012634 inner_n=1 timed_span_s=0.137736 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold i=0 seconds=1.4633346261834235e-05 inner_n=3417 timed_span_s=0.050002 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold i=1 seconds=1.416262157824293e-05 inner_n=3531 timed_span_s=0.050008 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold i=2 seconds=1.4156946205873663e-05 inner_n=3532 timed_span_s=0.050002 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold i=3 seconds=1.4478529789265285e-05 inner_n=3454 timed_span_s=0.050009 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold i=4 seconds=1.5020288032745077e-05 inner_n=3329 timed_span_s=0.050003 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold i=5 seconds=1.4362292451534468e-05 inner_n=3482 timed_span_s=0.050010 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold i=6 seconds=1.4850269984807277e-05 inner_n=3367 timed_span_s=0.050001 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold i=7 seconds=1.4459813206946502e-05 inner_n=3458 timed_span_s=0.050002 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold i=8 seconds=1.4287176812233936e-05 inner_n=3500 timed_span_s=0.050005 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold i=9 seconds=1.3362475164115921e-05 inner_n=3742 timed_span_s=0.050002 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold i=10 seconds=1.3367991945720622e-05 inner_n=3741 timed_span_s=0.050010 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold i=11 seconds=1.3119369293320586e-05 inner_n=3812 timed_span_s=0.050011 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=traj-100k op=metadata tool=ase.db cache=cold
+sample protocol=fair workload=traj-100k op=metadata tool=ase.db cache=cold i=0 seconds=0.30879296599596273 inner_n=1 timed_span_s=0.308793 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=ase.db cache=cold i=1 seconds=0.2519810640005744 inner_n=1 timed_span_s=0.251981 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=ase.db cache=cold i=2 seconds=0.2775954540047678 inner_n=1 timed_span_s=0.277595 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=ase.db cache=cold i=3 seconds=0.20887693599797785 inner_n=1 timed_span_s=0.208877 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=ase.db cache=cold i=4 seconds=0.22717522399761947 inner_n=1 timed_span_s=0.227175 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=ase.db cache=cold i=5 seconds=0.1972387260029791 inner_n=1 timed_span_s=0.197239 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=ase.db cache=cold i=6 seconds=0.28968499299662653 inner_n=1 timed_span_s=0.289685 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=ase.db cache=cold i=7 seconds=0.23525033199985046 inner_n=1 timed_span_s=0.235250 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=ase.db cache=cold i=8 seconds=0.2531721080013085 inner_n=1 timed_span_s=0.253172 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=ase.db cache=cold i=9 seconds=0.2375811999954749 inner_n=1 timed_span_s=0.237581 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=ase.db cache=cold i=10 seconds=0.2370270530009293 inner_n=1 timed_span_s=0.237027 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=ase.db cache=cold i=11 seconds=0.2826867619951372 inner_n=1 timed_span_s=0.282687 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold i=0 seconds=1.8067475549166423e-05 inner_n=2768 timed_span_s=0.050011 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold i=1 seconds=1.9513963340220038e-05 inner_n=2563 timed_span_s=0.050014 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold i=2 seconds=1.8330589881293302e-05 inner_n=2728 timed_span_s=0.050006 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold i=3 seconds=1.688893688360244e-05 inner_n=2961 timed_span_s=0.050008 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold i=4 seconds=1.6256665502646418e-05 inner_n=3076 timed_span_s=0.050006 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold i=5 seconds=1.6197191169800717e-05 inner_n=3087 timed_span_s=0.050001 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold i=6 seconds=1.553677422903769e-05 inner_n=3219 timed_span_s=0.050013 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold i=7 seconds=1.4413038901672686e-05 inner_n=3470 timed_span_s=0.050013 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold i=8 seconds=1.3767513830795758e-05 inner_n=3633 timed_span_s=0.050017 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold i=9 seconds=1.3142994199004441e-05 inner_n=3805 timed_span_s=0.050009 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold i=10 seconds=1.3422919980154566e-05 inner_n=3726 timed_span_s=0.050014 resident_fraction=0.000000 cold_label=verified
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=cold i=11 seconds=1.6674572882879427e-05 inner_n=2999 timed_span_s=0.050007 resident_fraction=0.000000 cold_label=verified
+warmup protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm i=0 seconds=0.27098321200173814 inner_n=1 timed_span_s=0.270983
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm i=1 seconds=0.21468199999799253 inner_n=1 timed_span_s=0.214682
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm i=2 seconds=0.2688853660001769 inner_n=1 timed_span_s=0.268885
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm i=3 seconds=0.21680930200091098 inner_n=1 timed_span_s=0.216809
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm i=4 seconds=0.2698805129984976 inner_n=1 timed_span_s=0.269881
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm i=5 seconds=0.2212258049985394 inner_n=1 timed_span_s=0.221226
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm i=6 seconds=0.28955902400048217 inner_n=1 timed_span_s=0.289559
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm i=7 seconds=0.22510413399868412 inner_n=1 timed_span_s=0.225104
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm i=8 seconds=0.27092794299824163 inner_n=1 timed_span_s=0.270928
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm i=9 seconds=0.2271295949976775 inner_n=1 timed_span_s=0.227130
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm i=10 seconds=0.2832621690031374 inner_n=1 timed_span_s=0.283262
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm i=11 seconds=0.2189818330007256 inner_n=1 timed_span_s=0.218982
+warmup protocol=fair workload=traj-100k op=full_read tool=ase.db cache=warm
+sample protocol=fair workload=traj-100k op=full_read tool=ase.db cache=warm i=0 seconds=1.8731386729996302 inner_n=1 timed_span_s=1.873139
+sample protocol=fair workload=traj-100k op=full_read tool=ase.db cache=warm i=1 seconds=1.8973449589975644 inner_n=1 timed_span_s=1.897345
+sample protocol=fair workload=traj-100k op=full_read tool=ase.db cache=warm i=2 seconds=1.888985079996928 inner_n=1 timed_span_s=1.888985
+sample protocol=fair workload=traj-100k op=full_read tool=ase.db cache=warm i=3 seconds=1.885700522994739 inner_n=1 timed_span_s=1.885701
+sample protocol=fair workload=traj-100k op=full_read tool=ase.db cache=warm i=4 seconds=1.8773554290019092 inner_n=1 timed_span_s=1.877355
+sample protocol=fair workload=traj-100k op=full_read tool=ase.db cache=warm i=5 seconds=1.8949060829982045 inner_n=1 timed_span_s=1.894906
+sample protocol=fair workload=traj-100k op=full_read tool=ase.db cache=warm i=6 seconds=1.8993827519952902 inner_n=1 timed_span_s=1.899383
+sample protocol=fair workload=traj-100k op=full_read tool=ase.db cache=warm i=7 seconds=1.8887740040008794 inner_n=1 timed_span_s=1.888774
+sample protocol=fair workload=traj-100k op=full_read tool=ase.db cache=warm i=8 seconds=2.234860327000206 inner_n=1 timed_span_s=2.234860
+sample protocol=fair workload=traj-100k op=full_read tool=ase.db cache=warm i=9 seconds=1.807898227001715 inner_n=1 timed_span_s=1.807898
+sample protocol=fair workload=traj-100k op=full_read tool=ase.db cache=warm i=10 seconds=2.27434525800345 inner_n=1 timed_span_s=2.274345
+sample protocol=fair workload=traj-100k op=full_read tool=ase.db cache=warm i=11 seconds=1.9588416530023096 inner_n=1 timed_span_s=1.958842
+warmup protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm i=0 seconds=0.32419321100314846 inner_n=1 timed_span_s=0.324193
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm i=1 seconds=0.21046223300072597 inner_n=1 timed_span_s=0.210462
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm i=2 seconds=0.26210215899482137 inner_n=1 timed_span_s=0.262102
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm i=3 seconds=0.22327267000218853 inner_n=1 timed_span_s=0.223273
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm i=4 seconds=0.2631275750027271 inner_n=1 timed_span_s=0.263128
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm i=5 seconds=0.2225077289986075 inner_n=1 timed_span_s=0.222508
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm i=6 seconds=0.2583033030023216 inner_n=1 timed_span_s=0.258303
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm i=7 seconds=0.20654642999579664 inner_n=1 timed_span_s=0.206546
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm i=8 seconds=0.314387625992822 inner_n=1 timed_span_s=0.314388
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm i=9 seconds=0.23713212800066685 inner_n=1 timed_span_s=0.237132
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm i=10 seconds=0.26517846799833933 inner_n=1 timed_span_s=0.265178
+sample protocol=fair workload=traj-100k op=full_read tool=readcon-db cache=warm i=11 seconds=0.2021852609977941 inner_n=1 timed_span_s=0.202185
+warmup protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm i=0 seconds=0.0025056553011381768 inner_n=20 timed_span_s=0.050113
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm i=1 seconds=0.002503653476153323 inner_n=21 timed_span_s=0.052577
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm i=2 seconds=0.0024897588092634188 inner_n=21 timed_span_s=0.052285
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm i=3 seconds=0.002471974761907144 inner_n=21 timed_span_s=0.051911
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm i=4 seconds=0.002474005477173099 inner_n=21 timed_span_s=0.051954
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm i=5 seconds=0.002715777473655946 inner_n=19 timed_span_s=0.051600
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm i=6 seconds=0.002481689572007218 inner_n=21 timed_span_s=0.052115
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm i=7 seconds=0.0024852991447828357 inner_n=21 timed_span_s=0.052191
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm i=8 seconds=0.002474050476199149 inner_n=21 timed_span_s=0.051955
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm i=9 seconds=0.0025378592856993365 inner_n=21 timed_span_s=0.053295
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm i=10 seconds=0.002493228095686174 inner_n=21 timed_span_s=0.052358
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm i=11 seconds=0.0025847412496659674 inner_n=20 timed_span_s=0.051695
+warmup protocol=fair workload=traj-100k op=selected tool=ase.db cache=warm
+sample protocol=fair workload=traj-100k op=selected tool=ase.db cache=warm i=0 seconds=0.02889253350076615 inner_n=2 timed_span_s=0.057785
+sample protocol=fair workload=traj-100k op=selected tool=ase.db cache=warm i=1 seconds=0.02867488899937598 inner_n=2 timed_span_s=0.057350
+sample protocol=fair workload=traj-100k op=selected tool=ase.db cache=warm i=2 seconds=0.029067713498079684 inner_n=2 timed_span_s=0.058135
+sample protocol=fair workload=traj-100k op=selected tool=ase.db cache=warm i=3 seconds=0.02882013050111709 inner_n=2 timed_span_s=0.057640
+sample protocol=fair workload=traj-100k op=selected tool=ase.db cache=warm i=4 seconds=0.029823005501384614 inner_n=2 timed_span_s=0.059646
+sample protocol=fair workload=traj-100k op=selected tool=ase.db cache=warm i=5 seconds=0.03238365149809397 inner_n=2 timed_span_s=0.064767
+sample protocol=fair workload=traj-100k op=selected tool=ase.db cache=warm i=6 seconds=0.0328149585002393 inner_n=2 timed_span_s=0.065630
+sample protocol=fair workload=traj-100k op=selected tool=ase.db cache=warm i=7 seconds=0.03257230699819047 inner_n=2 timed_span_s=0.065145
+sample protocol=fair workload=traj-100k op=selected tool=ase.db cache=warm i=8 seconds=0.03214626149929245 inner_n=2 timed_span_s=0.064293
+sample protocol=fair workload=traj-100k op=selected tool=ase.db cache=warm i=9 seconds=0.03352244049892761 inner_n=2 timed_span_s=0.067045
+sample protocol=fair workload=traj-100k op=selected tool=ase.db cache=warm i=10 seconds=0.03325461450003786 inner_n=2 timed_span_s=0.066509
+sample protocol=fair workload=traj-100k op=selected tool=ase.db cache=warm i=11 seconds=0.03148155850067269 inner_n=2 timed_span_s=0.062963
+warmup protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm i=0 seconds=0.0024182803806200226 inner_n=21 timed_span_s=0.050784
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm i=1 seconds=0.002418817571153687 inner_n=21 timed_span_s=0.050795
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm i=2 seconds=0.0024125366662268617 inner_n=21 timed_span_s=0.050663
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm i=3 seconds=0.0024600390949802075 inner_n=21 timed_span_s=0.051661
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm i=4 seconds=0.002413601047010161 inner_n=21 timed_span_s=0.050686
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm i=5 seconds=0.002509343950077891 inner_n=20 timed_span_s=0.050187
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm i=6 seconds=0.0024200512863379636 inner_n=21 timed_span_s=0.050821
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm i=7 seconds=0.0024138989046193836 inner_n=21 timed_span_s=0.050692
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm i=8 seconds=0.0024310072382961933 inner_n=21 timed_span_s=0.051051
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm i=9 seconds=0.0024041246184164527 inner_n=21 timed_span_s=0.050487
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm i=10 seconds=0.0024083788562815505 inner_n=21 timed_span_s=0.050576
+sample protocol=fair workload=traj-100k op=selected tool=readcon-db cache=warm i=11 seconds=0.002485965619035553 inner_n=21 timed_span_s=0.052205
+warmup protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm i=0 seconds=0.061124694999307394 inner_n=1 timed_span_s=0.061125
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm i=1 seconds=0.062264606000098865 inner_n=1 timed_span_s=0.062265
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm i=2 seconds=0.060154833998240065 inner_n=1 timed_span_s=0.060155
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm i=3 seconds=0.08168837599805556 inner_n=1 timed_span_s=0.081688
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm i=4 seconds=0.059306969997123815 inner_n=1 timed_span_s=0.059307
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm i=5 seconds=0.06180369700450683 inner_n=1 timed_span_s=0.061804
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm i=6 seconds=0.06133919599960791 inner_n=1 timed_span_s=0.061339
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm i=7 seconds=0.06316142000287073 inner_n=1 timed_span_s=0.063161
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm i=8 seconds=0.08294437499716878 inner_n=1 timed_span_s=0.082944
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm i=9 seconds=0.059610463002172764 inner_n=1 timed_span_s=0.059610
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm i=10 seconds=0.06185029300104361 inner_n=1 timed_span_s=0.061850
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm i=11 seconds=0.06237647699890658 inner_n=1 timed_span_s=0.062376
+warmup protocol=fair workload=traj-100k op=range tool=ase.db cache=warm
+sample protocol=fair workload=traj-100k op=range tool=ase.db cache=warm i=0 seconds=0.5217648219986586 inner_n=1 timed_span_s=0.521765
+sample protocol=fair workload=traj-100k op=range tool=ase.db cache=warm i=1 seconds=0.5238013950001914 inner_n=1 timed_span_s=0.523801
+sample protocol=fair workload=traj-100k op=range tool=ase.db cache=warm i=2 seconds=0.5105248769978061 inner_n=1 timed_span_s=0.510525
+sample protocol=fair workload=traj-100k op=range tool=ase.db cache=warm i=3 seconds=0.49069736700039357 inner_n=1 timed_span_s=0.490697
+sample protocol=fair workload=traj-100k op=range tool=ase.db cache=warm i=4 seconds=0.49310116300330264 inner_n=1 timed_span_s=0.493101
+sample protocol=fair workload=traj-100k op=range tool=ase.db cache=warm i=5 seconds=0.5405867689987645 inner_n=1 timed_span_s=0.540587
+sample protocol=fair workload=traj-100k op=range tool=ase.db cache=warm i=6 seconds=0.4675047210039338 inner_n=1 timed_span_s=0.467505
+sample protocol=fair workload=traj-100k op=range tool=ase.db cache=warm i=7 seconds=0.46646681299898773 inner_n=1 timed_span_s=0.466467
+sample protocol=fair workload=traj-100k op=range tool=ase.db cache=warm i=8 seconds=0.49593954300507903 inner_n=1 timed_span_s=0.495940
+sample protocol=fair workload=traj-100k op=range tool=ase.db cache=warm i=9 seconds=0.49145858499832684 inner_n=1 timed_span_s=0.491459
+sample protocol=fair workload=traj-100k op=range tool=ase.db cache=warm i=10 seconds=0.4931700790039031 inner_n=1 timed_span_s=0.493170
+sample protocol=fair workload=traj-100k op=range tool=ase.db cache=warm i=11 seconds=0.4875823250040412 inner_n=1 timed_span_s=0.487582
+warmup protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm i=0 seconds=0.06609869000385515 inner_n=1 timed_span_s=0.066099
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm i=1 seconds=0.06510394100041594 inner_n=1 timed_span_s=0.065104
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm i=2 seconds=0.06359434799378505 inner_n=1 timed_span_s=0.063594
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm i=3 seconds=0.0849467200023355 inner_n=1 timed_span_s=0.084947
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm i=4 seconds=0.06061223400320159 inner_n=1 timed_span_s=0.060612
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm i=5 seconds=0.06527426200045738 inner_n=1 timed_span_s=0.065274
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm i=6 seconds=0.06385034799313871 inner_n=1 timed_span_s=0.063850
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm i=7 seconds=0.06322098100645235 inner_n=1 timed_span_s=0.063221
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm i=8 seconds=0.0859217660035938 inner_n=1 timed_span_s=0.085922
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm i=9 seconds=0.06100192300073104 inner_n=1 timed_span_s=0.061002
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm i=10 seconds=0.06405595500109484 inner_n=1 timed_span_s=0.064056
+sample protocol=fair workload=traj-100k op=range tool=readcon-db cache=warm i=11 seconds=0.0668180200009374 inner_n=1 timed_span_s=0.066818
+warmup protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm i=0 seconds=2.40382612749087e-06 inner_n=20801 timed_span_s=0.050002
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm i=1 seconds=2.4218570231498377e-06 inner_n=20646 timed_span_s=0.050002
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm i=2 seconds=2.3942551028236147e-06 inner_n=20884 timed_span_s=0.050002
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm i=3 seconds=2.4066069182740718e-06 inner_n=20777 timed_span_s=0.050002
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm i=4 seconds=2.408871391643022e-06 inner_n=20757 timed_span_s=0.050001
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm i=5 seconds=2.3938544730864477e-06 inner_n=20887 timed_span_s=0.050000
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm i=6 seconds=2.4006564323002495e-06 inner_n=20828 timed_span_s=0.050001
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm i=7 seconds=2.3938002134707852e-06 inner_n=20888 timed_span_s=0.050002
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm i=8 seconds=2.3873093920997968e-06 inner_n=20945 timed_span_s=0.050002
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm i=9 seconds=2.4110615806648616e-06 inner_n=20738 timed_span_s=0.050001
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm i=10 seconds=2.389740192655131e-06 inner_n=20923 timed_span_s=0.050001
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm i=11 seconds=2.4209109091255757e-06 inner_n=20654 timed_span_s=0.050001
+warmup protocol=fair workload=traj-100k op=metadata tool=ase.db cache=warm
+sample protocol=fair workload=traj-100k op=metadata tool=ase.db cache=warm i=0 seconds=0.06709019000118133 inner_n=1 timed_span_s=0.067090
+sample protocol=fair workload=traj-100k op=metadata tool=ase.db cache=warm i=1 seconds=0.06390323999949032 inner_n=1 timed_span_s=0.063903
+sample protocol=fair workload=traj-100k op=metadata tool=ase.db cache=warm i=2 seconds=0.06333896899741376 inner_n=1 timed_span_s=0.063339
+sample protocol=fair workload=traj-100k op=metadata tool=ase.db cache=warm i=3 seconds=0.06280950200016377 inner_n=1 timed_span_s=0.062810
+sample protocol=fair workload=traj-100k op=metadata tool=ase.db cache=warm i=4 seconds=0.06247915000130888 inner_n=1 timed_span_s=0.062479
+sample protocol=fair workload=traj-100k op=metadata tool=ase.db cache=warm i=5 seconds=0.06270310700347181 inner_n=1 timed_span_s=0.062703
+sample protocol=fair workload=traj-100k op=metadata tool=ase.db cache=warm i=6 seconds=0.06262313899787841 inner_n=1 timed_span_s=0.062623
+sample protocol=fair workload=traj-100k op=metadata tool=ase.db cache=warm i=7 seconds=0.0677648529963335 inner_n=1 timed_span_s=0.067765
+sample protocol=fair workload=traj-100k op=metadata tool=ase.db cache=warm i=8 seconds=0.06363577400043141 inner_n=1 timed_span_s=0.063636
+sample protocol=fair workload=traj-100k op=metadata tool=ase.db cache=warm i=9 seconds=0.06251037999754772 inner_n=1 timed_span_s=0.062510
+sample protocol=fair workload=traj-100k op=metadata tool=ase.db cache=warm i=10 seconds=0.06297186199662974 inner_n=1 timed_span_s=0.062972
+sample protocol=fair workload=traj-100k op=metadata tool=ase.db cache=warm i=11 seconds=0.06284488800156396 inner_n=1 timed_span_s=0.062845
+warmup protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm i=0 seconds=2.3965081525189828e-06 inner_n=20864 timed_span_s=0.050001
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm i=1 seconds=2.4074753935483266e-06 inner_n=20769 timed_span_s=0.050001
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm i=2 seconds=2.399009492690074e-06 inner_n=20842 timed_span_s=0.050000
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm i=3 seconds=2.4211519274846595e-06 inner_n=20652 timed_span_s=0.050002
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm i=4 seconds=2.42693537256034e-06 inner_n=20603 timed_span_s=0.050002
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm i=5 seconds=2.451477017688157e-06 inner_n=20396 timed_span_s=0.050000
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm i=6 seconds=2.4773675179952624e-06 inner_n=20183 timed_span_s=0.050001
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm i=7 seconds=2.4167447595335714e-06 inner_n=20689 timed_span_s=0.050000
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm i=8 seconds=2.433783972598354e-06 inner_n=20545 timed_span_s=0.050002
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm i=9 seconds=2.423059042991278e-06 inner_n=20636 timed_span_s=0.050002
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm i=10 seconds=2.4140624284999485e-06 inner_n=20712 timed_span_s=0.050000
+sample protocol=fair workload=traj-100k op=metadata tool=readcon-db cache=warm i=11 seconds=2.399398723100207e-06 inner_n=20839 timed_span_s=0.050001
+exit_code 0
