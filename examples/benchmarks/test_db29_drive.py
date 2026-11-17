@@ -121,3 +121,11 @@ def test_state_is_scoped_by_out_n_and_core(tmp_path, monkeypatch) -> None:
     fresh = drv.load_state(path_6, scope_6)
     assert fresh["reads"] == {}
     assert fresh["policy"] == {}
+
+
+def test_release_env_n_must_be_integer(monkeypatch) -> None:
+    monkeypatch.setenv("READCON_RERUN_RELEASE", "1")
+    monkeypatch.setenv("READCON_DB29_N", "oops")
+    monkeypatch.setattr("sys.argv", ["db29_drive.py"])
+    with pytest.raises(SystemExit, match="READCON_DB29_N must be an integer"):
+        drv.main()
