@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -406,6 +407,31 @@ def test_pushed_branch_is_accepted(tmp_path: Path, monkeypatch) -> None:
     assert rerun.core_sha_is_pushed(feature)
 
 
+def test_missing_remote_tip_reports_the_actual_cause(tmp_path: Path) -> None:
+    """Reachability cannot be checked until a newly advertised tip is local."""
+    import rerun_release as rerun
+
+    bare, core, main_sha = _bare_and_clone(tmp_path)
+    publisher = tmp_path / "publisher"
+    cloned = _git(tmp_path, "clone", str(bare), str(publisher))
+    assert cloned.returncode == 0, cloned.stderr
+    assert _git(publisher, "checkout", "-b", "feature").returncode == 0
+    (publisher / "readme").write_text("remote-only-tip\n")
+    assert _git(publisher, "add", "readme").returncode == 0
+    assert _git(publisher, "commit", "-m", "remote only tip").returncode == 0
+    assert _git(publisher, "push", "origin", "feature").returncode == 0
+    assert _git(bare, "symbolic-ref", "HEAD", "refs/heads/feature").returncode == 0
+    deleted = _git(publisher, "push", "origin", "--delete", "main")
+    assert deleted.returncode == 0, deleted.stderr
+
+    with pytest.raises(SystemExit) as caught:
+        rerun.core_sha_is_pushed(main_sha, core)
+    message = str(caught.value)
+    assert "remote origin tip" in message
+    assert "is not present in the local checkout" in message
+    assert "not a crates.io release or a pushed commit" not in message
+
+
 def test_commit_reachable_only_from_pushed_tag_is_accepted(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -431,6 +457,67 @@ def test_commit_reachable_only_from_pushed_tag_is_accepted(
     monkeypatch.setattr(rerun, "REPO", tmp_path / "work")
     monkeypatch.setattr(rerun, "CORE_GIT", str(bare))
     assert rerun.core_sha_is_pushed(ancestor_sha)
+
+
+def test_cached_checkout_prunes_a_deleted_remote_branch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A stale remote-tracking branch must not make a deleted ref look pushed."""
+    import rerun_release as rerun
+
+    bare, core, _main_sha = _bare_and_clone(tmp_path)
+    assert _git(core, "checkout", "-b", "feature").returncode == 0
+    (core / "readme").write_text("feature\n")
+    assert _git(core, "add", "readme").returncode == 0
+    assert _git(core, "commit", "-m", "feature").returncode == 0
+    feature = _git(core, "rev-parse", "HEAD").stdout.strip()
+    assert _git(core, "push", "origin", "feature").returncode == 0
+
+    monkeypatch.setattr(rerun, "REPO", tmp_path / "work")
+    monkeypatch.setattr(rerun, "CORE_GIT", str(bare))
+    assert rerun.core_sha_is_pushed(feature)
+    cached = rerun.REPO / "build" / "readcon-core-git"
+    assert (
+        _git(cached, "show-ref", "--verify", "refs/remotes/origin/feature").returncode
+        == 0
+    )
+
+    deleted = _git(core, "push", "origin", "--delete", "feature")
+    assert deleted.returncode == 0, deleted.stderr
+    assert not rerun.core_sha_is_pushed(feature)
+    assert (
+        _git(cached, "show-ref", "--verify", "refs/remotes/origin/feature").returncode
+        != 0
+    )
+
+
+def test_cached_checkout_refreshes_missing_remote_tag_refs(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Caches made before remote tag tracking was added are repaired."""
+    import rerun_release as rerun
+
+    bare, core, _main_sha = _bare_and_clone(tmp_path)
+    assert _git(core, "checkout", "--detach").returncode == 0
+    (core / "readme").write_text("tagged\n")
+    assert _git(core, "add", "readme").returncode == 0
+    assert _git(core, "commit", "-m", "tagged").returncode == 0
+    tagged = _git(core, "rev-parse", "HEAD").stdout.strip()
+    assert _git(core, "tag", "v0.23.9", tagged).returncode == 0
+    assert _git(core, "push", "origin", "v0.23.9").returncode == 0
+
+    monkeypatch.setattr(rerun, "REPO", tmp_path / "work")
+    monkeypatch.setattr(rerun, "CORE_GIT", str(bare))
+    cached = rerun.core_checkout()
+    removed = _git(cached, "update-ref", "-d", "refs/remotes/origin/tags/v0.23.9")
+    assert removed.returncode == 0, removed.stderr
+    assert (
+        _git(
+            cached, "show-ref", "--verify", "refs/remotes/origin/tags/v0.23.9"
+        ).returncode
+        != 0
+    )
+    assert rerun.core_sha_is_pushed(tagged)
 
 
 def test_no_remotes_is_refused(tmp_path: Path) -> None:
@@ -792,6 +879,41 @@ def test_export_preflight_refuses_last_step_without_writing_anything(
         "keep.txt"
     ]
     assert sentinel.read_text() == "stay\n"
+
+
+def test_export_preflight_refuses_a_duplicate_copy_target_before_writing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import rerun_release as rerun
+
+    root = tmp_path / "out"
+    rerun.write_synthetic(root, _synthetic_prov(), 6)
+    first = replace(rerun.STEPS[0], supersedes=())
+    duplicate = replace(first, script="examples/benchmarks/duplicate.py")
+    monkeypatch.setattr(rerun, "STEPS", (first, duplicate))
+    export = tmp_path / "export"
+
+    with pytest.raises(SystemExit, match=r"would be written twice"):
+        rerun.export_records(root, export, "a" * 40)
+    assert not export.exists()
+
+
+def test_export_preflight_refuses_a_duplicate_note_target_before_writing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import rerun_release as rerun
+
+    root = tmp_path / "out"
+    rerun.write_synthetic(root, _synthetic_prov(), 6)
+    shared = ("db30/shared",)
+    first = replace(rerun.STEPS[0], supersedes=shared)
+    second = replace(rerun.STEPS[1], supersedes=shared)
+    monkeypatch.setattr(rerun, "STEPS", (first, second))
+    export = tmp_path / "export"
+
+    with pytest.raises(SystemExit, match=r"db30/shared/SUPERSEDED\.md.*twice"):
+        rerun.export_records(root, export, "a" * 40)
+    assert not export.exists()
 
 
 def test_dirty_tree_names_files_inside_untracked_directories(tmp_path: Path) -> None:

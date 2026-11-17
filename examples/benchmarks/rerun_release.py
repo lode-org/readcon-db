@@ -626,17 +626,27 @@ def _remote_contains(checkout: Path, sha: str) -> bool:
         return False
     target = sha.strip().lower()
     has_target = _object_exists(checkout, target)
+    missing_tips: list[tuple[str, str]] = []
     for remote in remotes:
         refs = _ls_remote_refs(checkout, remote)
         for tip in set(refs.values()):
             if tip == target:
                 return True
-            if has_target and _object_exists(checkout, tip):
-                ancestor = _git_lines(
-                    checkout, "merge-base", "--is-ancestor", target, tip
-                )
-                if ancestor.returncode == 0:
-                    return True
+            if not has_target:
+                continue
+            if not _object_exists(checkout, tip):
+                missing_tips.append((remote, tip))
+                continue
+            ancestor = _git_lines(checkout, "merge-base", "--is-ancestor", target, tip)
+            if ancestor.returncode == 0:
+                return True
+    if missing_tips:
+        remote, tip = missing_tips[0]
+        raise SystemExit(
+            "refusing to export: could not verify the readcon-core pin because "
+            f"remote {remote} tip {tip} is not present in the local checkout; "
+            f"fetch {remote} and retry"
+        )
     return False
 
 
@@ -681,6 +691,7 @@ def core_checkout() -> Path:
             "--quiet",
             "--no-tags",
             "--prune",
+            "--prune-tags",
             "origin",
             "+refs/heads/*:refs/remotes/origin/*",
             "+refs/tags/*:refs/remotes/origin/tags/*",
@@ -701,17 +712,20 @@ def core_sha_is_pushed(sha: str, repo: Path | None = None) -> bool:
     """True when ``sha`` is on a remote branch or remote tag of readcon-core.
 
     When ``repo`` is given, its configured remotes are queried directly via
-    ``git ls-remote``. Otherwise, a commit already in the local checkout is
-    judged from fetched remote-tracking refs under ``refs/remotes/*`` without
-    hitting the network; fetching is only for a sha the checkout does not have
-    yet, and a fetch or clone failure is a clean refusal.
+    ``git ls-remote``. Otherwise, the cached checkout is refreshed before its
+    remote-tracking branch and tag refs are trusted. A fetch or clone failure
+    is a clean refusal.
     """
     if repo is not None:
         return _remote_contains(repo, sha)
     dest = REPO / "build" / "readcon-core-git"
-    if (dest / ".git").exists() and _object_exists(dest, sha):
-        return _remote_tracking_contains(dest, sha)
-    core_checkout()
+    cached = (dest / ".git").exists()
+    try:
+        core_checkout()
+    except SystemExit:
+        if cached and _object_exists(dest, sha):
+            return False
+        raise
     return _remote_tracking_contains(dest, sha)
 
 

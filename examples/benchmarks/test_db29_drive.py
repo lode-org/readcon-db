@@ -141,6 +141,26 @@ def test_load_state_rejects_a_mismatched_scope(tmp_path, monkeypatch) -> None:
         drv.load_state(path, scope)
 
 
+def test_save_state_preserves_the_exact_scope_stamp(tmp_path) -> None:
+    path = tmp_path / "state.json"
+    scope = {
+        "out": str((tmp_path / "out").resolve()),
+        "n": 12,
+        "readcon_core": "c" * 40,
+    }
+    state = {
+        "out": "stale",
+        "n": 6,
+        "readcon_core": "d" * 40,
+        "commit": "a" * 40,
+    }
+
+    drv.save_state(state, path, scope)
+
+    saved = json.loads(path.read_text())
+    assert {key: saved[key] for key in scope} == scope
+
+
 def test_state_is_scoped_by_out_n_and_core(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(drv, "REPO", tmp_path)
     monkeypatch.setattr(drv, "_readcon_core_lock_identity", lambda: "c" * 40)
