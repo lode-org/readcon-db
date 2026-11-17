@@ -88,9 +88,6 @@ EXPORT_NAMES = (
 )
 SHA1 = 40
 CORE_GIT = "https://github.com/lode-org/readcon-core.git"
-GEN_VERSION_MAP_BUILD_KEYS = ("readcon_core", "readcon_sha", "rustc", "python")
-# host_text() keys in readcon-core commit 27df3974a8038f567e0d21ae25f404ce32534a7d.
-GEN_VERSION_MAP_HOST_KEYS = ("family", "model", "mhz", "nproc")
 
 
 @dataclass(frozen=True)
@@ -822,8 +819,6 @@ def stamp(record_path: Path, prov: dict[str, object], source: str) -> None:
             "host": prov["host"],
         }
     )
-    for key in GEN_VERSION_MAP_HOST_KEYS:
-        previous[key] = prov["host"][key]
     previous.update(prov["host"])
     beside.write_text(json.dumps(previous, indent=2) + "\n")
 

@@ -704,6 +704,42 @@ def test_run_command_relativizes_repo_paths(tmp_path: Path) -> None:
     assert "/usr/bin/python3" in body
 
 
+def test_stamp_flattens_host_without_the_unused_key_list(tmp_path: Path) -> None:
+    import rerun_release as rerun
+
+    assert not hasattr(rerun, "GEN_VERSION_MAP_BUILD_KEYS")
+    assert not hasattr(rerun, "GEN_VERSION_MAP_HOST_KEYS")
+    record = tmp_path / "ab.json"
+    record.write_text("{}\n")
+    host = {
+        "cpu": "x",
+        "ncpu": 1,
+        "cpuinfo_mhz": 1.0,
+        "kernel": "k",
+        "family": "6",
+        "model": "85",
+        "mhz": 1.0,
+        "nproc": 1,
+    }
+    prov = {
+        "commit": "a" * 40,
+        "tree": "b" * 40,
+        "readcon_core": "0.23.2",
+        "readcon_sha": "c" * 40,
+        "rustc": "rustc 1.88.0",
+        "python": "Python 3.12.0",
+        "allocator": "system",
+        "host": host,
+    }
+    rerun.stamp(record, prov, "examples/benchmarks/db24_drive.py")
+    beside = json.loads((tmp_path / "host.json").read_text())
+    assert beside["model"] == "85"
+    assert beside["family"] == "6"
+    assert beside["mhz"] == 1.0
+    assert beside["nproc"] == 1
+    assert beside["host"]["model"] == "85"
+
+
 def test_cpu_model_key_is_not_model_name() -> None:
     import rerun_release as rerun
 
