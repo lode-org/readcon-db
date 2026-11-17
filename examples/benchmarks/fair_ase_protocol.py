@@ -1394,27 +1394,58 @@ def _symbol_runs(symbols: list[str]) -> list[tuple[str, int]]:
     return runs
 
 
-def _fixed_mask(atoms) -> np.ndarray:
-    """Per-axis fixed flags ASE stored on the row.
+def _scaled_to_cartesian(scaled_mask, cell) -> np.ndarray:
+    """Cartesian axes fixed by a ``FixScaled`` mask on this cell.
 
-    ``FixAtoms`` fixes every axis. ``FixCartesian`` fixes the axes in its
-    mask. Anything else is left unset: this reader does not invent flags.
+    A fixed scaled axis is the cartesian axis its cell vector lies on.
+    A cell vector with more than one nonzero component is not a cartesian
+    flag, so this raises instead of storing the scaled mask as cartesian.
+    """
+    matrix = np.asarray(cell, dtype=np.float64).reshape(3, 3)
+    scaled = np.asarray(scaled_mask, dtype=bool).reshape(3)
+    cartesian = np.zeros(3, dtype=bool)
+    for axis, fixed in enumerate(scaled):
+        if not fixed:
+            continue
+        vector = matrix[axis]
+        scale = float(np.max(np.abs(vector)))
+        if scale == 0.0:
+            raise ValueError("FixScaled axis has a zero cell vector")
+        nonzero = np.abs(vector) > scale * 1e-8
+        if int(np.count_nonzero(nonzero)) != 1:
+            raise ValueError("FixScaled is not a single cartesian axis on this cell")
+        cartesian[int(np.flatnonzero(nonzero)[0])] = True
+    return cartesian
+
+
+def _fixed_mask(atoms) -> np.ndarray:
+    """Per-axis cartesian fixed flags ASE stored on the row.
+
+    ``FixAtoms`` fixes every cartesian axis. ``FixCartesian`` fixes the
+    axes in its mask. ``FixScaled`` is converted through the cell.
+    ``FixBondLengths`` and any other constraint are left unset: the class
+    is checked before any attribute those classes do not have.
     """
     mask = np.zeros((len(atoms), 3), dtype=np.uint8)
     for constraint in atoms.constraints:
-        indices = np.asarray(constraint.index, dtype=np.int64).reshape(-1)
-        if indices.size == 0:
+        name = constraint.__class__.__name__
+        if name == "FixAtoms":
+            indices = np.asarray(constraint.index, dtype=np.int64).reshape(-1)
+            if indices.size:
+                mask[indices] = 1
             continue
-        if constraint.__class__.__name__ == "FixAtoms":
-            mask[indices] = 1
+        if name == "FixCartesian":
+            indices = np.asarray(constraint.index, dtype=np.int64).reshape(-1)
+            flags = np.asarray(constraint.mask, dtype=bool).reshape(-1)
+            if indices.size and flags.size == 3:
+                mask[np.ix_(indices, np.flatnonzero(flags))] = 1
             continue
-        bits = getattr(constraint, "mask", None)
-        if bits is None:
+        if name == "FixScaled":
+            indices = np.asarray(constraint.index, dtype=np.int64).reshape(-1)
+            cartesian = _scaled_to_cartesian(constraint.mask, atoms.cell.array)
+            if indices.size:
+                mask[np.ix_(indices, np.flatnonzero(cartesian))] = 1
             continue
-        flags = np.asarray(bits, dtype=bool).reshape(-1)
-        if flags.size != 3:
-            continue
-        mask[np.ix_(indices, np.flatnonzero(flags))] = 1
     return mask
 
 
@@ -2507,6 +2538,38 @@ def workloads_for(mode: str) -> list[dict]:
     return [paper] + atoms + frames
 
 
+def collect_frames100_noise(fair_rows: list[dict]) -> dict:
+    """frames-100 selected cold noise, one entry per tool, cache, and thread.
+
+    The key includes ``rayon_num_threads``. The unset readcon-db row used
+    to overwrite the one-thread row, because both were ``readcon-db:cold``.
+    """
+    noise = {}
+    for row in fair_rows:
+        if (
+            row["workload"] == "frames-100"
+            and row["op"] == "selected"
+            and row["cache"] in ("cold", "cold-open")
+        ):
+            samples = row["samples_s"]
+            rayon = row.get("rayon_num_threads", "unset")
+            noise[f"{row['tool']}:{row['cache']}:rayon={rayon}"] = {
+                "n": row["n"],
+                "median_s": row["median_s"],
+                "p90_s": float(
+                    np.percentile(
+                        np.asarray(samples, dtype=np.float64), 90, method="linear"
+                    )
+                ),
+                "iqr_s": row["iqr_s"],
+                "iqr_over_median": (row["iqr_s"] / row["median_s"])
+                if row["median_s"]
+                else None,
+                "samples_s": samples,
+            }
+    return noise
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument(
@@ -2575,33 +2638,7 @@ def main() -> None:
         "host": drive.host_facts(),
     }
     (args.out / "campaign.json").write_text(json.dumps(payload, indent=2) + "\n")
-    noise = {}
-    for row in fair_rows:
-        if (
-            row["workload"] == "frames-100"
-            and row["op"] == "selected"
-            and row["op"] in ("selected", "full_read")
-            and row["cache"]
-            in (
-                "cold",
-                "cold-open",
-            )
-        ):
-            samples = row["samples_s"]
-            noise[f"{row['tool']}:{row['cache']}"] = {
-                "n": row["n"],
-                "median_s": row["median_s"],
-                "p90_s": float(
-                    np.percentile(
-                        np.asarray(samples, dtype=np.float64), 90, method="linear"
-                    )
-                ),
-                "iqr_s": row["iqr_s"],
-                "iqr_over_median": (row["iqr_s"] / row["median_s"])
-                if row["median_s"]
-                else None,
-                "samples_s": samples,
-            }
+    noise = collect_frames100_noise(fair_rows)
     if noise:
         (args.out / "noise.json").write_text(json.dumps(noise, indent=2) + "\n")
     write_markdown(args.out / "RESULTS.md", published, paper_local, fair_rows)
