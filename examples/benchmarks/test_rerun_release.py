@@ -461,3 +461,40 @@ def test_export_includes_ab_sidecar_files() -> None:
         "high_byte.json",
     ):
         assert name in rerun.EXPORT_NAMES
+
+
+def test_clean_check_tracks_all_untracked_files() -> None:
+    import rerun_release as rerun
+
+    text = Path(rerun.__file__).read_text()
+    assert 'git("status", "--porcelain", "--untracked-files=all")' in text
+
+
+def test_run_command_relativizes_repo_paths(tmp_path: Path) -> None:
+    import rerun_release as rerun
+
+    log = tmp_path / "raw.log"
+    out = tmp_path / "out"
+    out.mkdir(parents=True)
+    rerun.run_command(
+        [
+            sys.executable,
+            "-c",
+            "print('ok')",
+            str(rerun.REPO / "examples" / "benchmarks" / "rerun_release.py"),
+            str(out / "x"),
+        ],
+        os.environ.copy(),
+        log,
+        out,
+    )
+    body = log.read_text()
+    assert "/agent/" not in body
+    assert str((out / "x").resolve()) not in body
+
+
+def test_configured_toolchain_prefers_rustup_env(monkeypatch) -> None:
+    import rerun_release as rerun
+
+    monkeypatch.setenv("RUSTUP_TOOLCHAIN", "1.88.0")
+    assert rerun.configured_toolchain() == "1.88.0"

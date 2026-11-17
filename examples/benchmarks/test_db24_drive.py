@@ -18,3 +18,8 @@ def test_parse_out_accepts_absolute_path(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("sys.argv", ["db24_drive.py", "--out", str(outside)])
     parsed = drv.parse_out(drv.BENCH)
     assert parsed == outside
+
+
+def test_main_keeps_bench_mkdir_exist_ok_guard() -> None:
+    text = Path(drv.__file__).read_text()
+    assert "BENCH.mkdir(parents=True, exist_ok=True)" in text
