@@ -11,6 +11,9 @@ the arm order. A second block repeats the warm rows with
 The db18 arm is the library at ``06ffcbd`` (the db18 record; that commit
 only adds the bench files on top of ``9dcc9ce``). The raw and shuffle arms
 are this tree. Both prefixes are built under ``build/wheels``.
+
+``READCON_DB24_N`` is the sample count, default 12. n must be at least 12
+only for a rerun or release (``READCON_RERUN_RELEASE=1``).
 """
 
 import argparse
@@ -47,15 +50,23 @@ BOOT_SAMPLES = 10_000
 BOOT_SEED = 0
 
 
-def _env_int(name: str, default: int) -> int:
-    raw = os.environ.get(name, str(default))
+N = 12
+
+
+def sample_count() -> int:
+    """Read ``READCON_DB24_N`` when a run starts, not at import.
+
+    A rerun or release (``READCON_RERUN_RELEASE=1``) needs n >= 12. Any
+    other run keeps the value, including one below 12.
+    """
+    raw = os.environ.get("READCON_DB24_N", str(N))
     try:
-        return int(raw)
+        n = int(raw)
     except ValueError as exc:
-        raise SystemExit(f"{name} must be an integer, not {raw!r}") from exc
-
-
-N = _env_int("READCON_DB24_N", 12)
+        raise SystemExit(f"READCON_DB24_N must be an integer, not {raw!r}") from exc
+    if os.environ.get("READCON_RERUN_RELEASE") == "1" and n < 12:
+        raise SystemExit(f"n must be at least 12 for a rerun or release, not {n}")
+    return n
 
 
 def bench_disk() -> Path:
@@ -569,7 +580,13 @@ def parse_out(default: Path) -> Path:
         shown = default.relative_to(REPO)
     except ValueError:
         shown = default
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(
+        description=(
+            "Fair traj-100k A/B. READCON_DB24_N is the sample count "
+            "(default 12). n must be at least 12 only for a rerun or release "
+            "(READCON_RERUN_RELEASE=1)."
+        )
+    )
     ap.add_argument("--out", type=Path, default=shown)
     out = ap.parse_args().out
     return out if out.is_absolute() else REPO / out
@@ -789,11 +806,9 @@ def write_results(record: dict, levers: dict) -> None:
 
 
 def main() -> None:
-    global BENCH
+    global BENCH, N
     BENCH = parse_out(BENCH)
-    floor = 6 if os.environ.get("READCON_RERUN_RELEASE") == "1" else 12
-    if N < floor:
-        raise SystemExit(f"n must be at least {floor}, not {N}")
+    N = sample_count()
     require_pushed_commit()
     scratch_tmp = REPO / "build" / "tmp"
     scratch_tmp.mkdir(parents=True, exist_ok=True)
