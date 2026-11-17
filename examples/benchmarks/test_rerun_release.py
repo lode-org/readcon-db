@@ -387,7 +387,18 @@ def test_local_tag_only_is_refused(tmp_path: Path, monkeypatch) -> None:
     dest_sha = _git(dest, "rev-parse", "HEAD").stdout.strip()
     assert _git(dest, "tag", "local-only", dest_sha).returncode == 0
     assert not rerun.core_sha_is_pushed(dest_sha)
-    assert _git(dest, "show-ref", "--verify", "refs/tags/local-only").returncode == 0
+    captured: dict[str, object] = {}
+
+    def _capture_fetch(argv: list[str], env: dict[str, str]) -> int:
+        captured["argv"] = list(argv)
+        return 0
+
+    monkeypatch.setattr(rerun.subprocess, "check_call", _capture_fetch)
+    assert rerun.core_checkout() == dest
+    argv = captured.get("argv")
+    assert isinstance(argv, list)
+    assert "--prune" in argv
+    assert "--prune-tags" not in argv
 
 
 def test_pushed_branch_is_accepted(tmp_path: Path, monkeypatch) -> None:
@@ -431,6 +442,52 @@ def test_missing_remote_tip_reports_the_actual_cause(tmp_path: Path) -> None:
     assert "remote origin tip" in message
     assert "is not present in the local checkout" in message
     assert "not a crates.io release or a pushed commit" not in message
+
+
+def test_missing_tip_order_is_stable_even_without_target(monkeypatch) -> None:
+    """Without the target locally, missing tips are still checked in sorted order."""
+    import rerun_release as rerun
+
+    checkout = Path("/tmp/nonexistent-checkout")
+    target = "f" * 40
+    up_a = "a" * 40
+    up_b = "b" * 40
+    or_c = "c" * 40
+    or_d = "d" * 40
+    checked: list[str] = []
+
+    monkeypatch.setattr(
+        rerun, "_configured_remotes", lambda _checkout: ["upstream", "origin"]
+    )
+    monkeypatch.setattr(
+        rerun,
+        "_ls_remote_refs",
+        lambda _checkout, remote: (
+            {
+                "refs/heads/zz": up_b,
+                "refs/tags/v1": up_a,
+                "refs/heads/dup": up_b,
+            }
+            if remote == "upstream"
+            else {
+                "refs/heads/y": or_d,
+                "refs/tags/v2": or_c,
+                "refs/heads/dup": or_d,
+            }
+        ),
+    )
+
+    def _missing(_checkout: Path, sha: str) -> bool:
+        if sha != target:
+            checked.append(sha)
+        return False
+
+    monkeypatch.setattr(rerun, "_object_exists", _missing)
+    with pytest.raises(SystemExit) as caught:
+        rerun._remote_contains(checkout, target)
+    message = str(caught.value)
+    assert checked == [up_a, up_b, or_c, or_d]
+    assert f"remote upstream tip {up_a}" in message
 
 
 def test_commit_reachable_only_from_pushed_tag_is_accepted(
