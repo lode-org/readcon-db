@@ -444,17 +444,35 @@ def test_missing_remote_tip_reports_the_actual_cause(tmp_path: Path) -> None:
     assert "not a crates.io release or a pushed commit" not in message
 
 
-def test_missing_tip_order_is_stable_even_without_target(monkeypatch) -> None:
-    """Without the target locally, missing tips are still checked in sorted order."""
+def test_missing_tip_order_is_stable_even_without_target(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Without the target locally, missing tips are checked in deterministic order."""
     import rerun_release as rerun
 
-    checkout = Path("/tmp/nonexistent-checkout")
-    target = "f" * 40
-    up_a = "a" * 40
-    up_b = "b" * 40
-    or_c = "c" * 40
-    or_d = "d" * 40
+    checkout = tmp_path / "nonexistent-checkout"
+    target = "a" * 40
+    upstream_tips = [
+        "e" * 40,
+        "1" * 40,
+        "d" * 40,
+        "2" * 40,
+        "c" * 40,
+        "3" * 40,
+        "b" * 40,
+        "4" * 40,
+        "f" * 40,
+        "5" * 40,
+    ]
+    origin_tips = [
+        "9" * 40,
+        "0" * 40,
+        "8" * 40,
+        "6" * 40,
+        "7" * 40,
+    ]
     checked: list[str] = []
+    expected_checked = sorted(set(upstream_tips)) + sorted(set(origin_tips))
 
     monkeypatch.setattr(
         rerun, "_configured_remotes", lambda _checkout: ["upstream", "origin"]
@@ -464,15 +482,26 @@ def test_missing_tip_order_is_stable_even_without_target(monkeypatch) -> None:
         "_ls_remote_refs",
         lambda _checkout, remote: (
             {
-                "refs/heads/zz": up_b,
-                "refs/tags/v1": up_a,
-                "refs/heads/dup": up_b,
+                "refs/heads/u-0": upstream_tips[0],
+                "refs/tags/u-1": upstream_tips[1],
+                "refs/heads/u-2": upstream_tips[2],
+                "refs/tags/u-3": upstream_tips[3],
+                "refs/heads/u-4": upstream_tips[4],
+                "refs/tags/u-5": upstream_tips[5],
+                "refs/heads/u-6": upstream_tips[6],
+                "refs/tags/u-7": upstream_tips[7],
+                "refs/heads/u-8": upstream_tips[8],
+                "refs/tags/u-9": upstream_tips[9],
+                "refs/tags/u-dup": upstream_tips[0],
             }
             if remote == "upstream"
             else {
-                "refs/heads/y": or_d,
-                "refs/tags/v2": or_c,
-                "refs/heads/dup": or_d,
+                "refs/heads/o-0": origin_tips[0],
+                "refs/tags/o-1": origin_tips[1],
+                "refs/heads/o-2": origin_tips[2],
+                "refs/tags/o-3": origin_tips[3],
+                "refs/heads/o-4": origin_tips[4],
+                "refs/tags/o-dup": origin_tips[0],
             }
         ),
     )
@@ -486,8 +515,12 @@ def test_missing_tip_order_is_stable_even_without_target(monkeypatch) -> None:
     with pytest.raises(SystemExit) as caught:
         rerun._remote_contains(checkout, target)
     message = str(caught.value)
-    assert checked == [up_a, up_b, or_c, or_d]
-    assert f"remote upstream tip {up_a}" in message
+    assert checked == expected_checked
+    assert message == (
+        "refusing to export: could not verify the readcon-core pin because "
+        f"remote upstream tip {expected_checked[0]} is not present in the local checkout; "
+        "fetch upstream and retry"
+    )
 
 
 def test_commit_reachable_only_from_pushed_tag_is_accepted(
