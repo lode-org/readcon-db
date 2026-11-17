@@ -1394,6 +1394,30 @@ def _symbol_runs(symbols: list[str]) -> list[tuple[str, int]]:
     return runs
 
 
+def _fixed_mask(atoms) -> np.ndarray:
+    """Per-axis fixed flags ASE stored on the row.
+
+    ``FixAtoms`` fixes every axis. ``FixCartesian`` fixes the axes in its
+    mask. Anything else is left unset: this reader does not invent flags.
+    """
+    mask = np.zeros((len(atoms), 3), dtype=np.uint8)
+    for constraint in atoms.constraints:
+        indices = np.asarray(constraint.index, dtype=np.int64).reshape(-1)
+        if indices.size == 0:
+            continue
+        if constraint.__class__.__name__ == "FixAtoms":
+            mask[indices] = 1
+            continue
+        bits = getattr(constraint, "mask", None)
+        if bits is None:
+            continue
+        flags = np.asarray(bits, dtype=bool).reshape(-1)
+        if flags.size != 3:
+            continue
+        mask[np.ix_(indices, np.flatnonzero(flags))] = 1
+    return mask
+
+
 def materialize_ase(rows) -> dict:
     """Same arrays `read_arrays` returns. Built inside the timed read."""
     positions = []
@@ -1415,7 +1439,7 @@ def materialize_ase(rows) -> dict:
         positions.append(np.array(atoms.positions, dtype=np.float64, copy=True))
         masses.append(np.array(atoms.get_masses(), dtype=np.float64, copy=True))
         numbers.append(np.array(atoms.get_atomic_numbers(), dtype=np.uint32, copy=True))
-        constraints.append(np.zeros((n, 3), dtype=np.uint8))
+        constraints.append(_fixed_mask(atoms))
         vel = atoms.get_velocities()
         if vel is None:
             velocities.append(np.zeros((n, 3), dtype=np.float64))
@@ -1426,8 +1450,9 @@ def materialize_ase(rows) -> dict:
             forces.append(None)
         else:
             forces.append(np.array(row.forces, dtype=np.float64, copy=True))
-        has_energy = row.energy is not None
-        energy.append(np.float64(row.energy if has_energy else 0.0))
+        stored_energy = getattr(row, "energy", None)
+        has_energy = stored_energy is not None
+        energy.append(np.float64(stored_energy if has_energy else 0.0))
         energy_set.append(has_energy)
         if "frame_index" in row.key_value_pairs:
             frame_index.append(np.float64(int(row.key_value_pairs["frame_index"])))
