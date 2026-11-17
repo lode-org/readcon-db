@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Rerun the readcon-db records copied into the CPC paper.
 
 The paper copies these records verbatim under ``paper/cpc/data/db30``,
@@ -60,7 +59,7 @@ import sys
 import tarfile
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -238,7 +237,7 @@ def refuse_existing(path: Path) -> None:
 
 
 def default_out(commit: str) -> Path:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     return REPO / "build" / "rerun" / commit / stamp
 
 
@@ -304,10 +303,7 @@ def command_line(step: Step, root: Path, n: int) -> str:
             f"n{count}.con" for count in LADDER
         )
         return f"{step.script} :: {prep} && " + " ".join(argv)
-    if step.how == "fair":
-        dest = work_dir(root, step)
-    else:
-        dest = root / step.paper
+    dest = work_dir(root, step) if step.how == "fair" else root / step.paper
     env = f"{step.sample_env}={n} READCON_RERUN_RELEASE=1"
     return f"{step.script} :: {env} " + " ".join(python_argv(step, dest))
 
@@ -563,7 +559,7 @@ def git_pin_source(sha: str) -> str:
 
 
 def ref_matches(version: str, sha: str, ref: str) -> bool:
-    if ref == version or ref == sha:
+    if ref in (version, sha):
         return True
     return bool(
         7 <= len(ref) < SHA1
@@ -636,8 +632,10 @@ def _remote_contains(checkout: Path, sha: str) -> bool:
             if tip == target:
                 return True
             if has_target and _object_exists(checkout, tip):
-                anc = _git_lines(checkout, "merge-base", "--is-ancestor", target, tip)
-                if anc.returncode == 0:
+                ancestor = _git_lines(
+                    checkout, "merge-base", "--is-ancestor", target, tip
+                )
+                if ancestor.returncode == 0:
                     return True
     return False
 

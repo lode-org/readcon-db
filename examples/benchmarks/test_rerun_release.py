@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -362,7 +363,9 @@ def test_local_tag_only_is_refused(tmp_path: Path, monkeypatch) -> None:
     local_sha = _git(core, "rev-parse", "HEAD").stdout.strip()
     assert _git(core, "tag", "v0.23.9-local", local_sha).returncode == 0
     assert not rerun.core_sha_is_pushed(local_sha, core)
-    with pytest.raises(SystemExit, match="not a crates.io release or a pushed commit"):
+    with pytest.raises(
+        SystemExit, match=r"not a crates\.io release or a pushed commit"
+    ):
         rerun.require_exportable_core(
             {
                 "name": "readcon-core",
@@ -444,7 +447,9 @@ def test_no_remotes_is_refused(tmp_path: Path) -> None:
     assert _git(core, "tag", "v0.23.9", sha).returncode == 0
     assert _git(core, "update-ref", "refs/remotes/origin/main", sha).returncode == 0
     assert not rerun.core_sha_is_pushed(sha, core)
-    with pytest.raises(SystemExit, match="not a crates.io release or a pushed commit"):
+    with pytest.raises(
+        SystemExit, match=r"not a crates\.io release or a pushed commit"
+    ):
         rerun.require_exportable_core(
             {
                 "name": "readcon-core",
@@ -755,7 +760,7 @@ def test_export_copies_listed_sidecars_and_refuses_the_rest(tmp_path: Path) -> N
     dropped = root / "db33" / "db24" / "notes.txt"
     dropped.write_text("x\n")
     again = tmp_path / "export-again"
-    with pytest.raises(SystemExit, match="db33/db24/notes.txt"):
+    with pytest.raises(SystemExit, match=r"db33/db24/notes\.txt"):
         rerun.export_records(root, again, "a" * 40)
     assert not again.exists()
 
@@ -773,7 +778,7 @@ def test_export_preflight_refuses_last_step_without_writing_anything(
     dropped.write_text("x\n")
 
     fresh = tmp_path / "export-fresh"
-    with pytest.raises(SystemExit, match=f"{last_step.paper}/notes.txt"):
+    with pytest.raises(SystemExit, match=re.escape(f"{last_step.paper}/notes.txt")):
         rerun.export_records(root, fresh, "a" * 40)
     assert not fresh.exists()
 
@@ -781,7 +786,7 @@ def test_export_preflight_refuses_last_step_without_writing_anything(
     existing.mkdir()
     sentinel = existing / "keep.txt"
     sentinel.write_text("stay\n")
-    with pytest.raises(SystemExit, match=f"{last_step.paper}/notes.txt"):
+    with pytest.raises(SystemExit, match=re.escape(f"{last_step.paper}/notes.txt")):
         rerun.export_records(root, existing, "a" * 40)
     assert [p.relative_to(existing).as_posix() for p in existing.rglob("*")] == [
         "keep.txt"

@@ -29,11 +29,10 @@ import subprocess
 import tempfile
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
-
 import readcon
 from ase import Atoms
 from ase.db import connect
@@ -439,7 +438,7 @@ def run_campaign(fixture: Path, ladder: list[int], out_dir: Path, run_id: int) -
         "note": "Shared CON ladder; ASE Atoms from readcon geometry (not legacy Cu2 stand-in)",
         "host": "host",
         "host_record": host_record,
-        "date_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ"),
+        "date_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%MZ"),
         "commit": commit,
         "readcon_db": rdb_results,
         "ase_db": ase_results,

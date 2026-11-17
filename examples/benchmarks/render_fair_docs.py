@@ -31,7 +31,7 @@ INSERTS = (
     ("atoms-1000000", "10^6 atoms, 1 frame"),
 )
 LABELS = dict(LADDER)
-LABELS["paper40x8"] = "40×8"
+LABELS["paper40x8"] = "40\u00d78"
 
 
 def fmt(value: float) -> str:
@@ -473,7 +473,7 @@ def fairness_block(data: dict, results_name: str) -> str:
         ),
         "",
         (
-            "The fair 40×8 insert, one commit each, is "
+            "The fair 40\u00d78 insert, one commit each, is "
             f"readcon-db {fmt(pick(rows, 'paper40x8', 'insert', 'cold-file', 'readcon-db')['median_s'])} and "
             f"ASE {fmt(pick(rows, 'paper40x8', 'insert', 'cold-file', 'ase.db')['median_s'])}."
         ),

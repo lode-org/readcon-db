@@ -10,7 +10,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fair_ase_protocol as fair
-
 import numpy as np
 
 DEST = Path(sys.argv[1])

@@ -25,12 +25,12 @@ from pathlib import Path
 
 import numpy as np
 
-REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import db26_drive as drv  # noqa: E402
-import db28_drive as d28  # noqa: E402
-import fair_ase_protocol as fair  # noqa: E402
+import db26_drive as drv
+import db28_drive as d28
+import fair_ase_protocol as fair
 
+REPO = Path(__file__).resolve().parents[2]
 OUT = REPO / "bench" / "db29"
 ROOT = REPO / "build" / "db29-ab"
 N = d28.require_recorded_n(d28.N)

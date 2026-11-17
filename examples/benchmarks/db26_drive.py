@@ -24,10 +24,9 @@ import sys
 import time
 from pathlib import Path
 
-import numpy as np
-
 import db24_drive as fair
 import db26_highbyte
+import numpy as np
 
 REPO = fair.REPO
 BENCH = REPO / "bench" / "db26"
@@ -166,15 +165,15 @@ def start_worker(
     if extra:
         env.update(extra)
     err_path = root / f"{name}.worker.err"
-    err = open(err_path, "w")
-    proc = subprocess.Popen(
-        [sys.executable, str(WORKER), str(dest), "readcon-db"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=err,
-        text=True,
-        env=env,
-    )
+    with err_path.open("w") as err:
+        proc = subprocess.Popen(
+            [sys.executable, str(WORKER), str(dest), "readcon-db"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=err,
+            text=True,
+            env=env,
+        )
     ready = proc.stdout.readline().strip()
     if ready != "READY":
         raise RuntimeError(err_path.read_text()[-2000:] or ready)
@@ -593,122 +592,122 @@ def main() -> None:
     if root.exists():
         shutil.rmtree(root)
     root.mkdir(parents=True)
-    log = open(BENCH / "campaign.log", "w")
-    print("building tip and aedcbda4 prefixes", flush=True)
-    tip_py = ensure_tree_prefix("tip", commit)
-    base_py = ensure_tree_prefix("aedcbda4", BASE)
-    print("high-byte columns", flush=True)
-    high = high_byte(commit)
-    (BENCH / "high_byte.json").write_text(json.dumps(high, indent=2) + "\n")
-    log.write("high-byte written\n")
-    sizes = {}
-    for name, py_path, codec in (
-        ("raw", tip_py, "raw"),
-        ("shuffle", tip_py, "shuffle-zstd"),
-        ("aedcbda4", base_py, "raw"),
-    ):
-        sizes[name] = write_corpus(name, root, py_path, codec)
-        line = f"wrote {name} {sizes[name]}"
-        print(line, flush=True)
-        log.write(line + "\n")
-        log.flush()
-    before = wait_quiet(log)
-    log.write(f"timed block starts at load {before}\n")
+    log_path = BENCH / "campaign.log"
+    with log_path.open("w") as log:
+        print("building tip and aedcbda4 prefixes", flush=True)
+        tip_py = ensure_tree_prefix("tip", commit)
+        base_py = ensure_tree_prefix("aedcbda4", BASE)
+        print("high-byte columns", flush=True)
+        high = high_byte(commit)
+        (BENCH / "high_byte.json").write_text(json.dumps(high, indent=2) + "\n")
+        log.write("high-byte written\n")
+        sizes = {}
+        for name, py_path, codec in (
+            ("raw", tip_py, "raw"),
+            ("shuffle", tip_py, "shuffle-zstd"),
+            ("aedcbda4", base_py, "raw"),
+        ):
+            sizes[name] = write_corpus(name, root, py_path, codec)
+            line = f"wrote {name} {sizes[name]}"
+            print(line, flush=True)
+            log.write(line + "\n")
+            log.flush()
+        before = wait_quiet(log)
+        log.write(f"timed block starts at load {before}\n")
 
-    def shuffle_order(i: int) -> list[str]:
-        arms = ["raw", "shuffle"]
-        if i % 2:
-            arms.reverse()
-        return arms
+        def shuffle_order(i: int) -> list[str]:
+            arms = ["raw", "shuffle"]
+            if i % 2:
+                arms.reverse()
+            return arms
 
-    workers = {
-        "raw": start_worker("raw", root / "raw", tip_py, "raw", None, root),
-        "shuffle": start_worker(
-            "shuffle", root / "shuffle", tip_py, "shuffle-zstd", None, root
-        ),
-    }
-    keys_shuffle = (
-        ("cold", "full_read"),
-        ("cold", "selected"),
-        ("cold", "range"),
-        ("warm", "selected"),
-    )
-    try:
-        series, _loads = run_pairs(
-            workers, root, keys_shuffle, shuffle_order, log, "shuffle"
+        workers = {
+            "raw": start_worker("raw", root / "raw", tip_py, "raw", None, root),
+            "shuffle": start_worker(
+                "shuffle", root / "shuffle", tip_py, "shuffle-zstd", None, root
+            ),
+        }
+        keys_shuffle = (
+            ("cold", "full_read"),
+            ("cold", "selected"),
+            ("cold", "range"),
+            ("warm", "selected"),
         )
-    finally:
-        stop(workers)
-    shuffle_pack = pack_shuffle(series, keys_shuffle)
+        try:
+            series, _loads = run_pairs(
+                workers, root, keys_shuffle, shuffle_order, log, "shuffle"
+            )
+        finally:
+            stop(workers)
+        shuffle_pack = pack_shuffle(series, keys_shuffle)
 
-    def tip_order(i: int) -> list[str]:
-        arms = ["tip", "aedcbda4"]
-        if i % 2:
-            arms.reverse()
-        return arms
+        def tip_order(i: int) -> list[str]:
+            arms = ["tip", "aedcbda4"]
+            if i % 2:
+                arms.reverse()
+            return arms
 
-    keys_raw = (("warm", "full_read"), ("warm", "range"))
-    workers = {
-        "tip": start_worker("tip", root / "raw", tip_py, "raw", None, root),
-        "aedcbda4": start_worker(
-            "aedcbda4", root / "aedcbda4", base_py, "raw", None, root
-        ),
-    }
-    try:
-        raw_series, raw_loads = run_pairs(
-            workers, root, keys_raw, tip_order, log, "raw-unset"
-        )
-    finally:
-        stop(workers)
-    workers = {
-        "tip": start_worker(
-            "tip", root / "raw", tip_py, "raw", {"RAYON_NUM_THREADS": "1"}, root
-        ),
-        "aedcbda4": start_worker(
-            "aedcbda4",
-            root / "aedcbda4",
-            base_py,
-            "raw",
-            {"RAYON_NUM_THREADS": "1"},
-            root,
-        ),
-    }
-    try:
-        one_series, one_loads = run_pairs(
-            workers, root, keys_raw, tip_order, log, "raw-1"
-        )
-    finally:
-        stop(workers)
-    out = {
-        "commit": commit,
-        "tree": tree,
-        "base_commit": fair.git_out("rev-parse", BASE),
-        "base_tree": base_tree,
-        "unshuffle_commit": "d671c32",
-        "host": {
-            "system": platform.system(),
-            "release": platform.release(),
-            "machine": platform.machine(),
-            "cpu": fair.cpu_model(),
-            "ncpu": os.cpu_count(),
-            **fair.host_facts(),
-        },
-        "n": N,
-        "load_before_timed": before,
-        "sizes": sizes,
-        "shuffle_vs_raw": shuffle_pack,
-        "raw_tip_vs_aedcbda4": pack_tip(raw_series, keys_raw),
-        "raw_tip_vs_aedcbda4_rayon_1": pack_tip(one_series, keys_raw),
-        "load_raw_unset": raw_loads,
-        "load_raw_rayon_1": one_loads,
-        "high_byte": high,
-        "tables_json": "fair_ase_protocol.record_table_usage",
-        "scratch": "build/db26-ab",
-    }
-    (BENCH / "ab.json").write_text(json.dumps(out, indent=2) + "\n")
-    write_results(out)
-    log.write("wrote bench/db26\n")
-    log.close()
+        keys_raw = (("warm", "full_read"), ("warm", "range"))
+        workers = {
+            "tip": start_worker("tip", root / "raw", tip_py, "raw", None, root),
+            "aedcbda4": start_worker(
+                "aedcbda4", root / "aedcbda4", base_py, "raw", None, root
+            ),
+        }
+        try:
+            raw_series, raw_loads = run_pairs(
+                workers, root, keys_raw, tip_order, log, "raw-unset"
+            )
+        finally:
+            stop(workers)
+        workers = {
+            "tip": start_worker(
+                "tip", root / "raw", tip_py, "raw", {"RAYON_NUM_THREADS": "1"}, root
+            ),
+            "aedcbda4": start_worker(
+                "aedcbda4",
+                root / "aedcbda4",
+                base_py,
+                "raw",
+                {"RAYON_NUM_THREADS": "1"},
+                root,
+            ),
+        }
+        try:
+            one_series, one_loads = run_pairs(
+                workers, root, keys_raw, tip_order, log, "raw-1"
+            )
+        finally:
+            stop(workers)
+        out = {
+            "commit": commit,
+            "tree": tree,
+            "base_commit": fair.git_out("rev-parse", BASE),
+            "base_tree": base_tree,
+            "unshuffle_commit": "d671c32",
+            "host": {
+                "system": platform.system(),
+                "release": platform.release(),
+                "machine": platform.machine(),
+                "cpu": fair.cpu_model(),
+                "ncpu": os.cpu_count(),
+                **fair.host_facts(),
+            },
+            "n": N,
+            "load_before_timed": before,
+            "sizes": sizes,
+            "shuffle_vs_raw": shuffle_pack,
+            "raw_tip_vs_aedcbda4": pack_tip(raw_series, keys_raw),
+            "raw_tip_vs_aedcbda4_rayon_1": pack_tip(one_series, keys_raw),
+            "load_raw_unset": raw_loads,
+            "load_raw_rayon_1": one_loads,
+            "high_byte": high,
+            "tables_json": "fair_ase_protocol.record_table_usage",
+            "scratch": "build/db26-ab",
+        }
+        (BENCH / "ab.json").write_text(json.dumps(out, indent=2) + "\n")
+        write_results(out)
+        log.write("wrote bench/db26\n")
     print("wrote", BENCH / "ab.json", flush=True)
 
 

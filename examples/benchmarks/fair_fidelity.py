@@ -1,4 +1,4 @@
-"""Round-trip the paper 40×8 Cu frames through both fair stores.
+"""Round-trip the paper 40x8 Cu frames through both fair stores.
 
 Eight Cu atoms, forty frames, on a triclinic cell with lengths
 ``(10, 11.5, 12.25)`` and angles ``(80, 75, 70)``. Each atom also
@@ -25,9 +25,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import numpy as np
-
 import fair_ase_protocol as fair
+import numpy as np
 import readcon
 from readcon_db import ConCorpus
 

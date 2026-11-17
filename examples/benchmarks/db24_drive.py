@@ -389,15 +389,15 @@ def start_worker(
         env.update(extra)
     kind = "ase.db" if name == "ase" else "readcon-db"
     err_path = root / f"{name}.worker.err"
-    err = open(err_path, "w")
-    proc = subprocess.Popen(
-        [sys.executable, str(WORKER), str(root / name), kind],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=err,
-        text=True,
-        env=env,
-    )
+    with err_path.open("w") as err:
+        proc = subprocess.Popen(
+            [sys.executable, str(WORKER), str(root / name), kind],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=err,
+            text=True,
+            env=env,
+        )
     ready = proc.stdout.readline().strip()
     if ready != "READY":
         raise RuntimeError(err_path.read_text()[-2000:] or ready)
@@ -826,92 +826,93 @@ def main() -> None:
     root = bench_disk()
     BENCH.mkdir(parents=True, exist_ok=True)
     log_path = BENCH / "campaign.log"
-    log = open(log_path, "w")
-    commit = git_out("rev-parse", "HEAD")
-    tree = git_out("rev-parse", f"{commit}^{{tree}}")
-    commits = {"head": commit}
-    print(f"building wheels for {commit} and db18 {DB18_COMMIT}", flush=True)
-    ensure_prefix("db18", DB18_COMMIT)
-    ensure_prefix("db24", commit)
-    print("running lever probe", flush=True)
-    levers = run_levers(log)
-    (BENCH / "levers.json").write_text(json.dumps(levers, indent=2) + "\n")
-    sizes = {}
-    for name in ("db18", "raw", "shuffle"):
-        sizes[name] = write_readcon(name, root, commits)
-        line = f"wrote {name} {sizes[name]}"
+    with log_path.open("w") as log:
+        commit = git_out("rev-parse", "HEAD")
+        tree = git_out("rev-parse", f"{commit}^{{tree}}")
+        commits = {"head": commit}
+        print(f"building wheels for {commit} and db18 {DB18_COMMIT}", flush=True)
+        ensure_prefix("db18", DB18_COMMIT)
+        ensure_prefix("db24", commit)
+        print("running lever probe", flush=True)
+        levers = run_levers(log)
+        (BENCH / "levers.json").write_text(json.dumps(levers, indent=2) + "\n")
+        sizes = {}
+        for name in ("db18", "raw", "shuffle"):
+            sizes[name] = write_readcon(name, root, commits)
+            line = f"wrote {name} {sizes[name]}"
+            print(line, flush=True)
+            log.write(line + "\n")
+        sizes["ase"] = write_ase(root, commits)
+        line = f"wrote ase {sizes['ase']}"
         print(line, flush=True)
         log.write(line + "\n")
-    sizes["ase"] = write_ase(root, commits)
-    line = f"wrote ase {sizes['ase']}"
-    print(line, flush=True)
-    log.write(line + "\n")
-    log.flush()
-    workers = {name: start_worker(name, root, commits) for name in ARMS}
-    try:
-        read = run_block(workers, root, CACHES, OPS, log)
-        ingest = {("ingest", "insert"): {name: [] for name in ARMS}}
-        disks = {name: [] for name in ARMS}
-        for i in range(N):
-            for name in arm_order(i):
-                row = ask(name, workers[name], "ingest", root)
-                ingest[("ingest", "insert")][name].append(row["seconds"])
-                disks[name].append(row["disk_bytes"])
-                line = (
-                    f"ingest {i} {name} {row['seconds']:.6e} disk={row['disk_bytes']}"
-                )
-                print(line, flush=True)
-                log.write(line + "\n")
-                log.flush()
-    finally:
-        stop(workers)
-    workers = {
-        name: start_worker(name, root, commits, {"RAYON_NUM_THREADS": "1"})
-        for name in ARMS
-    }
-    try:
-        one = run_block(workers, root, ("warm",), OPS, log)
-    finally:
-        stop(workers)
-    out = {
-        "commit": commit,
-        "tree": tree,
-        "host": {
-            "system": platform.system(),
-            "release": platform.release(),
-            "machine": platform.machine(),
-            "cpu": cpu_model(),
-            "ncpu": os.cpu_count(),
-            **host_facts(),
-        },
-        "RAYON_NUM_THREADS": os.environ.get("RAYON_NUM_THREADS"),
-        "n": N,
-        "arm_order": "db18, raw, shuffle, ase; reversed on odd sample indexes",
-        "warm_selected": "one pass of i*17 mod 64, each frame once; seconds are the mean per frame",
-        "cache": "none",
-        "scratch": str(root.relative_to(REPO)),
-        "db18_commit": DB18_COMMIT,
-        "db23_unpublished_commit": DB23_UNPUBLISHED,
-        "db23_tree": DB23_TREE,
-        "db23_published_commit": DB23_PUBLISHED,
-        "db22_superseded": (
-            "db22 warm selected shuffle/raw 0.573 is superseded: the raw arm copied "
-            "the blob before it looked at the tag, which inflated raw. See db23 and db24."
-        ),
-        "tables_json": "fair_ase_protocol.record_table_usage",
-        "sizes": sizes,
-        "ingest_disk_bytes": disks,
-        "ops": {},
-        "ops_rayon_num_threads_1": {},
-    }
-    out["ops"] = pack(
-        read | ingest, [(c, o) for c in CACHES for o in OPS] + [("ingest", "insert")]
-    )
-    out["ops_rayon_num_threads_1"] = pack(one, [("warm", op) for op in OPS])
-    (BENCH / "ab.json").write_text(json.dumps(out, indent=2) + "\n")
-    write_results(out, levers)
-    log.write(f"wrote {bench_rel()}\n")
-    log.close()
+        log.flush()
+        workers = {name: start_worker(name, root, commits) for name in ARMS}
+        try:
+            read = run_block(workers, root, CACHES, OPS, log)
+            ingest = {("ingest", "insert"): {name: [] for name in ARMS}}
+            disks = {name: [] for name in ARMS}
+            for i in range(N):
+                for name in arm_order(i):
+                    row = ask(name, workers[name], "ingest", root)
+                    ingest[("ingest", "insert")][name].append(row["seconds"])
+                    disks[name].append(row["disk_bytes"])
+                    line = (
+                        f"ingest {i} {name} {row['seconds']:.6e} "
+                        f"disk={row['disk_bytes']}"
+                    )
+                    print(line, flush=True)
+                    log.write(line + "\n")
+                    log.flush()
+        finally:
+            stop(workers)
+        workers = {
+            name: start_worker(name, root, commits, {"RAYON_NUM_THREADS": "1"})
+            for name in ARMS
+        }
+        try:
+            one = run_block(workers, root, ("warm",), OPS, log)
+        finally:
+            stop(workers)
+        out = {
+            "commit": commit,
+            "tree": tree,
+            "host": {
+                "system": platform.system(),
+                "release": platform.release(),
+                "machine": platform.machine(),
+                "cpu": cpu_model(),
+                "ncpu": os.cpu_count(),
+                **host_facts(),
+            },
+            "RAYON_NUM_THREADS": os.environ.get("RAYON_NUM_THREADS"),
+            "n": N,
+            "arm_order": "db18, raw, shuffle, ase; reversed on odd sample indexes",
+            "warm_selected": "one pass of i*17 mod 64, each frame once; seconds are the mean per frame",
+            "cache": "none",
+            "scratch": str(root.relative_to(REPO)),
+            "db18_commit": DB18_COMMIT,
+            "db23_unpublished_commit": DB23_UNPUBLISHED,
+            "db23_tree": DB23_TREE,
+            "db23_published_commit": DB23_PUBLISHED,
+            "db22_superseded": (
+                "db22 warm selected shuffle/raw 0.573 is superseded: the raw arm copied "
+                "the blob before it looked at the tag, which inflated raw. See db23 and db24."
+            ),
+            "tables_json": "fair_ase_protocol.record_table_usage",
+            "sizes": sizes,
+            "ingest_disk_bytes": disks,
+            "ops": {},
+            "ops_rayon_num_threads_1": {},
+        }
+        out["ops"] = pack(
+            read | ingest,
+            [(c, o) for c in CACHES for o in OPS] + [("ingest", "insert")],
+        )
+        out["ops_rayon_num_threads_1"] = pack(one, [("warm", op) for op in OPS])
+        (BENCH / "ab.json").write_text(json.dumps(out, indent=2) + "\n")
+        write_results(out, levers)
+        log.write(f"wrote {bench_rel()}\n")
     print("wrote", BENCH / "ab.json", flush=True)
 
 

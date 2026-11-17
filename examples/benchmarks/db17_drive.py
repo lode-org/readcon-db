@@ -22,9 +22,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-import numpy as np
-
 import db24_drive as fair
+import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
 REMOTE_BRANCH = "fix/ingest-species-count"

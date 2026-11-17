@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """LEGACY UNEQUAL WORKLOAD: Cu2 stand-in only. Prefer fair_campaign.py for proper comparison."""
 
 from __future__ import annotations

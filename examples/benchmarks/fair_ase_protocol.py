@@ -34,6 +34,7 @@ Every stored field is checked; a mismatch aborts.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import ctypes
 import ctypes.util
 import gc
@@ -204,10 +205,8 @@ def resident_fraction(path: Path) -> float:
 def advise_dontneed(path: Path) -> None:
     fd = os.open(path, os.O_RDONLY)
     try:
-        try:
+        with contextlib.suppress(OSError):
             os.fsync(fd)
-        except OSError:
-            pass
         rc = _LIBC.posix_fadvise(fd, 0, 0, _POSIX_FADV_DONTNEED)
         if rc != 0:
             err = ctypes.get_errno()
@@ -1726,10 +1725,7 @@ def record_table_usage(out: Path, workload: str, dest: Path) -> None:
 
 
 def disk_bytes(kind: str, dest: Path) -> int:
-    if kind == "readcon-db":
-        path = dest / "corpus" / "data.mdb"
-    else:
-        path = dest / "atoms.db"
+    path = dest / "corpus" / "data.mdb" if kind == "readcon-db" else dest / "atoms.db"
     return path.stat().st_size if path.is_file() else 0
 
 
@@ -2541,7 +2537,7 @@ def workloads_for(mode: str) -> list[dict]:
             {"name": "atoms-1000", "n_frames": 1, "n_atoms": 1000},
             {"name": "frames-1", "n_frames": 1, "n_atoms": 8},
         ]
-    return [paper] + atoms + frames
+    return [paper, *atoms, *frames]
 
 
 def collect_frames100_noise(fair_rows: list[dict]) -> dict:

@@ -5,9 +5,8 @@ from __future__ import annotations
 import json
 import socket
 
-import pytest
-
 import db28_drive as drv
+import pytest
 
 
 def test_driver_writes_the_record_layout(tmp_path) -> None:

@@ -6,10 +6,9 @@ import os
 import subprocess
 from pathlib import Path
 
-import pytest
-
 import db17_drive
 import legacy_campaign_drive as legacy
+import pytest
 
 BRANCH = "fix/ingest-species-count"
 

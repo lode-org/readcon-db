@@ -145,55 +145,59 @@ def main() -> None:
         shutil.rmtree(root)
     root.mkdir(parents=True)
     BENCH.mkdir(parents=True, exist_ok=True)
-    log = open(BENCH / "campaign.log", "w")
-    commit = fair_drive.git_out("rev-parse", "HEAD")
-    tree = fair_drive.git_out("rev-parse", f"{commit}^{{tree}}")
-    commits = {"head": commit}
-    print(f"building wheels for {commit} on {PUSHED_BASE}", flush=True)
-    fair_drive.ensure_prefix("db18", fair_drive.DB18_COMMIT)
-    fair_drive.ensure_prefix("db24", commit)
-    sizes = {}
-    for name in ("db18", "raw", "shuffle"):
-        sizes[name] = write_readcon(name, root, commits)
-        print(f"wrote {name} {sizes[name]}", flush=True)
-    sizes["ase"] = write_ase(root, commits)
-    print(f"wrote ase {sizes['ase']}", flush=True)
-    workers = {name: fair_drive.start_worker(name, root, commits) for name in ARMS}
-    try:
-        read = fair_drive.run_block(workers, root, ("warm",), OPS, log)
-    finally:
-        fair_drive.stop(workers)
-    workers = {
-        name: fair_drive.start_worker(name, root, commits, {"RAYON_NUM_THREADS": "1"})
-        for name in ARMS
-    }
-    try:
-        one = fair_drive.run_block(workers, root, ("warm",), OPS, log)
-    finally:
-        fair_drive.stop(workers)
-    out = {
-        "commit": commit,
-        "tree": tree,
-        "pushed_base": PUSHED_BASE,
-        "host": {
-            "system": platform.system(),
-            "release": platform.release(),
-            "machine": platform.machine(),
-            "cpu": fair_drive.cpu_model(),
-            "ncpu": os.cpu_count(),
-            **fair_drive.host_facts(),
-        },
-        "n": fair_drive.N,
-        "rows": "warm full_read and warm range; then the same with RAYON_NUM_THREADS=1",
-        "arm_order": "db18, raw, shuffle, ase; reversed on odd sample indexes",
-        "sizes": sizes,
-        "tables_json": "fair_ase_protocol.record_table_usage",
-        "ops": fair_drive.pack(read, [("warm", op) for op in OPS]),
-        "ops_rayon_num_threads_1": fair_drive.pack(one, [("warm", op) for op in OPS]),
-    }
-    (BENCH / "ab.json").write_text(json.dumps(out, indent=2) + "\n")
-    write_results(out)
-    log.close()
+    log_path = BENCH / "campaign.log"
+    with log_path.open("w") as log:
+        commit = fair_drive.git_out("rev-parse", "HEAD")
+        tree = fair_drive.git_out("rev-parse", f"{commit}^{{tree}}")
+        commits = {"head": commit}
+        print(f"building wheels for {commit} on {PUSHED_BASE}", flush=True)
+        fair_drive.ensure_prefix("db18", fair_drive.DB18_COMMIT)
+        fair_drive.ensure_prefix("db24", commit)
+        sizes = {}
+        for name in ("db18", "raw", "shuffle"):
+            sizes[name] = write_readcon(name, root, commits)
+            print(f"wrote {name} {sizes[name]}", flush=True)
+        sizes["ase"] = write_ase(root, commits)
+        print(f"wrote ase {sizes['ase']}", flush=True)
+        workers = {name: fair_drive.start_worker(name, root, commits) for name in ARMS}
+        try:
+            read = fair_drive.run_block(workers, root, ("warm",), OPS, log)
+        finally:
+            fair_drive.stop(workers)
+        workers = {
+            name: fair_drive.start_worker(
+                name, root, commits, {"RAYON_NUM_THREADS": "1"}
+            )
+            for name in ARMS
+        }
+        try:
+            one = fair_drive.run_block(workers, root, ("warm",), OPS, log)
+        finally:
+            fair_drive.stop(workers)
+        out = {
+            "commit": commit,
+            "tree": tree,
+            "pushed_base": PUSHED_BASE,
+            "host": {
+                "system": platform.system(),
+                "release": platform.release(),
+                "machine": platform.machine(),
+                "cpu": fair_drive.cpu_model(),
+                "ncpu": os.cpu_count(),
+                **fair_drive.host_facts(),
+            },
+            "n": fair_drive.N,
+            "rows": "warm full_read and warm range; then the same with RAYON_NUM_THREADS=1",
+            "arm_order": "db18, raw, shuffle, ase; reversed on odd sample indexes",
+            "sizes": sizes,
+            "tables_json": "fair_ase_protocol.record_table_usage",
+            "ops": fair_drive.pack(read, [("warm", op) for op in OPS]),
+            "ops_rayon_num_threads_1": fair_drive.pack(
+                one, [("warm", op) for op in OPS]
+            ),
+        }
+        (BENCH / "ab.json").write_text(json.dumps(out, indent=2) + "\n")
+        write_results(out)
     print("wrote", BENCH / "ab.json", flush=True)
 
 

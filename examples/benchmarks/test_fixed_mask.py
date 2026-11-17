@@ -11,7 +11,7 @@ from ase import Atoms
 from ase.constraints import FixAtoms, FixBondLengths, FixCartesian, FixScaled
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import fair_ase_protocol as fair  # noqa: E402
+import fair_ase_protocol as fair
 
 
 def _atoms(cell) -> Atoms:

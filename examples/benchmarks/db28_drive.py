@@ -198,9 +198,8 @@ BOOT_NOTE = "10000-draw percentile bootstrap, type-7 median, numpy Generator see
 
 def fast_md_positions(n_frames: int) -> list[np.ndarray]:
     """One strided read of the same frame indices ``_load_md_positions`` uses."""
-    import mdtraj
-
     import fair_ase_protocol as fair
+    import mdtraj
 
     topo = fair.nha_topology()
     gro = fair.fetch_pinned(fair.NHA_GRO_URL, fair.NHA_GRO_SHA256, "NhaA_non_water.gro")

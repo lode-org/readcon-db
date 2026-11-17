@@ -8,9 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 import db24_drive as drv
+import pytest
 
 
 def test_bench_rel_allows_outside_repo(monkeypatch, tmp_path: Path) -> None:

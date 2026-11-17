@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Assert ASE vs readcon-db hit counts agree on shared CON (symbol Cu, natoms range)."""
 
-from pathlib import Path
-import tempfile
 import sys
+import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -13,9 +13,9 @@ pytest.importorskip("readcon_db")
 pytest.importorskip("ase")
 from fair_campaign import (
     DEFAULT_FIXTURE,
-    write_ladder_con,
-    bench_readcon_db,
     bench_ase_db,
+    bench_readcon_db,
+    write_ladder_con,
 )
 
 
