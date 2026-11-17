@@ -545,7 +545,13 @@ def main() -> None:
     if args.out is not None:
         BENCH = args.out if args.out.is_absolute() else REPO / args.out
     if os.environ.get("READCON_RERUN_RELEASE") == "1":
-        N = int(os.environ.get("READCON_DB28_N", str(N)))
+        raw_n = os.environ.get("READCON_DB28_N", str(N))
+        try:
+            N = int(raw_n)
+        except ValueError as exc:
+            raise SystemExit(
+                f"READCON_DB28_N must be an integer, not {raw_n!r}"
+            ) from exc
         if N < 6:
             raise SystemExit(f"n must be at least 6, not {N}")
     os.environ.update(drv.env_base())

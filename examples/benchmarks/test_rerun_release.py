@@ -54,6 +54,7 @@ PROVENANCE = (
     "allocator",
 )
 HOST = ("cpu", "ncpu", "cpuinfo_mhz", "kernel")
+HOST += ("family", "model", "mhz", "nproc")
 _GIT_ENV = {
     "GIT_AUTHOR_NAME": "Rohit Goswami",
     "GIT_AUTHOR_EMAIL": "rgoswami@ieee.org",
@@ -220,6 +221,8 @@ def _assert_provenance(path: Path) -> None:
     flat_missing = [
         key for key in (*PROVENANCE, *HOST) if beside.get(key) in (None, "")
     ]
+    for key in ("readcon_core", "readcon_sha", "rustc", "python"):
+        assert beside.get(key), (path.parent / "host.json", key)
     assert not flat_missing, (path.parent / "host.json", flat_missing)
     assert (path.parent / "raw.log").is_file()
     assert path.read_bytes().endswith(b"\n")
@@ -342,18 +345,27 @@ def test_unpushed_readcon_core_refuses_export(tmp_path: Path) -> None:
     _git(core, "update-ref", "refs/remotes/origin/main", "HEAD")
     pushed = _git(core, "rev-parse", "HEAD").stdout.strip()
     assert rerun.core_sha_is_pushed(pushed, core)
+    tagged = _git(core, "tag", "v0.23.9", pushed)
+    assert tagged.returncode == 0, tagged.stderr
+    assert rerun.core_sha_is_pushed(pushed, core)
+    branch_only = _git(core, "checkout", "-b", "feature")
+    assert branch_only.returncode == 0, branch_only.stderr
+    (core / "readme").write_text("two\n")
+    _git(core, "add", "readme")
+    _git(core, "commit", "-m", "two")
+    feature = _git(core, "rev-parse", "HEAD").stdout.strip()
+    _git(core, "update-ref", "refs/remotes/origin/feature", feature)
+    assert not rerun.core_sha_is_pushed(feature, core)
     missing = "b" * 40
     assert not rerun.core_sha_is_pushed(missing, core)
-    original = rerun.lock_readcon_core
-    rerun.lock_readcon_core = lambda: {
-        "name": "readcon-core",
-        "version": "0.23.3",
-        "source": "git+https://github.com/lode-org/readcon-core",
-    }
     try:
         try:
             rerun.require_exportable_core(
-                {"readcon_core": "0.23.3", "readcon_sha": missing},
+                {
+                    "name": "readcon-core",
+                    "version": "0.23.3",
+                    "source": "git+https://github.com/lode-org/readcon-core#" + missing,
+                },
                 "0.23.3",
                 core,
             )
@@ -362,4 +374,90 @@ def test_unpushed_readcon_core_refuses_export(tmp_path: Path) -> None:
         else:
             raise AssertionError("unpushed readcon-core was accepted")
     finally:
-        rerun.lock_readcon_core = original
+        _git(core, "checkout", "main")
+
+
+def test_main_refuses_git_and_path_pins_before_registry_download(monkeypatch) -> None:
+    import rerun_release as rerun
+
+    called = {"urlopen": 0}
+
+    def _no_network(*_args, **_kwargs):
+        called["urlopen"] += 1
+        raise AssertionError("network must not be used for git/path pins")
+
+    monkeypatch.setattr(rerun.urllib.request, "urlopen", _no_network)
+    monkeypatch.setattr(rerun, "require_clean_and_remote", lambda: ("a" * 40, "b" * 40))
+    monkeypatch.setattr(
+        rerun,
+        "core_sha_is_pushed",
+        lambda _sha, _repo=None: False,
+    )
+    for source in (
+        "git+https://github.com/lode-org/readcon-core#1111111111111111111111111111111111111111",
+        "path+file:///tmp/readcon-core",
+    ):
+        monkeypatch.setattr(
+            rerun,
+            "lock_readcon_core",
+            lambda source=source: {
+                "name": "readcon-core",
+                "version": "0.23.3",
+                "source": source,
+            },
+        )
+        try:
+            rerun.main(["--synthetic", "--n", "6"])
+        except SystemExit as exc:
+            text = str(exc)
+            assert "refusing to export" in text
+        else:
+            raise AssertionError(f"main accepted source {source}")
+    assert called["urlopen"] == 0
+
+
+def test_provenance_uses_lock_sha_for_git_source(monkeypatch) -> None:
+    import rerun_release as rerun
+
+    locked = {
+        "name": "readcon-core",
+        "version": "0.23.3",
+        "source": "git+https://github.com/lode-org/readcon-core#" + ("f" * 40),
+    }
+    monkeypatch.setattr(
+        rerun,
+        "crate_root",
+        lambda _locked: (_ for _ in ()).throw(AssertionError("no crate source")),
+    )
+    monkeypatch.setattr(rerun, "rustc_version", lambda: "rustc 1.88.0")
+    monkeypatch.setattr(rerun, "allocator_in_use", lambda _root: "mimalloc")
+    monkeypatch.setattr(
+        rerun,
+        "host_facts",
+        lambda: {
+            "cpu": "x",
+            "ncpu": 1,
+            "cpuinfo_mhz": 1.0,
+            "kernel": "k",
+            "family": "6",
+            "model": "0",
+            "mhz": 1.0,
+            "nproc": 1,
+        },
+    )
+    prov = rerun.provenance("a" * 40, "b" * 40, locked)
+    assert prov["readcon_core"] == "0.23.3"
+    assert prov["readcon_sha"] == "f" * 40
+
+
+def test_export_includes_ab_sidecar_files() -> None:
+    import rerun_release as rerun
+
+    for name in (
+        "RESULTS.md",
+        "noise.json",
+        "tables.json",
+        "levers.json",
+        "high_byte.json",
+    ):
+        assert name in rerun.EXPORT_NAMES

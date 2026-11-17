@@ -78,11 +78,19 @@ EXPORT_NAMES = (
     "campaign.json",
     "readcon_db_bench.json",
     "host.json",
+    "RESULTS.md",
+    "noise.json",
+    "tables.json",
+    "levers.json",
+    "high_byte.json",
     "raw.log",
     "campaign.log",
 )
 SHA1 = 40
 CORE_GIT = "https://github.com/lode-org/readcon-core.git"
+GEN_VERSION_MAP_BUILD_KEYS = ("readcon_core", "readcon_sha", "rustc", "python")
+# host_text() keys in readcon-core commit 27df3974a8038f567e0d21ae25f404ce32534a7d.
+GEN_VERSION_MAP_HOST_KEYS = ("family", "model", "mhz", "nproc")
 
 
 @dataclass(frozen=True)
@@ -188,7 +196,7 @@ def git(*args: str) -> subprocess.CompletedProcess[str]:
 
 def require_clean_and_remote() -> tuple[str, str]:
     """Refuse a dirty tree or a commit no remote branch contains."""
-    status = git("status", "--porcelain")
+    status = git("status", "--porcelain", "--untracked-files=all")
     if status.returncode != 0:
         raise SystemExit(status.stderr.strip() or "git status failed")
     if status.stdout.strip():
@@ -365,6 +373,22 @@ def cpu_model() -> str:
     return ""
 
 
+def cpu_family_and_model() -> tuple[str, str]:
+    family = ""
+    model = ""
+    try:
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.startswith("cpu family") and ":" in line:
+                family = line.split(":", 1)[1].strip()
+            if line.startswith("model") and ":" in line:
+                model = line.split(":", 1)[1].strip()
+            if family and model:
+                break
+    except OSError:
+        return "", ""
+    return family, model
+
+
 def cpu_mhz() -> float:
     try:
         lines = Path("/proc/cpuinfo").read_text().splitlines()
@@ -389,11 +413,17 @@ def host_facts() -> dict[str, object]:
     count = os.cpu_count()
     if not count:
         raise SystemExit("host cpu count is missing")
+    mhz = cpu_mhz()
+    family, model = cpu_family_and_model()
     return {
         "cpu": cpu_model(),
         "ncpu": count,
-        "cpuinfo_mhz": cpu_mhz(),
+        "cpuinfo_mhz": mhz,
         "kernel": platform.release(),
+        "family": family,
+        "model": model,
+        "mhz": mhz,
+        "nproc": count,
     }
 
 
@@ -443,6 +473,11 @@ def download_crate(version: str, checksum: str) -> Path:
 
 
 def crate_root(locked: dict[str, str]) -> Path:
+    source = locked.get("source", "")
+    if not source.startswith("registry+"):
+        raise SystemExit(
+            "registry crate source inspection was requested for a non-registry source"
+        )
     version = locked["version"]
     found = registry_crate(version)
     if found is not None and (found / ".cargo_vcs_info.json").is_file():
@@ -457,17 +492,14 @@ def git_sha_of_crate(root: Path) -> str:
     if not isinstance(sha, str):
         sha = ""
     sha = sha.strip().lower()
-    source = lock_source_sha()
-    if source:
-        return source
     if len(sha) != SHA1 or any(ch not in "0123456789abcdef" for ch in sha):
         raise SystemExit(f"readcon-core crate at {root} has no git sha")
     return sha
 
 
-def lock_source_sha() -> str:
+def lock_source_sha(locked: dict[str, str] | None = None) -> str:
     """A git source in Cargo.lock names the revision that was linked."""
-    source = lock_readcon_core().get("source", "")
+    source = (locked or lock_readcon_core()).get("source", "")
     if "#" not in source or not source.startswith("git+"):
         return ""
     sha = source.rsplit("#", 1)[-1].split("?")[0].strip().lower()
@@ -512,7 +544,7 @@ def core_checkout() -> Path:
 
 
 def core_sha_is_pushed(sha: str, repo: Path | None = None) -> bool:
-    """True when ``sha`` is on a remote branch or a tag of readcon-core."""
+    """True when ``sha`` is on ``origin/main`` or a release tag ``v*``."""
     checkout = core_checkout() if repo is None else repo
     branches = subprocess.run(
         ["git", "-C", str(checkout), "branch", "-r", "--contains", sha],
@@ -520,15 +552,23 @@ def core_sha_is_pushed(sha: str, repo: Path | None = None) -> bool:
         text=True,
         check=False,
     )
-    if branches.returncode == 0 and branches.stdout.strip():
-        return True
+    if branches.returncode == 0:
+        names = [line.strip() for line in branches.stdout.splitlines() if line.strip()]
+        if "origin/main" in names:
+            return True
     tags = subprocess.run(
         ["git", "-C", str(checkout), "tag", "--contains", sha],
         capture_output=True,
         text=True,
         check=False,
     )
-    return tags.returncode == 0 and bool(tags.stdout.strip())
+    if tags.returncode != 0:
+        return False
+    return any(
+        line.strip().startswith("v")
+        for line in tags.stdout.splitlines()
+        if line.strip()
+    )
 
 
 def pin_change(version: str, sha: str, ref: str) -> str:
@@ -547,34 +587,84 @@ def pin_change(version: str, sha: str, ref: str) -> str:
 
 
 def require_exportable_core(
-    prov: dict[str, object],
+    locked: dict[str, str],
     ref: str | None,
     repo: Path | None = None,
 ) -> None:
     """Refuse a link that is not a release or a pushed commit, or not ``ref``."""
-    locked = lock_readcon_core()
     source = locked.get("source", "")
-    version = str(prov["readcon_core"])
-    sha = str(prov["readcon_sha"])
+    version = locked["version"]
+    sha = lock_source_sha(locked) if source.startswith("git+") else version
     if ref and not ref_matches(version, sha, ref):
         raise SystemExit(pin_change(version, sha, ref))
     if source.startswith("registry+"):
         return
-    if source.startswith("git+") and core_sha_is_pushed(sha, repo):
-        return
+    if source.startswith("git+"):
+        if not sha:
+            raise SystemExit("Cargo.lock readcon-core git source has no pinned sha")
+        if core_sha_is_pushed(sha, repo):
+            return
+        shown = source or "a path"
+        raise SystemExit(
+            f"refusing to export: linked readcon-core {version} ({sha}) from {shown} "
+            "is not a crates.io release or a pushed commit. "
+            + pin_change(version, sha, ref or version)
+        )
+    if source.startswith("path+") or source.startswith("path:") or source == "":
+        shown = source or "a path"
+        raise SystemExit(
+            f"refusing to export: linked readcon-core {version} from {shown}. "
+            "Path dependencies are not exportable release inputs. "
+            + pin_change(version, sha, ref or version)
+        )
     shown = source or "a path"
     raise SystemExit(
-        f"refusing to export: linked readcon-core {version} ({sha}) from {shown} "
-        "is not a crates.io release or a pushed commit. "
-        + pin_change(version, sha, ref or version)
+        f"refusing to export: linked readcon-core {version} from {shown}. "
+        "Only registry releases and pushed git pins are exportable."
     )
 
 
-def provenance(commit: str, tree: str) -> dict[str, object]:
-    locked = lock_readcon_core()
-    root = crate_root(locked)
-    sha = git_sha_of_crate(root)
-    rustc = subprocess.check_output(["rustc", "--version"], text=True).strip()
+def configured_toolchain() -> str | None:
+    env_toolchain = os.environ.get("RUSTUP_TOOLCHAIN")
+    if env_toolchain:
+        return env_toolchain.strip() or None
+    toml = REPO / "rust-toolchain.toml"
+    if toml.is_file():
+        for line in toml.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("channel") and "=" in line:
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    text = REPO / "rust-toolchain"
+    if text.is_file():
+        value = text.read_text().strip()
+        return value or None
+    return None
+
+
+def rustc_version() -> str:
+    toolchain = configured_toolchain()
+    if toolchain:
+        return subprocess.check_output(
+            ["rustc", f"+{toolchain}", "--version"], text=True
+        ).strip()
+    return subprocess.check_output(["rustc", "--version"], text=True).strip()
+
+
+def provenance(commit: str, tree: str, locked: dict[str, str]) -> dict[str, object]:
+    source = locked.get("source", "")
+    if source.startswith("registry+"):
+        root = crate_root(locked)
+        sha = git_sha_of_crate(root)
+    elif source.startswith("git+"):
+        sha = lock_source_sha(locked)
+        if not sha:
+            raise SystemExit("Cargo.lock readcon-core git source has no pinned sha")
+        root = None
+    else:
+        raise SystemExit(
+            f"refusing to stamp provenance for non-exportable readcon-core source: {source or 'path'}"
+        )
+    rustc = rustc_version()
     return {
         "commit": commit,
         "tree": tree,
@@ -582,7 +672,7 @@ def provenance(commit: str, tree: str) -> dict[str, object]:
         "readcon_sha": sha,
         "rustc": rustc,
         "python": f"Python {platform.python_version()}",
-        "allocator": allocator_in_use(root),
+        "allocator": allocator_in_use(root) if root is not None else "unknown",
         "host": host_facts(),
     }
 
@@ -630,11 +720,34 @@ def stamp(record_path: Path, prov: dict[str, object], source: str) -> None:
             "host": prov["host"],
         }
     )
+    for key in GEN_VERSION_MAP_HOST_KEYS:
+        previous[key] = prov["host"][key]
     previous.update(prov["host"])
     beside.write_text(json.dumps(previous, indent=2) + "\n")
 
 
-def run_command(argv: list[str], env: dict[str, str], log_path: Path) -> str:
+def _shown_arg(text: str, root: Path | None) -> str:
+    if not text:
+        return text
+    value = text
+    repo_abs = str(REPO.resolve())
+    if value == repo_abs:
+        return "."
+    if value.startswith(repo_abs + os.sep):
+        return Path(value).resolve().relative_to(REPO.resolve()).as_posix()
+    if root is not None:
+        root_abs = str(root.resolve())
+        if value == root_abs:
+            return "."
+        if value.startswith(root_abs + os.sep):
+            rel = Path(value).resolve().relative_to(root.resolve()).as_posix()
+            return f"./{rel}"
+    return value
+
+
+def run_command(
+    argv: list[str], env: dict[str, str], log_path: Path, root: Path | None = None
+) -> str:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     proc = subprocess.run(
         argv,
@@ -644,7 +757,8 @@ def run_command(argv: list[str], env: dict[str, str], log_path: Path) -> str:
         text=True,
         check=False,
     )
-    body = "command " + " ".join(argv) + "\n" + proc.stdout + proc.stderr
+    shown = [_shown_arg(arg, root) for arg in argv]
+    body = "command " + " ".join(shown) + "\n" + proc.stdout + proc.stderr
     if not body.endswith("\n"):
         body += "\n"
     body += f"exit {proc.returncode}\n"
@@ -718,7 +832,9 @@ def run_measurements(root: Path, prov: dict[str, object], n: int) -> None:
             frames = work_dir(root, step)
             prepare_frames(frames)
             record.parent.mkdir(parents=True, exist_ok=True)
-            run_command(corpus_argv(frames, record, n), env, record.parent / "raw.log")
+            run_command(
+                corpus_argv(frames, record, n), env, record.parent / "raw.log", root
+            )
             if not record.is_file():
                 raise SystemExit(f"corpus producer wrote no {record}")
             stamp(record, prov, source_run(step))
@@ -726,7 +842,7 @@ def run_measurements(root: Path, prov: dict[str, object], n: int) -> None:
         if step.how == "fair":
             work = work_dir(root, step)
             work.mkdir(parents=True, exist_ok=True)
-            raw = run_command(python_argv(step, work), env, work / "raw.log")
+            raw = run_command(python_argv(step, work), env, work / "raw.log", root)
             produced = work / step.record_name
             if not produced.is_file():
                 raise SystemExit(f"fair producer wrote no {produced}")
@@ -735,7 +851,7 @@ def run_measurements(root: Path, prov: dict[str, object], n: int) -> None:
             continue
         dest = record.parent
         dest.mkdir(parents=True, exist_ok=True)
-        raw = run_command(python_argv(step, dest), env, dest / "raw.log")
+        raw = run_command(python_argv(step, dest), env, dest / "raw.log", root)
         if not record.is_file():
             raise SystemExit(f"producer wrote no {record}")
         if not (dest / "raw.log").is_file():
@@ -773,13 +889,13 @@ def export_records(root: Path, export: Path, commit: str) -> None:
             raise SystemExit(f"export is missing {rel}")
         written.append(rel)
         for old in step.supersedes:
+            old_record = export / old / step.record_name
+            if old_record.is_file():
+                raise SystemExit(f"refusing to leave a second copy at {old_record}")
             note = export / old / "SUPERSEDED.md"
             refuse_existing(note)
             note.parent.mkdir(parents=True, exist_ok=True)
             note.write_text(superseded_note(old, rel, commit))
-            old_record = export / old / step.record_name
-            if old_record.is_file():
-                raise SystemExit(f"refusing to leave a second copy at {old_record}")
     if len(written) != len(set(written)):
         raise SystemExit(
             "refusing to export: one run was written to more than one path"
@@ -821,13 +937,14 @@ def main(argv: list[str] | None = None) -> None:
     refuse_saved(export)
     for step in STEPS:
         refuse_saved(root / step.paper)
+    locked = lock_readcon_core()
+    require_exportable_core(locked, args.readcon_core_ref)
     if args.dry_run and not args.readcon_core_ref:
         print_plan(root, export, args.n)
         return
-    prov = provenance(commit, tree)
+    prov = provenance(commit, tree, locked)
     if prov["commit"] != commit or prov["tree"] != tree:
         raise SystemExit("provenance commit does not match HEAD")
-    require_exportable_core(prov, args.readcon_core_ref)
     if args.dry_run:
         print(f"readcon-core {prov['readcon_core']} {prov['readcon_sha']}")
         print_plan(root, export, args.n)

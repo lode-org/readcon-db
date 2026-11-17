@@ -40,12 +40,22 @@ DB18_COMMIT = "06ffcbddc44039b4bf3f3c38793a0927a5709d8a"
 DB23_UNPUBLISHED = "82746979b2a34851019d066f0ead3d3812b98ee2"
 DB23_TREE = "4a1b19288f7c66a650ce6e0aad7b88db8c82daaf"
 DB23_PUBLISHED = "00d32136e9acdbc84fd0297d68b812b0facaedee"
-N = int(os.environ.get("READCON_DB24_N", "12"))
 OPS = ("full_read", "selected", "range")
 CACHES = ("cold", "warm")
 ARMS = ("db18", "raw", "shuffle", "ase")
 BOOT_SAMPLES = 10_000
 BOOT_SEED = 0
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, str(default))
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise SystemExit(f"{name} must be an integer, not {raw!r}") from exc
+
+
+N = _env_int("READCON_DB24_N", 12)
 
 
 def bench_disk() -> Path:
@@ -547,14 +557,22 @@ def paired_sentence(label: str, paired: dict) -> str:
 
 
 def bench_rel() -> str:
-    return BENCH.relative_to(REPO).as_posix()
+    try:
+        return BENCH.resolve().relative_to(REPO.resolve()).as_posix()
+    except ValueError:
+        return str(BENCH)
 
 
 def parse_out(default: Path) -> Path:
     """``--out`` names the record directory, relative to the repository."""
+    try:
+        shown = default.relative_to(REPO)
+    except ValueError:
+        shown = default
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", type=Path, default=default.relative_to(REPO))
-    return REPO / ap.parse_args().out
+    ap.add_argument("--out", type=Path, default=shown)
+    out = ap.parse_args().out
+    return out if out.is_absolute() else REPO / out
 
 
 def write_results(record: dict, levers: dict) -> None:
@@ -773,6 +791,9 @@ def write_results(record: dict, levers: dict) -> None:
 def main() -> None:
     global BENCH
     BENCH = parse_out(BENCH)
+    floor = 6 if os.environ.get("READCON_RERUN_RELEASE") == "1" else 12
+    if N < floor:
+        raise SystemExit(f"n must be at least {floor}, not {N}")
     require_pushed_commit()
     scratch_tmp = REPO / "build" / "tmp"
     scratch_tmp.mkdir(parents=True, exist_ok=True)

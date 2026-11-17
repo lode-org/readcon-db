@@ -102,3 +102,22 @@ def test_campaign_log_is_replaced_not_appended() -> None:
     text = Path(drv.__file__).read_text()
     assert 'log_path.open("w")' in text
     assert 'log_path.open("a")' not in text
+
+
+def test_state_is_scoped_by_out_n_and_core(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(drv, "REPO", tmp_path)
+    monkeypatch.setattr(drv, "_readcon_core_lock_identity", lambda: "c" * 40)
+    build = tmp_path / "build"
+    build.mkdir(parents=True, exist_ok=True)
+    out = tmp_path / "bench" / "db29"
+    scope_12 = drv.state_scope(out, 12)
+    path_12 = drv.state_path(scope_12)
+    state = drv.load_state(path_12, scope_12)
+    state["commit"] = "a" * 40
+    drv.save_state(state, path_12, scope_12)
+    scope_6 = drv.state_scope(out, 6)
+    path_6 = drv.state_path(scope_6)
+    assert path_6 != path_12
+    fresh = drv.load_state(path_6, scope_6)
+    assert fresh["reads"] == {}
+    assert fresh["policy"] == {}

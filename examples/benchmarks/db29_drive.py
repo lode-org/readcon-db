@@ -7,6 +7,7 @@ on corpora written with set_cooked_access. n is the committed default.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 
@@ -32,7 +33,6 @@ import fair_ase_protocol as fair
 
 OUT = REPO / "bench" / "db29"
 ROOT = REPO / "build" / "db29-ab"
-STATE_PATH = REPO / "build" / "db29-state.json"
 N = d28.require_recorded_n(d28.N)
 MODES = ("raw", "shuffle", "warm-point", "cold-bulk")
 EXPECT = {
@@ -50,9 +50,48 @@ PLAN = (
 BOOT_NOTE = d28.BOOT_NOTE
 
 
-def load_state() -> dict:
-    if STATE_PATH.is_file():
-        return json.loads(STATE_PATH.read_text())
+def _readcon_core_lock_identity() -> str:
+    for block in (REPO / "Cargo.lock").read_text().split("[[package]]"):
+        fields: dict[str, str] = {}
+        for line in block.splitlines():
+            if " = " not in line:
+                continue
+            key, value = line.split(" = ", 1)
+            fields[key.strip()] = value.strip().strip('"')
+        if fields.get("name") != "readcon-core":
+            continue
+        source = fields.get("source", "")
+        if source.startswith("git+") and "#" in source:
+            return source.rsplit("#", 1)[-1].split("?", 1)[0]
+        if source.startswith("registry+"):
+            return f"registry:{fields.get('version', '')}:{fields.get('checksum', '')}"
+        return f"path:{source}:{fields.get('version', '')}"
+    raise SystemExit("Cargo.lock has no readcon-core package")
+
+
+def state_scope(out: Path, n: int) -> dict[str, str | int]:
+    return {
+        "out": str(out.resolve()),
+        "n": int(n),
+        "readcon_core": _readcon_core_lock_identity(),
+    }
+
+
+def state_path(scope: dict[str, str | int]) -> Path:
+    key = f"{scope['out']}|{scope['n']}|{scope['readcon_core']}"
+    digest = hashlib.sha256(key.encode()).hexdigest()[:16]
+    return REPO / "build" / f"db29-state-{digest}.json"
+
+
+def load_state(path: Path, scope: dict[str, str | int]) -> dict:
+    if path.is_file():
+        loaded = json.loads(path.read_text())
+        for key, expected in scope.items():
+            if loaded.get(key) != expected:
+                raise SystemExit(
+                    f"state mismatch: {key}={loaded.get(key)!r} expected {expected!r}"
+                )
+        return loaded
     return {
         "codecs": {},
         "reads": {},
@@ -60,11 +99,13 @@ def load_state() -> dict:
         "bits": {},
         "commit": "",
         "tree": "",
+        **scope,
     }
 
 
-def save_state(state: dict) -> None:
-    STATE_PATH.write_text(json.dumps(state) + "\n")
+def save_state(state: dict, path: Path, scope: dict[str, str | int]) -> None:
+    state.update(scope)
+    path.write_text(json.dumps(state) + "\n")
 
 
 def wait_quiet() -> None:
@@ -149,7 +190,7 @@ def write_mode(text: str, dest: Path, mode: str, n_expect: int) -> dict:
     return facts
 
 
-def ensure_corpora(state: dict) -> None:
+def ensure_corpora(state: dict, path: Path, scope: dict[str, str | int]) -> None:
     fair._load_md_positions = d28.fast_md_positions
     for arm in ("lattice", "md", "thermal"):
         state["codecs"].setdefault(arm, {})
@@ -173,7 +214,7 @@ def ensure_corpora(state: dict) -> None:
             facts = write_mode(text, ROOT / arm / mode, mode, n_expect)
             facts.update(profile)
             state["codecs"][arm][mode] = facts
-            save_state(state)
+            save_state(state, path, scope)
         del text, records
         if arm in ("md", "thermal"):
             for mode in ("shuffle", "cold-bulk"):
@@ -182,7 +223,7 @@ def ensure_corpora(state: dict) -> None:
     if "source" not in state["bits"]:
         print("counting XTC low bits", flush=True)
         state["bits"]["source"] = source_widen_report()
-        save_state(state)
+        save_state(state, path, scope)
 
 
 def pack_samples(left, right, peaks, left_name, right_name) -> dict:
@@ -409,7 +450,13 @@ def main() -> None:
     if args.out is not None:
         OUT = args.out if args.out.is_absolute() else REPO / args.out
     if os.environ.get("READCON_RERUN_RELEASE") == "1":
-        N = int(os.environ.get("READCON_DB29_N", str(N)))
+        raw_n = os.environ.get("READCON_DB29_N", str(N))
+        try:
+            N = int(raw_n)
+        except ValueError as exc:
+            raise SystemExit(
+                f"READCON_DB29_N must be an integer, not {raw_n!r}"
+            ) from exc
         if N < 6:
             raise SystemExit(f"n must be at least 6, not {N}")
     os.environ["TMPDIR"] = str(REPO / "build" / "tmp")
@@ -422,13 +469,15 @@ def main() -> None:
         raise SystemExit("HEAD is not on an origin branch")
     tree = drv.fair.git_out("rev-parse", f"{commit}^{{tree}}")
     py_path = drv.ensure_tree_prefix("tip", commit)
-    state = load_state()
+    scope = state_scope(OUT, N)
+    path = state_path(scope)
+    state = load_state(path, scope)
     if state.get("commit") not in ("", commit):
         raise SystemExit(f"state is for {state.get('commit')}")
     state["commit"] = commit
     state["tree"] = tree
     print(f"corpora for {commit}", flush=True)
-    ensure_corpora(state)
+    ensure_corpora(state, path, scope)
     log_path = REPO / "build" / "db29-campaign.log"
     log = log_path.open("w")
     log.write(f"commit {commit}\n")
@@ -442,13 +491,13 @@ def main() -> None:
                 state["reads"][arm][key] = time_pair(
                     arm, "raw", "shuffle", py_path, threads, log
                 )
-                save_state(state)
+                save_state(state, path, scope)
             if key not in state["policy"][arm]:
                 print(f"timing {arm} policy {key}", flush=True)
                 state["policy"][arm][key] = time_pair(
                     arm, "warm-point", "cold-bulk", py_path, threads, log
                 )
-                save_state(state)
+                save_state(state, path, scope)
     log.write("wrote db29\n")
     log.close()
     write_record(state, log_path.read_text())
