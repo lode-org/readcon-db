@@ -1,16 +1,20 @@
 """Round-trip the paper 40×8 Cu frames through both fair stores.
 
-The geometry is ``paper_con_text``: eight Cu atoms, forty frames, cell
-10 Å. Each atom also carries an explicit mass, a fixed-flag mask, a
-non-zero velocity, and an atom id that is a permutation of ``0..7``.
-CON stores one mass per symbol, so that mass is the same on every Cu
-atom and is not the elemental default.
+Eight Cu atoms, forty frames, on a triclinic cell with lengths
+``(10, 11.5, 12.25)`` and angles ``(80, 75, 70)``. Each atom also
+carries an explicit mass, a fixed-flag mask, a non-zero velocity, and
+an atom id that is a permutation of ``0..7``. CON stores one mass per
+symbol, so that mass is the same on every Cu atom and is not the
+elemental default.
 
-``compare`` checks, with exact equality, symbols, positions, cell
-lengths, cell angles, pbc, masses, fixed flags, velocities, and
-frame_index on the stored CON frames, on ``read_arrays``, and on
-``materialize_ase``. Atom ids are checked on the CON frames only.
-ASE keeps no atom id.
+``compare`` checks exact equality of symbols, positions, cell lengths,
+cell angles, the ``read_arrays`` and ``materialize_ase`` cell matrices,
+pbc, masses, fixed flags, velocities, frame index, and atomic numbers.
+``read_arrays`` energy is 0 with ``energy_set`` false, and
+``velocities_set`` and ``pbc_set`` are true. ``materialize_ase`` energy
+is the same unset pair. CON units metadata is the written units dict.
+Atom ids are exact on the CON frames. The ASE cell is whatever
+``views()["ase_atom_id"]`` read back.
 """
 
 from __future__ import annotations
@@ -29,6 +33,15 @@ N_ATOMS = 8
 MASS = np.float64(62.5)
 ATOM_IDS = (3, 0, 7, 1, 5, 2, 6, 4)
 PBC = (True, True, False)
+# Distinct lengths and angles, none of them 90. A valid CON cell.
+CELL_LENGTHS = (10.0, 11.5, 12.25)
+CELL_ANGLES = (80.0, 75.0, 70.0)
+UNITS = {
+    "energy": "eV",
+    "length": "angstrom",
+    "mass": "amu",
+    "time": "(amu*angstrom^2/eV)^0.5",
+}
 FIELDS_PATH = Path(__file__).resolve().parent / "fair-fidelity" / "FIELDS.md"
 
 
@@ -63,7 +76,7 @@ def build_frames() -> list:
                     vz=vz,
                 )
             )
-        frame = readcon.ConFrame((10.0, 10.0, 10.0), (90.0, 90.0, 90.0), atoms)
+        frame = readcon.ConFrame(CELL_LENGTHS, CELL_ANGLES, atoms)
         frame.set_metadata_json(json.dumps({"pbc": list(PBC)}))
         frame.set_frame_index(frame_index)
         frames.append(frame)
@@ -156,7 +169,12 @@ def views(stored: dict) -> dict:
         "con": con_frames,
         "arrays": arrays,
         "got": fair.materialize_ase(rows),
-        "ase_atom_id": ["atom_id" in row.toatoms().arrays for row in rows],
+        "ase_atom_id": [
+            None
+            if "atom_id" not in row.toatoms().arrays
+            else [int(value) for value in row.toatoms().arrays["atom_id"]]
+            for row in rows
+        ],
     }
 
 
@@ -211,21 +229,21 @@ def compare(stored: dict) -> list[dict]:
         arrays["positions"], expect_pos
     )
     pos_ase = _bits(got["positions"], expect_ase_pos)
+    array_lengths = np.stack([_lengths_angles(matrix)[0] for matrix in arrays["cell"]])
+    array_angles = np.stack([_lengths_angles(matrix)[1] for matrix in arrays["cell"]])
+    written_lengths = np.stack([atoms.cell.lengths() for atoms in written])
+    written_angles = np.stack([atoms.cell.angles() for atoms in written])
     lengths_rdb = all(
         _bits(frame.cell, src.cell) for frame, src in zip(con_frames, parsed)
-    )
+    ) and _bits(array_lengths, written_lengths)
     angles_rdb = all(
         _bits(frame.angles, src.angles) for frame, src in zip(con_frames, parsed)
-    )
-    lengths_ase = all(
-        _bits(_lengths_angles(matrix)[0], atoms.cell.lengths())
-        for matrix, atoms in zip(got["cell"], written)
-    )
-    angles_ase = all(
-        _bits(_lengths_angles(matrix)[1], atoms.cell.angles())
-        for matrix, atoms in zip(got["cell"], written)
-    )
-    cell_ase = _bits(got["cell"], expect_ase_cell) and lengths_ase and angles_ase
+    ) and _bits(array_angles, written_angles)
+    got_lengths = np.stack([_lengths_angles(matrix)[0] for matrix in got["cell"]])
+    got_angles = np.stack([_lengths_angles(matrix)[1] for matrix in got["cell"]])
+    matrix_ase = _bits(got["cell"], expect_ase_cell)
+    lengths_ase = matrix_ase and _bits(got_lengths, written_lengths)
+    angles_ase = matrix_ase and _bits(got_angles, written_angles)
     pbc_rdb = all(
         tuple(bool(flag) for flag in frame.metadata["pbc"]) == PBC
         for frame in con_frames
@@ -252,8 +270,28 @@ def compare(stored: dict) -> list[dict]:
     ids_rdb = all(
         [atom.atom_id for atom in frame.atoms] == list(ATOM_IDS) for frame in con_frames
     )
-    float_rdb = pos_rdb and lengths_rdb and angles_rdb and mass_rdb and vel_rdb
-    float_ase = pos_ase and cell_ase and mass_ase and vel_ase
+    ids_ase = seen["ase_atom_id"] == [list(ATOM_IDS)] * N_FRAMES
+    numbers = np.full((N_FRAMES, N_ATOMS), 29, dtype=np.uint32)
+    numbers_rdb = (
+        np.asarray(arrays["numbers"], dtype=np.uint32).tobytes() == numbers.tobytes()
+    )
+    numbers_ase = (
+        np.asarray(got["numbers"], dtype=np.uint32).tobytes() == numbers.tobytes()
+    )
+    energy_rdb = _bits(arrays["energy"], np.zeros(N_FRAMES)) and not any(
+        arrays["energy_set"]
+    )
+    energy_ase = _bits(got["energy"], np.zeros(N_FRAMES)) and not any(got["energy_set"])
+    velocities_set = arrays["velocities_set"] is True
+    pbc_set = all(arrays["pbc_set"])
+    units_rdb = all(frame.metadata.get("units") == UNITS for frame in con_frames)
+    units_ase = "units" in got
+    float_rdb = (
+        pos_rdb and lengths_rdb and angles_rdb and mass_rdb and vel_rdb and energy_rdb
+    )
+    float_ase = (
+        pos_ase and lengths_ase and angles_ase and mass_ase and vel_ase and energy_ase
+    )
     return [
         {"field": "symbols", "readcon": symbols_rdb, "ase": symbols_ase},
         {"field": "positions", "readcon": pos_rdb, "ase": pos_ase},
@@ -264,7 +302,16 @@ def compare(stored: dict) -> list[dict]:
         {"field": "fixed flags", "readcon": fixed_rdb, "ase": fixed_ase},
         {"field": "velocities", "readcon": vel_rdb, "ase": vel_ase},
         {"field": "frame index", "readcon": index_rdb, "ase": index_ase},
-        {"field": "atom ids", "readcon": ids_rdb, "ase": False},
+        {"field": "atom ids", "readcon": ids_rdb, "ase": ids_ase},
+        {"field": "atomic numbers", "readcon": numbers_rdb, "ase": numbers_ase},
+        {"field": "energy", "readcon": energy_rdb, "ase": energy_ase},
+        {
+            "field": "velocities_set",
+            "readcon": velocities_set,
+            "ase": "velocities_set" in got,
+        },
+        {"field": "pbc_set", "readcon": pbc_set, "ase": "pbc_set" in got},
+        {"field": "units", "readcon": units_rdb, "ase": units_ase},
         {
             "field": "float precision",
             "readcon": float_rdb,
@@ -280,12 +327,14 @@ def render_markdown(rows: list[dict]) -> str:
         "# Fair store fields",
         "",
         "Generated by `examples/benchmarks/fair-fidelity/write_fields.py`.",
-        "Forty frames of eight Cu atoms, the paper cell and coordinates,",
-        "an explicit mass of 62.5 on every atom, mixed fixed flags,",
-        "non-zero velocities, frame indexes, and atom ids",
-        "`(3, 0, 7, 1, 5, 2, 6, 4)`.",
+        "Forty frames of eight Cu atoms on a triclinic cell, lengths",
+        "`(10, 11.5, 12.25)` and angles `(80, 75, 70)`, with an explicit",
+        "mass of 62.5, mixed fixed flags, non-zero velocities, frame",
+        "indexes, and atom ids `(3, 0, 7, 1, 5, 2, 6, 4)`.",
         "Checked on the stored CON frames, on readcon-db `read_arrays`,",
-        "and on `materialize_ase`. Atom ids are a readcon-db field.",
+        "and on `materialize_ase`. Atomic numbers, the unset energy, and",
+        "the read_arrays set-flags are included. Atom ids and CON units",
+        "are reported from the values read back.",
         "CON keeps one mass per symbol, so the mass does not vary inside the frame.",
         "",
         "| field | readcon-db kept? | ASE kept? |",

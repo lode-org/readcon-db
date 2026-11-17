@@ -1,9 +1,13 @@
 """Paper 40×8 frames round-trip the fields both fair read paths return.
 
-Exact equality, on the stored CON frames and on ``read_arrays``, and on
-``materialize_ase``: symbols, positions, cell lengths, cell angles, pbc,
-masses, fixed flags, velocities, and frame index. Atom ids are exact on
-the CON frames and absent from ASE.
+Exact equality on the stored CON frames, on ``read_arrays``, and on
+``materialize_ase``: symbols, positions, cell lengths, cell angles, the
+cell matrix, pbc, masses, fixed flags, velocities, frame index, and
+atomic numbers. ``read_arrays`` energy is 0 with ``energy_set`` false,
+and ``velocities_set`` and ``pbc_set`` are true. ``materialize_ase``
+energy is that same unset pair. CON units metadata matches the written
+units. Atom ids are exact on the CON frames and are whatever
+``ase_atom_id`` read back.
 """
 
 from __future__ import annotations
@@ -84,8 +88,13 @@ def test_paper_frames_round_trip_each_field(tmp_path: Path) -> None:
     expect_mass = np.stack([fair_fidelity._masses(frame) for frame in parsed])
     expect_fixed = np.stack([fair_fidelity._fixed_rows(frame) for frame in parsed])
     expect_index = np.arange(fair_fidelity.N_FRAMES, dtype=np.float64)
+    assert fair_fidelity.CELL_ANGLES == (80.0, 75.0, 70.0)
+    assert len(set(fair_fidelity.CELL_ANGLES)) == 3
+    assert all(angle != 90.0 for angle in fair_fidelity.CELL_ANGLES)
+    assert len(set(fair_fidelity.CELL_LENGTHS)) == 3
     for index, (frame, src) in enumerate(zip(seen["con"], parsed)):
         assert [atom.symbol for atom in frame.atoms] == ["Cu"] * fair_fidelity.N_ATOMS
+        assert frame.metadata["units"] == fair_fidelity.UNITS
         assert _bits(fair_fidelity._positions(frame), fair_fidelity._positions(src))
         assert _bits(frame.cell, src.cell)
         assert _bits(frame.angles, src.angles)
@@ -100,6 +109,16 @@ def test_paper_frames_round_trip_each_field(tmp_path: Path) -> None:
         assert int(frame.frame_index) == index
     assert _bits(arrays["positions"], expect_pos)
     assert _bits(arrays["velocities"], expect_vel)
+    assert arrays["velocities_set"] is True
+    assert (
+        np.asarray(arrays["numbers"], dtype=np.uint32).tobytes()
+        == np.full(
+            (fair_fidelity.N_FRAMES, fair_fidelity.N_ATOMS), 29, dtype=np.uint32
+        ).tobytes()
+    )
+    assert _bits(arrays["energy"], np.zeros(fair_fidelity.N_FRAMES))
+    assert not any(arrays["energy_set"])
+    assert all(arrays["pbc_set"])
     assert _bits(arrays["masses"], expect_mass)
     assert arrays["constraints"].tobytes() == expect_fixed.tobytes()
     assert _bits(arrays["frame_index"], expect_index)
@@ -114,6 +133,14 @@ def test_paper_frames_round_trip_each_field(tmp_path: Path) -> None:
         assert _bits(angles, atoms.cell.angles())
     assert _bits(got["positions"], [atoms.positions for atoms in written])
     assert _bits(got["velocities"], [atoms.get_velocities() for atoms in written])
+    assert (
+        np.asarray(got["numbers"], dtype=np.uint32).tobytes()
+        == np.full(
+            (fair_fidelity.N_FRAMES, fair_fidelity.N_ATOMS), 29, dtype=np.uint32
+        ).tobytes()
+    )
+    assert _bits(got["energy"], np.zeros(fair_fidelity.N_FRAMES))
+    assert not any(got["energy_set"])
     assert _bits(got["masses"], [atoms.get_masses() for atoms in written])
     assert (
         got["constraints"].tobytes()
@@ -132,7 +159,7 @@ def test_paper_frames_round_trip_each_field(tmp_path: Path) -> None:
         assert _bits(lengths, atoms.cell.lengths())
         assert _bits(angles, atoms.cell.angles())
     assert all("atom_id" in atoms.arrays for atoms in written)
-    assert seen["ase_atom_id"] == [False] * fair_fidelity.N_FRAMES
+    assert seen["ase_atom_id"] == [None] * fair_fidelity.N_FRAMES
     by_name = {row["field"]: row for row in rows}
     for name in (
         "symbols",
@@ -144,9 +171,17 @@ def test_paper_frames_round_trip_each_field(tmp_path: Path) -> None:
         "fixed flags",
         "velocities",
         "frame index",
+        "atomic numbers",
+        "energy",
     ):
         assert by_name[name]["readcon"] is True, name
         assert by_name[name]["ase"] is True, name
+    assert by_name["velocities_set"]["readcon"] is True
+    assert by_name["velocities_set"]["ase"] is False
+    assert by_name["pbc_set"]["readcon"] is True
+    assert by_name["pbc_set"]["ase"] is False
+    assert by_name["units"]["readcon"] is True
+    assert by_name["units"]["ase"] is False
     assert by_name["atom ids"]["readcon"] is True
     assert by_name["atom ids"]["ase"] is False
     assert by_name["float precision"]["readcon_text"] == "bit-exact"
