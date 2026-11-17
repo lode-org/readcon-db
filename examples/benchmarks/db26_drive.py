@@ -30,9 +30,8 @@ import db26_highbyte
 
 REPO = fair.REPO
 BENCH = REPO / "bench" / "db26"
-# The bench/db26 files in the repository were produced by this driver at
-# this commit. A later run records whatever pushed HEAD it is started on.
-PUBLISHED_TIP = "20a5f64e37d9a0892e913289d39bcbe71d7718f8"
+# A run records whatever pushed HEAD it is started on. The tip label in
+# the results is that commit, not a stored name.
 BASE = "aedcbda4"
 N = 12
 BOOT_SAMPLES = 10_000
@@ -569,10 +568,7 @@ def main() -> None:
     os.environ.update(env_base())
     fair.require_pushed_commit()
     commit = fair.git_out("rev-parse", "HEAD")
-    print(
-        f"published db26 records are {PUBLISHED_TIP}; this run records {commit}",
-        flush=True,
-    )
+    print(f"this run records {commit}", flush=True)
     tree = fair.git_out("rev-parse", f"{commit}^{{tree}}")
     base_tree = fair.git_out("rev-parse", f"{BASE}^{{tree}}")
     BENCH.mkdir(parents=True, exist_ok=True)
