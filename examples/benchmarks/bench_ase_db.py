@@ -2,13 +2,15 @@
 """LEGACY UNEQUAL WORKLOAD: Cu2 stand-in only. Prefer fair_campaign.py for proper comparison."""
 
 from __future__ import annotations
-import json, sys, time
+
+import json
+import sys
+import time
 from pathlib import Path
 
 try:
-    from ase.db import connect
     from ase import Atoms
-    import numpy as np
+    from ase.db import connect
 except ImportError:
     print("ASE not installed", file=sys.stderr)
     sys.exit(1)

@@ -14,7 +14,6 @@ import json
 import os
 import platform
 import shutil
-import sys
 from pathlib import Path
 
 import db24_drive as fair_drive
