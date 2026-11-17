@@ -53,13 +53,6 @@ def test_steps_are_loaded_from_the_record(tmp_path: Path) -> None:
     path = tmp_path / "samples.json"
     path.write_text(json.dumps([record]))
     steps = bisect.load_steps(path)
-    assert bisect.SAMPLES_PATH == (
-        Path(bisect.__file__).resolve().parents[2]
-        / "bench"
-        / "db29"
-        / "bisect"
-        / "samples.json"
-    )
     assert len(steps) == 1
     step = steps[0]
     assert step["left_sha"] == record["left_sha"]

@@ -20,8 +20,9 @@ REPO = fair.REPO
 OUT = REPO / "bench" / "db26" / "high_byte.json"
 
 
-def main() -> dict:
+def main(out: Path | None = None) -> dict:
     fair.require_pushed_commit()
+    dest = OUT if out is None else out
     env = os.environ.copy()
     env["PATH"] = str(Path.home() / ".local" / "bin") + os.pathsep + env.get("PATH", "")
     env["RUSTUP_TOOLCHAIN"] = "1.88.0"
@@ -29,7 +30,16 @@ def main() -> dict:
     env.setdefault("DB26_COMMIT", fair.git_out("rev-parse", "HEAD"))
     (REPO / "build" / "tmp").mkdir(parents=True, exist_ok=True)
     proc = subprocess.run(
-        ["cargo", "run", "--release", "--offline", "--example", "db26_highbyte"],
+        [
+            "cargo",
+            "run",
+            "--release",
+            "--offline",
+            "--example",
+            "db26_highbyte",
+            "--",
+            str(dest),
+        ],
         cwd=REPO,
         check=True,
         capture_output=True,
@@ -39,8 +49,8 @@ def main() -> dict:
     line = proc.stdout.strip().splitlines()[-1]
     payload = json.loads(line)
     # The example also writes the file. Pretty-print the same object.
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(json.dumps(payload, indent=2) + "\n")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(payload, indent=2) + "\n")
     return payload
 
 

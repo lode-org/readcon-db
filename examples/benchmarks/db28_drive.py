@@ -8,6 +8,12 @@ from __future__ import annotations
 
 import json
 import os
+
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 import platform
 import sys
 import time
@@ -350,6 +356,7 @@ def write_results(directory: Path, record: dict) -> None:
         (
             f"Commit `{record['commit']}`, tree `{record['tree']}`. "
             f"Host {record['host']['cpu']}, {record['host']['ncpu']} CPUs. "
+            f"{drv.fair.protocol_header(record['host'])} "
             f"n={record['n']}, serial. The same reads run on every arm. "
             "Arm order within a sample is raw, shuffle, reversed on odd indexes. "
             "Warm selected seconds are the mean per frame. "
@@ -526,10 +533,10 @@ def example_record() -> dict:
 
 
 def main() -> None:
-    import fair_ase_protocol as fair
-
     os.environ.update(drv.env_base())
     os.environ.pop("READCON_DB_COOKED_CODEC", None)
+    import fair_ase_protocol as fair
+
     require_recorded_n(N)
     drv.fair.require_pushed_commit()
     commit = drv.fair.git_out("rev-parse", "HEAD")
@@ -570,6 +577,7 @@ def main() -> None:
         "n": N,
         "serial": True,
         "settings": "full, selected, range; cold and warm; threads unset and 1",
+        **drv.fair.host_facts(),
     }
     BENCH.mkdir(parents=True)
     log_path = BENCH / "campaign.log"

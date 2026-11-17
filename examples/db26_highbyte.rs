@@ -47,7 +47,7 @@ fn summarize(samples: &[u128]) -> String {
         .map(|v| v.to_string())
         .collect::<Vec<_>>()
         .join(",");
-    format!("\"mean_us\":{mean},\"iqr_us\":{iqr:.0},\"samples_us\":[{list}]")
+    format!("\"mean_us\":{mean},\"iqr_us\":{iqr:.2},\"samples_us\":[{list}]")
 }
 
 fn sample(body: &mut dyn FnMut()) -> Vec<u128> {
@@ -182,9 +182,13 @@ fn main() {
         "{{\"rounds\":20,\"untimed\":3,\"level\":3,\"window_log\":12,\"ldm\":false,\"commit\":\"{commit}\",\"sets\":[{}]}}",
         sets.join(",")
     );
-    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let path = repo.join("bench/db26/high_byte.json");
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let path = std::env::args()
+        .nth(1)
+        .map(PathBuf::from)
+        .expect("output path");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
     std::fs::write(&path, line.as_bytes()).unwrap();
     println!("{line}");
 }

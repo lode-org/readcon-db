@@ -155,28 +155,28 @@ The published CPC samples in `published_db_v2` (40 frames of 8 Cu, n=6) are read
 ASE committed and fsynced once per frame.
 
 <!-- fair-docs:begin readme-fair -->
-Type-7 medians from `examples/benchmarks/results/fair-db29/campaign.json`, in seconds. n is the stored sample count.
+Type-7 medians from `examples/benchmarks/fair-db30/campaign.json`, in seconds. n is the stored sample count.
 
 | workload | op | cache | readcon-db | ASE sqlite | faster |
 | --- | --- | --- | --- | --- | --- |
-| 10^3 atoms, 1 frame | full read | warm | 1.6555e-05 (n=6) | 7.9115e-04 (n=12) | readcon-db |
-| 10^3 atoms, 1 frame | full read | cold | 3.1883e-05 (n=6) | 2.0304e-03 (n=12) | readcon-db |
-| 10^4 atoms, 1 frame | full read | warm | 2.7152e-04 (n=6) | 4.3440e-03 (n=6) | readcon-db |
-| 10^4 atoms, 1 frame | full read | cold | 2.9294e-04 (n=6) | 5.2235e-03 (n=12) | readcon-db |
-| 10^5 atoms, 1 frame | full read | warm | 2.5745e-03 (n=6) | 3.4530e-02 (n=12) | readcon-db |
-| 10^5 atoms, 1 frame | full read | cold | 6.2759e-03 (n=12) | 3.3129e-02 (n=6) | readcon-db |
-| 10^6 atoms, 1 frame | full read | warm | 2.2889e-02 (n=6) | 3.0143e-01 (n=6) | readcon-db |
-| 10^6 atoms, 1 frame | full read | cold | 6.7073e-02 (n=12) | 3.5340e-01 (n=12) | readcon-db |
-| 10^6 atoms, 1 frame | one frame | cold | 6.7658e-02 (n=12) | 3.5220e-01 (n=6) | readcon-db |
-| 10^6 atoms, 1 frame | insert | cold-file | 3.0821e-01 (n=6) | 2.5567e-01 (n=10) | ASE |
-| 8 atoms, 10^4 frames | full read | warm | 6.3478e-03 (n=12) | 1.0671e+00 (n=6) | readcon-db |
-| 8 atoms, 10^4 frames | full read | cold | 6.4131e-03 (n=6) | 1.0325e+00 (n=6) | readcon-db |
-| 8 atoms, 10^4 frames | one frame | cold | 4.6303e-05 (n=6) | 5.1330e-03 (n=12) | readcon-db |
-| 8 atoms, 10^4 frames | insert | cold-file | 2.6721e-01 (n=6) | 3.0784e+00 (n=6) | readcon-db |
+| 10^3 atoms, 1 frame | full read | warm | 1.6890e-05 (n=12) | 5.2462e-04 (n=12) | readcon-db |
+| 10^3 atoms, 1 frame | full read | cold | 3.3484e-05 (n=12) | 1.1799e-03 (n=12) | readcon-db |
+| 10^4 atoms, 1 frame | full read | warm | 2.7837e-04 (n=12) | 3.3116e-03 (n=12) | readcon-db |
+| 10^4 atoms, 1 frame | full read | cold | 2.9667e-04 (n=12) | 5.4029e-03 (n=12) | readcon-db |
+| 10^5 atoms, 1 frame | full read | warm | 2.5096e-03 (n=12) | 2.9690e-02 (n=12) | readcon-db |
+| 10^5 atoms, 1 frame | full read | cold | 5.7563e-03 (n=12) | 4.2325e-02 (n=12) | readcon-db |
+| 10^6 atoms, 1 frame | full read | warm | 3.4467e-02 (n=12) | 3.2899e-01 (n=12) | readcon-db |
+| 10^6 atoms, 1 frame | full read | cold | 5.7957e-02 (n=12) | 3.6177e-01 (n=12) | readcon-db |
+| 10^6 atoms, 1 frame | one frame | cold | 6.3359e-02 (n=12) | 3.5050e-01 (n=12) | readcon-db |
+| 10^6 atoms, 1 frame | insert | cold-file | 3.1385e-01 (n=12) | 2.6371e-01 (n=12) | ASE |
+| 8 atoms, 10^4 frames | full read | warm | 6.3953e-03 (n=12) | 9.5912e-01 (n=12) | readcon-db |
+| 8 atoms, 10^4 frames | full read | cold | 6.2129e-03 (n=12) | 9.3665e-01 (n=12) | readcon-db |
+| 8 atoms, 10^4 frames | one frame | cold | 4.3610e-05 (n=12) | 3.8396e-03 (n=12) | readcon-db |
+| 8 atoms, 10^4 frames | insert | cold-file | 3.2544e-01 (n=12) | 2.9928e+00 (n=12) | readcon-db |
 
-ASE is faster on the 10^4-atom, 10^5-atom, and 10^6-atom inserts (10^4 atoms, 1 frame: readcon-db 3.8324e-03 (n=6), ASE 3.6268e-03 (n=12); 10^5 atoms, 1 frame: readcon-db 2.9094e-02 (n=6), ASE 2.7197e-02 (n=6); 10^6 atoms, 1 frame: readcon-db 3.0821e-01 (n=6), ASE 2.5567e-01 (n=10)).
+The large inserts do not share a winner (10^4 atoms, 1 frame: readcon-db 3.7192e-03 (n=12), ASE 3.5448e-03 (n=12), ASE is faster; 10^5 atoms, 1 frame: readcon-db 2.5689e-02 (n=12), ASE 2.6448e-02 (n=12), readcon-db is faster; 10^6 atoms, 1 frame: readcon-db 3.1385e-01 (n=12), ASE 2.6371e-01 (n=12), ASE is faster).
 readcon-db is faster on every full read and single-frame query in this table.
-The full ladder is [`examples/benchmarks/results/fair-db29/RESULTS.md`](examples/benchmarks/results/fair-db29/RESULTS.md).
+The full ladder is [`examples/benchmarks/fair-db30/RESULTS.md`](examples/benchmarks/fair-db30/RESULTS.md).
 <!-- fair-docs:end readme-fair -->
 
 ## Questions and bug reports

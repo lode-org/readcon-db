@@ -16,6 +16,12 @@ are this tree. Both prefixes are built under ``build/wheels``.
 import argparse
 import json
 import os
+
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 import platform
 import shutil
 import subprocess
@@ -174,6 +180,96 @@ def cpu_model() -> str:
     return ""
 
 
+BLAS_ENV = {
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "NUMEXPR_NUM_THREADS": "1",
+}
+
+
+def pin_blas_env(env: dict) -> dict:
+    """Pin BLAS and OpenMP before a child imports NumPy or ASE."""
+    env.update(BLAS_ENV)
+    return env
+
+
+def _sysfs(path: Path) -> str | None:
+    try:
+        if path.is_file():
+            text = path.read_text().strip()
+            return text or None
+    except OSError:
+        return None
+    return None
+
+
+def cpu_frequency() -> dict:
+    """Governor, current frequency, and turbo or boost, when the kernel exposes them."""
+    facts: dict = {}
+    cpu0 = Path("/sys/devices/system/cpu/cpu0/cpufreq")
+    governor = _sysfs(cpu0 / "scaling_governor")
+    if governor:
+        facts["scaling_governor"] = governor
+    current = _sysfs(cpu0 / "scaling_cur_freq")
+    if current and current.isdigit():
+        facts["scaling_cur_freq_khz"] = int(current)
+    try:
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.lower().startswith("cpu mhz"):
+                facts["cpuinfo_mhz"] = float(line.split(":", 1)[1].strip())
+                break
+    except (OSError, ValueError):
+        pass
+    no_turbo = _sysfs(Path("/sys/devices/system/cpu/intel_pstate/no_turbo"))
+    if no_turbo in {"0", "1"}:
+        facts["turbo"] = "off" if no_turbo == "1" else "on"
+    boost = _sysfs(Path("/sys/devices/system/cpu/cpufreq/boost"))
+    if boost in {"0", "1"}:
+        facts["boost"] = "on" if boost == "1" else "off"
+    return facts
+
+
+def host_facts() -> dict:
+    facts = {
+        "kernel": platform.release(),
+        "cpu": cpu_model(),
+        "serial": True,
+        "quantile": "type-7",
+        "omp_num_threads": "1",
+        "openblas_num_threads": "1",
+        "mkl_num_threads": "1",
+        "numexpr_num_threads": "1",
+    }
+    facts.update(cpu_frequency())
+    return facts
+
+
+def protocol_header(host: dict) -> str:
+    """BLAS pin, frequency, kernel, and the type-7 serial rule for a RESULTS header."""
+    parts = []
+    if host.get("scaling_governor"):
+        parts.append(f"governor {host['scaling_governor']}")
+    if host.get("scaling_cur_freq_khz") is not None:
+        parts.append(f"scaling_cur_freq {host['scaling_cur_freq_khz']} kHz")
+    if host.get("cpuinfo_mhz") is not None:
+        parts.append(f"cpuinfo {host['cpuinfo_mhz']} MHz")
+    if host.get("turbo"):
+        parts.append(f"turbo {host['turbo']}")
+    if host.get("boost"):
+        parts.append(f"boost {host['boost']}")
+    freq = f" {', '.join(parts)}." if parts else ""
+    kernel = host.get("kernel") or host.get("release") or ""
+    cpu = host.get("cpu") or ""
+    serial = str(host.get("serial", True)).lower()
+    quantile = host.get("quantile") or "type-7"
+    return (
+        "OMP_NUM_THREADS=1, OPENBLAS_NUM_THREADS=1, "
+        f"MKL_NUM_THREADS=1, NUMEXPR_NUM_THREADS=1.{freq} "
+        f"Kernel {kernel}. CPU {cpu}. serial={serial}. quantile {quantile}."
+    )
+
+
 def arm_order(index: int) -> list[str]:
     arms = list(ARMS)
     if index % 2:
@@ -182,7 +278,7 @@ def arm_order(index: int) -> list[str]:
 
 
 def run_py(name: str, code: str, args: list[str], commits: dict[str, str]) -> str:
-    env = os.environ.copy()
+    env = pin_blas_env(os.environ.copy())
     env["PYTHONPATH"] = prefix(name, commits)
     env["PYTHONUNBUFFERED"] = "1"
     apply_codec(name, env)
@@ -254,7 +350,7 @@ print(fair.disk_bytes("ase.db", dest))
 def start_worker(
     name: str, root: Path, commits: dict[str, str], extra: dict | None = None
 ):
-    env = os.environ.copy()
+    env = pin_blas_env(os.environ.copy())
     env["PYTHONPATH"] = prefix(name, commits)
     env["PYTHONUNBUFFERED"] = "1"
     apply_codec(name, env)
@@ -470,6 +566,7 @@ def write_results(record: dict, levers: dict) -> None:
         f"Commit `{record['commit']}`, tree `{record['tree']}`. "
         f"Host {host['system']} {host['release']}, {host['cpu']}, {host['ncpu']} CPUs. "
         f"`RAYON_NUM_THREADS` was unset for the first block. n={record['n']}, serial. "
+        f"{protocol_header(host)} "
         "Arm order is db18, raw, shuffle, ase; reversed on odd sample indexes. "
         "Warm selected is one pass of i*17 mod 64, each frame once; seconds are the mean per frame. "
         "There is no frame cache. The median is type-7. Each time cell is that median, "
@@ -502,7 +599,7 @@ def write_results(record: dict, levers: dict) -> None:
     scope = levers["scope_two_threads"]
     lines.append(
         f"Two empty `thread::scope` workers cost {scope['mean_us']:.0f} µs "
-        f"(IQR {scope['iqr_us']:.0f} µs)."
+        f"(IQR {scope['iqr_us']:.2f} µs)."
     )
     lines.append("")
     lines.append(
@@ -512,8 +609,8 @@ def write_results(record: dict, levers: dict) -> None:
     for row in levers["rows"]:
         lines.append(
             f"| {row['level']} | {row['window']} | {row['bytes']} | "
-            f"{row['seq']['mean_us']:.0f} ({row['seq']['iqr_us']:.0f}) | "
-            f"{row['two_threads']['mean_us']:.0f} ({row['two_threads']['iqr_us']:.0f}) |"
+            f"{row['seq']['mean_us']:.0f} ({row['seq']['iqr_us']:.2f}) | "
+            f"{row['two_threads']['mean_us']:.0f} ({row['two_threads']['iqr_us']:.2f}) |"
         )
     lines.append("")
     by_key = {(row["level"], row["window"]): row for row in levers["rows"]}
@@ -536,7 +633,7 @@ def write_results(record: dict, levers: dict) -> None:
         f"Shuffling only the high four bytes of each `f64` is "
         f"{levers['high_byte_zstd_bytes']} bytes of zstd plus "
         f"{levers['high_byte_raw_low_bytes']} raw bytes, and that decode plus the copy is "
-        f"{high['mean_us']:.0f} µs (IQR {high['iqr_us']:.0f} µs). Both stay fully shuffled."
+        f"{high['mean_us']:.0f} µs (IQR {high['iqr_us']:.2f} µs). Both stay fully shuffled."
     )
     lines.append("")
     lines.append("## How the two arms run")
@@ -739,6 +836,7 @@ def main() -> None:
             "machine": platform.machine(),
             "cpu": cpu_model(),
             "ncpu": os.cpu_count(),
+            **host_facts(),
         },
         "RAYON_NUM_THREADS": os.environ.get("RAYON_NUM_THREADS"),
         "n": N,

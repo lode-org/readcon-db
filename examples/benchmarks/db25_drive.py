@@ -89,6 +89,7 @@ def write_results(record: dict) -> None:
         f"Commit `{record['commit']}`, tree `{record['tree']}`. "
         f"Pushed base `{record['pushed_base']}`. "
         f"Host {record['host']['cpu']}, {record['host']['ncpu']} CPUs. "
+        f"{fair_drive.protocol_header(record['host'])} "
         "n=12, serial. Arm order is db18, raw, shuffle, ase; reversed on odd "
         "sample indexes. These rows are the warm full and range reads. "
         "A multi-frame shuffle read unshuffles into the NumPy buffer allocated "
@@ -181,6 +182,7 @@ def main() -> None:
             "machine": platform.machine(),
             "cpu": fair_drive.cpu_model(),
             "ncpu": os.cpu_count(),
+            **fair_drive.host_facts(),
         },
         "n": fair_drive.N,
         "rows": "warm full_read and warm range; then the same with RAYON_NUM_THREADS=1",

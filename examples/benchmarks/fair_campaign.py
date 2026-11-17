@@ -18,8 +18,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 import shutil
-import socket
 import subprocess
 import tempfile
 import threading
@@ -82,6 +87,19 @@ def prep_ladder(fixture: Path, ladder: list[int], work: Path) -> Path:
     return frames_dir
 
 
+def _time_rounds(fn, rounds: int) -> list[float]:
+    samples = []
+    for _ in range(rounds):
+        t0 = time.perf_counter()
+        fn()
+        samples.append(time.perf_counter() - t0)
+    return samples
+
+
+def _mean(samples: list[float]) -> float:
+    return sum(samples) / len(samples) if samples else 0.0
+
+
 def bench_readcon_db(con_path: Path, n_frames: int, corpus_dir: Path) -> dict:
     if corpus_dir.exists():
         shutil.rmtree(corpus_dir)
@@ -93,27 +111,24 @@ def bench_readcon_db(con_path: Path, n_frames: int, corpus_dir: Path) -> dict:
 
     # extract: materialize every CON blob (owned copy + byte fold) in one txn per pass
     rounds = 20
-    t1 = time.perf_counter()
-    last_ck = 0
-    last_total = 0
-    for _ in range(rounds):
+    last = {}
+
+    def one_extract() -> None:
         total, ck = db.touch_trajectory(1, n_frames)
         assert total > 0 and ck != 0  # payload fold; not length-only
-        last_total, last_ck = total, ck
-    extract_s = (time.perf_counter() - t1) / rounds
-    assert last_total > 0 and last_ck != 0
+        last["total"], last["ck"] = total, ck
 
-    # competitive selects (mean over rounds)
+    extract_samples = _time_rounds(one_extract, rounds)
+    extract_s = _mean(extract_samples)
+    assert last["total"] > 0 and last["ck"] != 0
+
     sel_rounds = 50
-    t2 = time.perf_counter()
-    for _ in range(sel_rounds):
-        _ = db.select(symbol="Cu")
-    select_cu_s = (time.perf_counter() - t2) / sel_rounds
-
-    t2b = time.perf_counter()
-    for _ in range(sel_rounds):
-        _ = db.select(natoms_min=1, natoms_max=10_000)
-    select_natoms_s = (time.perf_counter() - t2b) / sel_rounds
+    select_cu_samples = _time_rounds(lambda: db.select(symbol="Cu"), sel_rounds)
+    select_cu_s = _mean(select_cu_samples)
+    select_natoms_samples = _time_rounds(
+        lambda: db.select(natoms_min=1, natoms_max=10_000), sel_rounds
+    )
+    select_natoms_s = _mean(select_natoms_samples)
 
     # energy if any frames have it — may be 0 hits on tiny_cuh2 without energy
     # Mass / volume windows derived from first frame (all ladder frames identical).
@@ -124,26 +139,27 @@ def bench_readcon_db(con_path: Path, n_frames: int, corpus_dir: Path) -> dict:
     mass_lo, mass_hi = mass0 * 0.99, mass0 * 1.01
     vol_lo, vol_hi = vol0 * 0.99, vol0 * 1.01
 
-    t2m = time.perf_counter()
-    for _ in range(sel_rounds):
-        _ = db.select(mass_min=mass_lo, mass_max=mass_hi)
-    select_mass_s = (time.perf_counter() - t2m) / sel_rounds
-
-    t2v = time.perf_counter()
-    for _ in range(sel_rounds):
-        _ = db.select(volume_min=vol_lo, volume_max=vol_hi)
-    select_volume_s = (time.perf_counter() - t2v) / sel_rounds
+    select_mass_samples = _time_rounds(
+        lambda: db.select(mass_min=mass_lo, mass_max=mass_hi), sel_rounds
+    )
+    select_mass_s = _mean(select_mass_samples)
+    select_volume_samples = _time_rounds(
+        lambda: db.select(volume_min=vol_lo, volume_max=vol_hi), sel_rounds
+    )
+    select_volume_s = _mean(select_volume_samples)
 
     # Energy timing only if corpus has energy metadata (tiny_cuh2 has none → omit, not full-scan).
     has_energy = any(
         fr.energy is not None for fr in readcon.read_con(str(con_path))[:1]
     )
     select_energy_s = None
+    select_energy_samples: list[float] = []
     if has_energy:
-        t2c = time.perf_counter()
-        for _ in range(sel_rounds):
-            _ = db.select(energy_min=-1e9, energy_max=1e9, require_energy=True)
-        select_energy_s = (time.perf_counter() - t2c) / sel_rounds
+        select_energy_samples = _time_rounds(
+            lambda: db.select(energy_min=-1e9, energy_max=1e9, require_energy=True),
+            sel_rounds,
+        )
+        select_energy_s = _mean(select_energy_samples)
 
     # Multi-reader: share one ConCorpus; each thread fully materializes all blobs (one txn).
     def reader():
@@ -169,11 +185,17 @@ def bench_readcon_db(con_path: Path, n_frames: int, corpus_dir: Path) -> dict:
         "n_frames": n_frames,
         "insert_s": insert_s,
         "extract_all_mean_s": extract_s,
+        "extract_samples_s": extract_samples,
         "select_cu_mean_s": select_cu_s,
+        "select_cu_samples_s": select_cu_samples,
         "select_natoms_mean_s": select_natoms_s,
+        "select_natoms_samples_s": select_natoms_samples,
         "select_mass_mean_s": select_mass_s,
+        "select_mass_samples_s": select_mass_samples,
         "select_volume_mean_s": select_volume_s,
+        "select_volume_samples_s": select_volume_samples,
         "select_energy_present_mean_s": select_energy_s,
+        "select_energy_samples_s": select_energy_samples,
         "energy_select_skipped": not has_energy,
         "mass_window": [mass_lo, mass_hi],
         "volume_window": [vol_lo, vol_hi],
@@ -213,47 +235,45 @@ def bench_ase_db(con_path: Path, n_frames: int, db_path: Path) -> dict:
     insert_s = time.perf_counter() - t0
 
     rounds = 20
-    t1 = time.perf_counter()
-    for _ in range(rounds):
+
+    def one_extract() -> None:
         for row in db.select():
             _ = row.toatoms().positions.sum()
-    extract_s = (time.perf_counter() - t1) / rounds
+
+    extract_samples = _time_rounds(one_extract, rounds)
+    extract_s = _mean(extract_samples)
 
     sel_rounds = 50
-    # ASE formula / symbol: use formula string or natural_formula
-    t2 = time.perf_counter()
-    for _ in range(sel_rounds):
-        list(db.select("Cu"))  # ASE: element presence query
-    select_cu_s = (time.perf_counter() - t2) / sel_rounds
-
-    t2b = time.perf_counter()
-    for _ in range(sel_rounds):
-        list(db.select("natoms>=1,natoms<=10000"))
-    select_natoms_s = (time.perf_counter() - t2b) / sel_rounds
+    select_cu_samples = _time_rounds(lambda: list(db.select("Cu")), sel_rounds)
+    select_cu_s = _mean(select_cu_samples)
+    select_natoms_samples = _time_rounds(
+        lambda: list(db.select("natoms>=1,natoms<=10000")), sel_rounds
+    )
+    select_natoms_s = _mean(select_natoms_samples)
 
     mass0 = float(atoms_list[0].info["mass"])
     vol0 = float(atoms_list[0].info["volume"])
     mass_lo, mass_hi = mass0 * 0.99, mass0 * 1.01
     vol_lo, vol_hi = vol0 * 0.99, vol0 * 1.01
 
-    t2m = time.perf_counter()
-    for _ in range(sel_rounds):
-        list(db.select(f"mass>={mass_lo},mass<={mass_hi}"))
-    select_mass_s = (time.perf_counter() - t2m) / sel_rounds
-
-    t2v = time.perf_counter()
-    for _ in range(sel_rounds):
-        list(db.select(f"volume>={vol_lo},volume<={vol_hi}"))
-    select_volume_s = (time.perf_counter() - t2v) / sel_rounds
+    select_mass_samples = _time_rounds(
+        lambda: list(db.select(f"mass>={mass_lo},mass<={mass_hi}")), sel_rounds
+    )
+    select_mass_s = _mean(select_mass_samples)
+    select_volume_samples = _time_rounds(
+        lambda: list(db.select(f"volume>={vol_lo},volume<={vol_hi}")), sel_rounds
+    )
+    select_volume_s = _mean(select_volume_samples)
 
     # Energy: only time a fixed no-hit or real energy query — never fall back to full scan.
     has_energy = any("energy" in a.info for a in atoms_list[:1])
     select_energy_s = None
+    select_energy_samples = []
     if has_energy:
-        t2c = time.perf_counter()
-        for _ in range(sel_rounds):
-            list(db.select("energy"))
-        select_energy_s = (time.perf_counter() - t2c) / sel_rounds
+        select_energy_samples = _time_rounds(
+            lambda: list(db.select("energy")), sel_rounds
+        )
+        select_energy_s = _mean(select_energy_samples)
 
     # Share one ASE connection for threaded reads (SQLite serializes; still CSE-comparable load).
     def reader():
@@ -280,11 +300,17 @@ def bench_ase_db(con_path: Path, n_frames: int, db_path: Path) -> dict:
         "n_frames": n_frames,
         "insert_s": insert_s,
         "extract_all_mean_s": extract_s,
+        "extract_samples_s": extract_samples,
         "select_cu_mean_s": select_cu_s,
+        "select_cu_samples_s": select_cu_samples,
         "select_natoms_mean_s": select_natoms_s,
+        "select_natoms_samples_s": select_natoms_samples,
         "select_mass_mean_s": select_mass_s,
+        "select_mass_samples_s": select_mass_samples,
         "select_volume_mean_s": select_volume_s,
+        "select_volume_samples_s": select_volume_samples,
         "select_energy_present_mean_s": select_energy_s,
+        "select_energy_samples_s": select_energy_samples,
         "energy_select_skipped": not has_energy,
         "mass_window": [mass_lo, mass_hi],
         "volume_window": [vol_lo, vol_hi],
@@ -402,13 +428,17 @@ def run_campaign(fixture: Path, ladder: list[int], out_dir: Path, run_id: int) -
             ).strip()
         except (OSError, subprocess.CalledProcessError):
             commit = "unknown"
+    import db24_drive as drive
+
+    host_record = drive.host_facts()
     payload = {
         "run_id": run_id,
         "fixture": str(fixture),
         "ladder": ladder,
         "fair": True,
         "note": "Shared CON ladder; ASE Atoms from readcon geometry (not legacy Cu2 stand-in)",
-        "host": socket.gethostname(),
+        "host": "host",
+        "host_record": host_record,
         "date_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ"),
         "commit": commit,
         "readcon_db": rdb_results,
@@ -419,7 +449,7 @@ def run_campaign(fixture: Path, ladder: list[int], out_dir: Path, run_id: int) -
         "all_competitive_selects_agree": all_agree,
     }
     out_json = out_dir / f"ase_fair_campaign_{run_id}.json"
-    out_json.write_text(json.dumps(payload, indent=2))
+    out_json.write_text(json.dumps(payload, indent=2) + "\n")
     return payload
 
 

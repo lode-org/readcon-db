@@ -1967,7 +1967,7 @@ mod tests {
                 .map(|v| v.to_string())
                 .collect::<Vec<_>>()
                 .join(",");
-            format!("\"mean_us\":{mean},\"iqr_us\":{iqr},\"samples_us\":[{list}]")
+            format!("\"mean_us\":{mean},\"iqr_us\":{iqr:.2},\"samples_us\":[{list}]")
         }
         let n = 100_000usize;
         let raw = synthetic_rcso(n, false);

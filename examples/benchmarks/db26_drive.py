@@ -10,6 +10,12 @@ from __future__ import annotations
 
 import json
 import os
+
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 import platform
 import shutil
 import subprocess
@@ -42,6 +48,7 @@ def env_base() -> dict:
     Path(env["TMPDIR"]).mkdir(parents=True, exist_ok=True)
     env["RUSTUP_TOOLCHAIN"] = "1.88.0"
     env.pop("RAYON_NUM_THREADS", None)
+    fair.pin_blas_env(env)
     return env
 
 
@@ -363,12 +370,14 @@ def paired_sentence(
 
 def write_results(record: dict) -> None:
     host = record["host"]
+    tip = record["commit"][:8]
     lines = [
         "# db26 selected, cold, and raw across commits",
         "",
         f"Commit `{record['commit']}`, tree `{record['tree']}`. "
         f"Raw comparison base `{record['base_commit']}` tree `{record['base_tree']}`. "
         f"Host {host['system']} {host['release']}, {host['cpu']}, {host['ncpu']} CPUs. "
+        f"{fair.protocol_header(host)} "
         f"n={record['n']}, serial. The median is type-7. Parentheses are the type-7 IQR. "
         "The paired CI is a 10000-draw percentile bootstrap of the ratio at the same "
         f"sample index (numpy Generator seed {BOOT_SEED}). "
@@ -378,7 +387,7 @@ def write_results(record: dict) -> None:
         "",
         "db24 and db25 are unchanged. db25 did not repeat selected or cold. "
         "Those rows are here because `d671c32` unshuffles into the caller buffer. "
-        "That commit is in this history, and this measurement is `20a5f64e`.",
+        f"That commit is in this history, and this measurement is `{tip}`.",
         "",
         "## Summary",
         "",
@@ -407,7 +416,7 @@ def write_results(record: dict) -> None:
             block = group[key]
             lo, hi = block["paired"]["ci95"]
             lines.append(
-                f"| 20a5f64e/aedcbda4 raw | {op} | {threads} | warm | "
+                f"| {tip}/aedcbda4 raw | {op} | {threads} | warm | "
                 f"{block['ratio_tip_over_aedcbda4']:.4f} | {block['paired']['median']:.4f} | "
                 f"[{lo:.4f}, {hi:.4f}] | "
                 f"{block['paired']['tip_faster']}/{block['paired']['n']} |"
@@ -467,7 +476,7 @@ def write_results(record: dict) -> None:
     )
     lines.append("")
     lines.append(
-        "| op | threads | aedcbda4 | 20a5f64e | tip/base | paired median | 95% CI | tip faster | load 1m median |"
+        f"| op | threads | aedcbda4 | {tip} | tip/base | paired median | 95% CI | tip faster | load 1m median |"
     )
     lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- |")
     for threads, group, load_key in (
@@ -495,7 +504,7 @@ def write_results(record: dict) -> None:
                 paired_sentence(
                     f"RAYON={threads} raw {op}",
                     group[key]["paired"],
-                    "20a5f64e",
+                    tip,
                     "tip_faster",
                     "tip_slower",
                 )
@@ -528,9 +537,9 @@ def write_results(record: dict) -> None:
         high = row["high_four_decode_copy"]
         lines.append(
             f"| {row['columns']} | {row['n_columns']} | {row['uncompressed_bytes']} | "
-            f"{row['full_shuffle_zstd_bytes']} | {full['mean_us']:.0f} ({full['iqr_us']:.0f}) | "
+            f"{row['full_shuffle_zstd_bytes']} | {full['mean_us']:.0f} ({full['iqr_us']:.2f}) | "
             f"{row['high_four_zstd_bytes']} | {row['low_four_raw_bytes']} | "
-            f"{high['mean_us']:.0f} ({high['iqr_us']:.0f}) |"
+            f"{high['mean_us']:.0f} ({high['iqr_us']:.2f}) |"
         )
     lines.append("")
     lines.append(
@@ -553,7 +562,7 @@ def write_results(record: dict) -> None:
 
 def high_byte(commit: str) -> dict:
     os.environ["DB26_COMMIT"] = commit
-    return db26_highbyte.main()
+    return db26_highbyte.main(BENCH / "high_byte.json")
 
 
 def main() -> None:
@@ -669,6 +678,7 @@ def main() -> None:
             "machine": platform.machine(),
             "cpu": fair.cpu_model(),
             "ncpu": os.cpu_count(),
+            **fair.host_facts(),
         },
         "n": N,
         "load_before_timed": before,

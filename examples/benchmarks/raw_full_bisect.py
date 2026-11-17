@@ -4,7 +4,7 @@ Warm full reads of the lattice arm, raw codec, n=30. The median is
 type-7. The CI is a 10000-draw percentile bootstrap of the paired
 ratio at one sample index, numpy Generator seed 0.
 
-``load_steps`` reads ``bench/db29/bisect/samples.json``. Medians and
+``load_steps`` reads the samples file passed to it. Medians and
 intervals are computed from those samples. They are not stored in the
 file.
 """
@@ -16,9 +16,6 @@ from pathlib import Path
 
 import numpy as np
 
-SAMPLES_PATH = (
-    Path(__file__).resolve().parents[2] / "bench" / "db29" / "bisect" / "samples.json"
-)
 BOOT_DRAWS = 10_000
 BOOT_SEED = 0
 
@@ -74,8 +71,8 @@ def steps_from_samples(records: list[dict]) -> list[dict]:
     return steps
 
 
-def load_steps(path: Path | None = None) -> list[dict]:
-    records = json.loads((path or SAMPLES_PATH).read_text())
+def load_steps(path: Path) -> list[dict]:
+    records = json.loads(path.read_text())
     return steps_from_samples(records)
 
 

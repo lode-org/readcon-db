@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-DEFAULT_RESULTS = REPO / "examples" / "benchmarks" / "results" / "fair-db29"
+DEFAULT_RESULTS = REPO / "examples" / "benchmarks" / "fair-db30"
 
 LADDER = (
     ("atoms-1000", "10^3 atoms, 1 frame"),
@@ -241,7 +241,7 @@ def cpc_block(data: dict, results_name: str) -> str:
     samples = ", ".join(f"{fmt(value)} s" for value in ase["samples_s"])
     return (
         "The published CPC samples in "
-        f"`results/{results_name}/campaign.json` (`published_db_v2`, "
+        f"`{results_name}/campaign.json` (`published_db_v2`, "
         "40 frames of 8 Cu) give readcon-db a type-7 median "
         f"**{fmt(db['median_s'])} s** (n={db['n']}). ASE's {ase['n']} samples "
         f"are {samples}. Type-7 median **{fmt(ase['median_s'])} s**, "
@@ -288,7 +288,7 @@ def fairness_block(data: dict, results_name: str) -> str:
     lines = [
         (
             "Warm full read, cold full read, and cold single-frame read from "
-            f"`results/{results_name}/campaign.json`. Each cell is the type-7 median. "
+            f"`{results_name}/campaign.json`. Each cell is the type-7 median. "
             "n is the sample count stored for that row."
         ),
         "",
@@ -300,7 +300,7 @@ def fairness_block(data: dict, results_name: str) -> str:
         "## This machine",
         "",
         (
-            f"Regenerated from `results/{results_name}/`. "
+            f"Regenerated from `{results_name}/`. "
             f"Commit `{data['head']}`. The host line in the log is the neutral label."
         ),
         "",
@@ -341,7 +341,7 @@ def readme_block(data: dict, results_name: str) -> str:
         if workload == "atoms-1000000":
             specs.append((workload, label, "insert", "cold-file", "insert"))
     lines = [
-        "Type-7 medians from `examples/benchmarks/results/"
+        "Type-7 medians from `examples/benchmarks/"
         + results_name
         + "/campaign.json`, in seconds. n is the stored sample count.",
         "",
@@ -360,8 +360,8 @@ def readme_block(data: dict, results_name: str) -> str:
         query_claim(rows, specs),
         (
             "The full ladder is "
-            f"[`examples/benchmarks/results/{results_name}/RESULTS.md`]"
-            f"(examples/benchmarks/results/{results_name}/RESULTS.md)."
+            f"[`examples/benchmarks/{results_name}/RESULTS.md`]"
+            f"(examples/benchmarks/{results_name}/RESULTS.md)."
         ),
         "",
     ]
@@ -373,7 +373,7 @@ def overview_block(results_name: str) -> str:
         f"*Benchmarks:* the fair ASE sqlite comparison is "
         f"=examples/benchmarks/fair_ase_protocol.py= "
         f"(protocol in =examples/benchmarks/FAIRNESS.md=, numbers generated from "
-        f"=examples/benchmarks/results/{results_name}/=). "
+        f"=examples/benchmarks/{results_name}/=). "
         "Select-count parity remains =examples/benchmarks/fair_campaign.py=. "
         "See @@rst::doc:`/howto/workflows`@@."
     )

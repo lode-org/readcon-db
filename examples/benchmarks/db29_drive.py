@@ -9,6 +9,12 @@ from __future__ import annotations
 
 import json
 import os
+
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 import platform
 import shutil
 import sys
@@ -209,6 +215,7 @@ def pack_samples(left, right, peaks, left_name, right_name) -> dict:
 
 def time_pair(arm, left, right, py_path, threads, log) -> dict:
     extra = {"READCON_BENCH_ARM": arm}
+    drv.fair.pin_blas_env(extra)
     if threads == "1":
         extra["RAYON_NUM_THREADS"] = "1"
     label = threads or "unset"
@@ -298,6 +305,7 @@ def write_record(state: dict, log_text: str, dest: Path | None = None) -> None:
         "loadavg": list(os.getloadavg()),
         "n": N,
         "serial": True,
+        **drv.fair.host_facts(),
         "settings": (
             "warm full, range, selected; cold bulk full_read; "
             "threads unset and 1; raw vs shuffle-zstd; "
@@ -327,6 +335,7 @@ def write_record(state: dict, log_text: str, dest: Path | None = None) -> None:
         (
             f"Commit `{state['commit']}`, tree `{state['tree']}`. "
             f"Host label `{host['hostname']}`, {host['cpu']}, {host['ncpu']} CPUs. "
+            f"{drv.fair.protocol_header(host)} "
             f"n={N}, serial. Warm reads are full, range, and selected. "
             "Cold bulk is the full read. "
             "Threads are the process default and `RAYON_NUM_THREADS=1`. "

@@ -12,11 +12,19 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 import subprocess
 import sys
 from pathlib import Path
 
 import numpy as np
+
+import db24_drive as fair
 
 REPO = Path(__file__).resolve().parents[2]
 REMOTE_BRANCH = "fix/ingest-species-count"
@@ -131,6 +139,7 @@ def pinned_env(root: Path, py_path: str) -> dict:
     env["OMP_NUM_THREADS"] = "1"
     env["OPENBLAS_NUM_THREADS"] = "1"
     env["MKL_NUM_THREADS"] = "1"
+    env["NUMEXPR_NUM_THREADS"] = "1"
     return env
 
 
@@ -196,7 +205,8 @@ def write_record(out: Path, payload: dict) -> None:
         (
             f"Commit `{payload['commit']}`. Corpus written by `{DB15}` "
             f"({payload['corpus_bytes']} bytes) under `{payload['corpus']}`. "
-            f"n={N}. Host label `host`."
+            f"n={N}. Host label `host`. "
+            f"{fair.protocol_header(payload['host'])}"
         ),
         "",
         "| op | order | db15 median s | tip median s | tip/db15 |",
@@ -269,7 +279,9 @@ def main() -> None:
             "omp_num_threads": "1",
             "openblas_num_threads": "1",
             "mkl_num_threads": "1",
+            "numexpr_num_threads": "1",
             "library_sha256": digests,
+            **fair.host_facts(),
         },
         "ops": ops,
     }

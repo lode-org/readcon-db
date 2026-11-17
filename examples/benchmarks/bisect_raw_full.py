@@ -7,8 +7,15 @@ that were timed.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
+
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 import shutil
 import sys
 import time
@@ -44,6 +51,8 @@ def write_record(dest: Path, steps: list[dict], commit: str, tree: str) -> None:
         "cpu": drv.fair.cpu_model(),
         "ncpu": os.cpu_count(),
         "n": N,
+        "serial": True,
+        **drv.fair.host_facts(),
         "measured": [{"label": label, "sha": sha} for label, sha in MEASURED],
     }
     (dest / "host.json").write_text(json.dumps(host, indent=2) + "\n")
@@ -68,7 +77,8 @@ def write_record(dest: Path, steps: list[dict], commit: str, tree: str) -> None:
         "",
         (
             f"Commit `{commit}`. n={N}. Each CI is computed from the paired samples "
-            f"in `samples.json`. Host label `{host['hostname']}`."
+            f"in `samples.json`. Host label `{host['hostname']}`. "
+            f"{drv.fair.protocol_header(host)}"
         ),
         "",
         "| left | right | threads | n | paired | 95% CI | right faster |",
@@ -103,7 +113,10 @@ def measure_pair(
     left: str, right: str, wheels: dict[str, str], threads: str | None
 ) -> dict:
     """One paired setting. Returns samples only; the summary is computed later."""
-    extra = {"RAYON_NUM_THREADS": "1"} if threads == "1" else None
+    extra = {}
+    drv.fair.pin_blas_env(extra)
+    if threads == "1":
+        extra["RAYON_NUM_THREADS"] = "1"
     root = REPO / "build" / "bisect-raw"
     workers = {
         left: drv.start_worker(left, root / left, wheels[left], "raw", extra, root),
@@ -133,7 +146,7 @@ def measure_pair(
     }
 
 
-def main() -> None:
+def measure() -> tuple[list[dict], str, str]:
     os.environ["TMPDIR"] = str(REPO / "build" / "tmp")
     (REPO / "build" / "tmp").mkdir(parents=True, exist_ok=True)
     drv.fair.require_pushed_commit()
@@ -174,7 +187,15 @@ print(db.append_trajectory_str(1, text, source="traj.con"))
     for left, right in PAIRS:
         for threads in (None, "1"):
             records.append(measure_pair(left, right, wheels, threads))
-    write_record(REPO / "bench" / "db29" / "bisect", records, commit, tree)
+    return records, commit, tree
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", type=Path, required=True)
+    args = ap.parse_args()
+    records, commit, tree = measure()
+    write_record(args.out, records, commit, tree)
 
 
 if __name__ == "__main__":

@@ -41,6 +41,12 @@ import hashlib
 import json
 import math
 import os
+
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 import platform
 import shutil
 import socket
@@ -979,15 +985,11 @@ def git_head() -> str:
 
 
 def header_lines() -> list[str]:
-    cpu = ""
-    try:
-        for line in Path("/proc/cpuinfo").read_text().splitlines():
-            if line.startswith("model name"):
-                cpu = line.split(":", 1)[1].strip()
-                break
-    except OSError:
-        cpu = ""
-    return [
+    import db24_drive as drive
+
+    facts = drive.host_facts()
+    cpu = facts.get("cpu") or ""
+    lines = [
         f"rev_parse {git_head()}",
         f"date_utc {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}",
         f"host {socket.gethostname()}",
@@ -1000,7 +1002,7 @@ def header_lines() -> list[str]:
         f"samples {N_SAMPLES}",
         "quantile type-7 (numpy percentile method=linear)",
         "order serial, tools alternate each sample index, no parallel samples",
-        "threads: the paired rows set RAYON_NUM_THREADS=1 for readcon-db and run ASE in one process; readcon-db is also recorded with RAYON_NUM_THREADS unset; OMP, OpenBLAS, and MKL threads are 1 on every row",
+        "threads: the paired rows set RAYON_NUM_THREADS=1 for readcon-db and run ASE in one process; readcon-db is also recorded with RAYON_NUM_THREADS unset; OMP, OpenBLAS, MKL, and NumExpr threads are 1 on every row",
         "timer: directory fsync, fadvise, mincore, the element-wise check, and the collector stay outside; the clock covers the commit, or the query; cold-open also times the open",
         "gc: automatic collection is off for every read row, for both tools, and restored when the row returns",
         "timer_short: a read shorter than 50 ms is repeated until the timed spans add to 50 ms; the sample is that mean",
@@ -1016,7 +1018,21 @@ def header_lines() -> list[str]:
         "warm-after-open: page cache dropped, then open outside the clock, then the query; a readcon-db open under 1 MiB includes one pread",
         "cold-open: page cache dropped outside the clock, then open and the query inside the clock, both tools",
         "validation element-wise outside the timer; a mismatch aborts the run",
+        f"kernel {facts.get('kernel', '')}",
+        "serial true",
+        "quantile type-7",
     ]
+    if facts.get("scaling_governor"):
+        lines.append(f"scaling_governor {facts['scaling_governor']}")
+    if facts.get("scaling_cur_freq_khz") is not None:
+        lines.append(f"scaling_cur_freq_khz {facts['scaling_cur_freq_khz']}")
+    if facts.get("cpuinfo_mhz") is not None:
+        lines.append(f"cpuinfo_mhz {facts['cpuinfo_mhz']}")
+    if facts.get("turbo"):
+        lines.append(f"turbo {facts['turbo']}")
+    if facts.get("boost"):
+        lines.append(f"boost {facts['boost']}")
+    return lines
 
 
 def fresh_dir(root: Path, name: str) -> Path:
@@ -2085,7 +2101,12 @@ def thread_fields() -> dict:
 
 
 # NumPy's BLAS pool is one thread on every row, so only RAYON_NUM_THREADS varies.
-BLAS_THREAD_VARS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS")
+BLAS_THREAD_VARS = (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+)
 
 
 def apply_rayon(env: dict, mode: str) -> dict:
@@ -2370,8 +2391,8 @@ def write_markdown(
         "short commit to 2 s. Both inserts are one transaction and one",
         "commit fsync. A long readcon-db trajectory puts one 64-frame",
         "group at a time and drops that scratch after the put; the",
-        "transaction still commits once. Six samples are kept. A row",
-        "whose IQR/median is still above 0.05 takes six more. p90 is",
+        "transaction still commits once. n is 12 serial samples",
+        "(READCON_DB_N_SAMPLES, never below 12). p90 is",
         "the type-7 90th percentile of those means. A range read",
         "materializes an inclusive frame-index span. A metadata read",
         "returns the frame indexes whose energy is in the last tenth.",
@@ -2398,7 +2419,6 @@ def write_markdown(
             f"{row.get('disk_bytes', 0)} | {row.get('peak_rss_bytes', 0)} | "
             f"{row.get('fidelity', 'exact')} |"
         )
-    lines.append("")
     path.write_text("\n".join(lines) + "\n")
 
 
@@ -2519,12 +2539,15 @@ def main() -> None:
     fair_rows = fair_campaign(log, work, specs)
     log.line("exit_code 0")
     log.close()
+    import db24_drive as drive
+
     payload = {
         "published_db_v2": published,
         "local_paper_harness": paper_local,
         "fair": fair_rows,
         "settings": settings,
         "head": git_head(),
+        "host": drive.host_facts(),
     }
     (args.out / "campaign.json").write_text(json.dumps(payload, indent=2) + "\n")
     noise = {}
