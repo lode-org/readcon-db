@@ -532,36 +532,27 @@ def ref_matches(version: str, sha: str, ref: str) -> bool:
     )
 
 
-def core_checkout() -> Path:
-    dest = REPO / "build" / "readcon-core-git"
-    if not (dest / ".git").is_dir():
-        subprocess.check_call(["git", "clone", "--quiet", CORE_GIT, str(dest)])
-    else:
-        subprocess.check_call(
-            ["git", "-C", str(dest), "fetch", "--quiet", "--tags", "origin"]
-        )
-    return dest
-
-
-def core_sha_is_pushed(sha: str, repo: Path | None = None) -> bool:
-    """True when ``sha`` is on ``origin/main`` or a release tag ``v*``."""
-    checkout = core_checkout() if repo is None else repo
-    branches = subprocess.run(
-        ["git", "-C", str(checkout), "branch", "-r", "--contains", sha],
+def _git_lines(checkout: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(checkout), *args],
         capture_output=True,
         text=True,
         check=False,
     )
+
+
+def _object_exists(checkout: Path, sha: str) -> bool:
+    found = _git_lines(checkout, "cat-file", "-e", f"{sha}^{{commit}}")
+    return found.returncode == 0
+
+
+def _on_origin_main_or_release_tag(checkout: Path, sha: str) -> bool:
+    branches = _git_lines(checkout, "branch", "-r", "--contains", sha)
     if branches.returncode == 0:
         names = [line.strip() for line in branches.stdout.splitlines() if line.strip()]
         if "origin/main" in names:
             return True
-    tags = subprocess.run(
-        ["git", "-C", str(checkout), "tag", "--contains", sha],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    tags = _git_lines(checkout, "tag", "--contains", sha)
     if tags.returncode != 0:
         return False
     return any(
@@ -569,6 +560,45 @@ def core_sha_is_pushed(sha: str, repo: Path | None = None) -> bool:
         for line in tags.stdout.splitlines()
         if line.strip()
     )
+
+
+def core_checkout() -> Path:
+    """Clone or fetch readcon-core. A network failure is a clean refusal."""
+    dest = REPO / "build" / "readcon-core-git"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    if not (dest / ".git").exists():
+        argv = ["git", "clone", "--quiet", CORE_GIT, str(dest)]
+        action = "clone"
+    else:
+        argv = ["git", "-C", str(dest), "fetch", "--quiet", "--tags", "origin"]
+        action = "fetch"
+    try:
+        subprocess.check_call(argv, env=env)
+    except subprocess.CalledProcessError as exc:
+        raise SystemExit(
+            "refusing to export: could not "
+            f"{action} readcon-core to verify the pin is pushed "
+            f"(git {action} failed with status {exc.returncode})"
+        ) from exc
+    return dest
+
+
+def core_sha_is_pushed(sha: str, repo: Path | None = None) -> bool:
+    """True when ``sha`` is on ``origin/main`` or a release tag ``v*``.
+
+    A commit that is already in the local checkout is judged from the
+    remote-tracking refs and tags. Fetching is only for a sha the checkout
+    does not have yet, and a fetch or clone failure is a clean refusal.
+    """
+    if repo is not None:
+        return _on_origin_main_or_release_tag(repo, sha)
+    dest = REPO / "build" / "readcon-core-git"
+    if (dest / ".git").exists() and _object_exists(dest, sha):
+        return _on_origin_main_or_release_tag(dest, sha)
+    core_checkout()
+    return _on_origin_main_or_release_tag(dest, sha)
 
 
 def pin_change(version: str, sha: str, ref: str) -> str:

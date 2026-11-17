@@ -10,6 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = "examples/benchmarks/rerun_release.py"
 KINDS = ("ab.json", "readcon_db_bench.json", "campaign.json", "host.json")
@@ -375,6 +377,40 @@ def test_unpushed_readcon_core_refuses_export(tmp_path: Path) -> None:
             raise AssertionError("unpushed readcon-core was accepted")
     finally:
         _git(core, "checkout", "main")
+
+
+def _core_repo(path: Path, remote: str) -> str:
+    path.mkdir(parents=True)
+    init = _git(path, "init", "-b", "main")
+    assert init.returncode == 0, init.stderr
+    (path / "readme").write_text("one\n")
+    added = _git(path, "add", "readme")
+    assert added.returncode == 0, added.stderr
+    commit = _git(path, "commit", "-m", "one")
+    assert commit.returncode == 0, commit.stderr
+    origin = _git(path, "remote", "add", "origin", remote)
+    assert origin.returncode == 0, origin.stderr
+    return _git(path, "rev-parse", "HEAD").stdout.strip()
+
+
+def test_unpushed_pin_is_refused_without_fetching(tmp_path: Path, monkeypatch) -> None:
+    """A commit already in the local checkout is refused with the remote down."""
+    import rerun_release as rerun
+
+    monkeypatch.setattr(rerun, "REPO", tmp_path)
+    dest = tmp_path / "build" / "readcon-core-git"
+    sha = _core_repo(dest, "https://127.0.0.1:9/readcon-core.git")
+    assert rerun.core_sha_is_pushed(sha) is False
+
+
+def test_unreachable_core_remote_is_a_clean_error(tmp_path: Path, monkeypatch) -> None:
+    """Cloning a dead remote is a refusal, not an uncaught git error."""
+    import rerun_release as rerun
+
+    monkeypatch.setattr(rerun, "REPO", tmp_path)
+    monkeypatch.setattr(rerun, "CORE_GIT", "https://127.0.0.1:9/readcon-core.git")
+    with pytest.raises(SystemExit, match="could not clone readcon-core"):
+        rerun.core_sha_is_pushed("ab" * 20)
 
 
 def test_main_refuses_git_and_path_pins_before_registry_download(monkeypatch) -> None:
