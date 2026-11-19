@@ -1,32 +1,14 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Barrier};
+use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use heed::types::Bytes;
 use heed::{Database, EnvOpenOptions};
 use readcon_db::{
-    ClaimError, ClaimStatus, ConCorpus, Error, MAX_CATALOG_COMPONENT_BYTES,
+    ClaimError, ClaimStatus, Clock, ConCorpus, Error, MAX_CATALOG_COMPONENT_BYTES,
     MAX_CATALOG_RECORD_BYTES,
 };
-use std::time::Instant;
-
-/// Start B this far before `return + L` so the call can return while still
-/// inside the lease. This is scheduling room, not the lease margin.
-const EARLY_BY: Duration = Duration::from_millis(5);
-/// `ceil` adds less than 1ms, the return margin is 1ms, and strict
-/// `expiry < now` waits one more millisecond. Polling for takeover starts
-/// at `return + L + 3ms`.
-const TAKEOVER_AFTER_LEASE: Duration = Duration::from_millis(3);
-/// How long one attempt keeps polling after `L + 3ms`. A scheduler bound
-/// for this test, not a lease margin.
-const ACQUIRE_POLL_LIMIT: Duration = Duration::from_secs(2);
-/// Guarded `Busy` assertions this test must execute before it can pass.
-const MIN_BUSY_ASSERTIONS: usize = 1;
-/// Stop opening new attempts once this elapses. A scheduler bound, not a
-/// lease margin. A run that never executes a guarded `Busy` assertion, or
-/// never observes takeover, fails.
-const REALTIME_RETRY_LIMIT: Duration = Duration::from_secs(30);
 
 const LEASE_SECS: u64 = 60;
 
@@ -510,91 +492,142 @@ fn open_readwrite_backfills_new_catalog_dbs_and_readonly_listing_is_empty_on_pre
     assert!(work_claims.is_some());
 }
 
-fn sleep_until(start: Instant, target: Duration) {
-    loop {
-        let elapsed = start.elapsed();
-        if elapsed >= target {
-            return;
-        }
-        let left = target - elapsed;
-        if left > Duration::from_millis(20) {
-            thread::sleep(left - Duration::from_millis(10));
-        } else {
-            thread::sleep(Duration::from_micros(50));
-        }
+/// A clock this test moves by hand, so no assertion depends on how fast the
+/// host runs. `stall` is the virtual time that passes on every sample, which
+/// models a host slow enough that the clock moves while one claim call runs.
+/// A claim decides from the first sample it takes, so the instant
+/// [`TestClock::sample_at`] sets is the one that call acts on whatever the
+/// stall is.
+#[derive(Debug)]
+struct TestClock {
+    nanos: Mutex<u128>,
+    stall: u128,
+}
+
+impl TestClock {
+    fn with_stall(stall: u128) -> Arc<Self> {
+        Arc::new(Self {
+            nanos: Mutex::new(0),
+            stall,
+        })
     }
+
+    fn sample_at(&self, nanos: u128) {
+        *self.nanos.lock().unwrap() = nanos;
+    }
+}
+
+impl Clock for TestClock {
+    fn unix_time_nanos(&self) -> readcon_db::Result<u128> {
+        let mut nanos = self.nanos.lock().unwrap();
+        let sampled = *nanos;
+        *nanos += self.stall;
+        Ok(sampled)
+    }
+}
+
+/// Unix nanoseconds on a millisecond boundary. Cases offset into that
+/// millisecond so the `ceil` in the stored deadline is exercised.
+const CLOCK_BASE_NS: u128 = 1_700_000_000_000 * 1_000_000;
+/// `ceil` adds under one millisecond, the stored deadline carries a 1ms
+/// return margin, and strict `expiry < now` costs one more millisecond.
+/// Takeover therefore cannot be later than `claim + lease + 3ms`.
+const TAKEOVER_BOUND_AFTER_LEASE_NS: u128 = 3_000_000;
+const NANOS_PER_SEC: u128 = 1_000_000_000;
+
+/// Each case is `(lease_secs, offset into the starting millisecond, stall)`.
+const LEASE_WINDOW_CASES: &[(u64, u128, u128)] = &[
+    (1, 0, 0),
+    (1, 1, 0),
+    (1, 999_999, 0),
+    (60, 500_000, 0),
+    // Slow hosts: a quarter and three quarters of a second of clock pass
+    // inside every claim call, as they would on a loaded runner.
+    (1, 0, 250_000_000),
+    (1, 999_999, 750_000_000),
+];
+
+/// Claim a never-used task at `claim_ns`, then ask for it as another owner at
+/// `probe_ns`. Each probe owns its task, so a takeover here cannot change what
+/// a later probe sees.
+fn probe_lease(
+    corpus: &ConCorpus,
+    clock: &TestClock,
+    probe: usize,
+    lease_secs: u64,
+    claim_ns: u128,
+    probe_ns: u128,
+) -> ClaimStatus {
+    let task = format!("task-duration-{probe}");
+    let task = task.as_bytes();
+    clock.sample_at(claim_ns);
+    assert_eq!(
+        corpus
+            .try_claim(b"jobs", task, b"owner-a", lease_secs)
+            .unwrap(),
+        ClaimStatus::Acquired
+    );
+    clock.sample_at(probe_ns);
+    corpus
+        .try_claim(b"jobs", task, b"owner-b", lease_secs)
+        .unwrap()
 }
 
 #[test]
 fn lease_duration_is_never_shorter_than_lease_secs() {
-    let dir = tempfile::tempdir().unwrap();
-    let corpus = ConCorpus::open(dir.path()).unwrap();
-    let lease = Duration::from_secs(1);
-    let poll_from = lease + TAKEOVER_AFTER_LEASE;
-    let started = Instant::now();
-    let mut busy_assertions = 0usize;
-    let mut takeover_seen = false;
-    let mut attempt = 0usize;
-    while started.elapsed() < REALTIME_RETRY_LIMIT
-        && (busy_assertions < MIN_BUSY_ASSERTIONS || !takeover_seen)
-    {
-        attempt += 1;
-        let task = format!("task-duration-{attempt}");
-        let task = task.as_bytes();
-        let before_a = Instant::now();
+    for &(lease_secs, offset_ns, stall_ns) in LEASE_WINDOW_CASES {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = TestClock::with_stall(stall_ns);
+        let corpus = ConCorpus::open(dir.path())
+            .unwrap()
+            .with_clock(clock.clone());
+        let case = format!("lease {lease_secs}s, offset {offset_ns}ns, stall {stall_ns}ns");
+        let claim_ns = CLOCK_BASE_NS + offset_ns;
+        let lease_ns = u128::from(lease_secs) * NANOS_PER_SEC;
+        let mut probe = 0usize;
+
+        // Inside the lease, including its very last nanosecond, the task is
+        // held: the lease is never shorter than lease_secs.
+        for inside_ns in [claim_ns, claim_ns + lease_ns / 2, claim_ns + lease_ns] {
+            probe += 1;
+            assert_eq!(
+                probe_lease(&corpus, &clock, probe, lease_secs, claim_ns, inside_ns),
+                ClaimStatus::Busy,
+                "{case}: another owner took the task {}ns after the claim",
+                inside_ns - claim_ns
+            );
+        }
+
+        // Bisect the first instant another owner takes over. `busy_ns` stays
+        // held and `free_ns` stays taken over, so they close on the boundary.
+        let mut busy_ns = claim_ns + lease_ns;
+        let mut free_ns = busy_ns + TAKEOVER_BOUND_AFTER_LEASE_NS;
+        probe += 1;
         assert_eq!(
-            corpus.try_claim(b"jobs", task, b"owner-a", 1).unwrap(),
-            ClaimStatus::Acquired
+            probe_lease(&corpus, &clock, probe, lease_secs, claim_ns, free_ns),
+            ClaimStatus::Acquired,
+            "{case}: the expired task was not taken over at lease + 3ms"
         );
-        let returned = Instant::now();
-        // The stored expiry is sampled before commit. The return+L bound
-        // applies only when that commit and the return finish within 1ms.
-        let claim_within_margin = before_a.elapsed() < Duration::from_millis(1);
-        sleep_until(returned, lease.saturating_sub(EARLY_BY));
-        if claim_within_margin && returned.elapsed() < lease {
-            let status = corpus.try_claim(b"jobs", task, b"owner-b", 1).unwrap();
-            let after_b_elapsed = returned.elapsed();
-            // B's own call can cross the lease. That iteration is not an
-            // eligible Busy check; a later attempt retries the window.
-            if after_b_elapsed < lease {
-                busy_assertions += 1;
-                assert_eq!(
-                    status,
-                    ClaimStatus::Busy,
-                    "attempt {attempt}: elapsed {after_b_elapsed:?} is still inside the lease"
-                );
+        while free_ns - busy_ns > 1 {
+            let mid_ns = busy_ns + (free_ns - busy_ns) / 2;
+            probe += 1;
+            match probe_lease(&corpus, &clock, probe, lease_secs, claim_ns, mid_ns) {
+                ClaimStatus::Busy => busy_ns = mid_ns,
+                ClaimStatus::Acquired => free_ns = mid_ns,
+                status => panic!(
+                    "{case}: unexpected {status:?} {}ns after the claim",
+                    mid_ns - claim_ns
+                ),
             }
         }
-        let attempt_deadline = poll_from + ACQUIRE_POLL_LIMIT;
-        loop {
-            let elapsed = returned.elapsed();
-            if elapsed >= poll_from {
-                let status = corpus.try_claim(b"jobs", task, b"owner-c", 1).unwrap();
-                if status == ClaimStatus::Acquired {
-                    takeover_seen = true;
-                    break;
-                }
-                assert_eq!(
-                    status,
-                    ClaimStatus::Busy,
-                    "attempt {attempt}: unexpected status at {elapsed:?}"
-                );
-            }
-            if elapsed >= attempt_deadline {
-                break;
-            }
-            thread::sleep(Duration::from_millis(2));
-        }
+        assert!(
+            free_ns > claim_ns + lease_ns,
+            "{case}: takeover at {}ns is inside the lease",
+            free_ns - claim_ns
+        );
+        println!(
+            "lease_duration_is_never_shorter_than_lease_secs case=({lease_secs},{offset_ns},{stall_ns}) takeover_after_claim_ns={} probes={probe}",
+            free_ns - claim_ns
+        );
     }
-    println!(
-        "lease_duration_is_never_shorter_than_lease_secs asserting_iterations={busy_assertions} takeover_seen={takeover_seen} attempts={attempt}"
-    );
-    assert!(
-        busy_assertions >= MIN_BUSY_ASSERTIONS,
-        "guarded Busy assertions ran {busy_assertions} times in {attempt} attempts"
-    );
-    assert!(
-        takeover_seen,
-        "takeover was not observed in {attempt} attempts"
-    );
 }
