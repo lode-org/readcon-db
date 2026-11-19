@@ -160,3 +160,44 @@ fn duplicate_catalog_identity_uses_same_refusal_policy_as_claims() {
     assert!(message.contains("same-fingerprint"), "{message}");
     assert!(!joined.exists());
 }
+
+#[test]
+fn split_homes_joined_claim_from_shard_one_in_shard_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source");
+    ShardedConCorpus::open(&source, 2).unwrap();
+    let shard_one = ShardedConCorpus::open_shard(&source, 1)
+        .unwrap()
+        .with_clock(TestClock::at(BASE_NS));
+    assert_eq!(
+        shard_one
+            .try_claim(b"jobs", b"from-shard-one", b"owner-a", 30)
+            .unwrap(),
+        ClaimStatus::Acquired
+    );
+    let original_dump = shard_one.canonical_dump().unwrap();
+    shard_one.close();
+
+    let joined_path = dir.path().join("joined");
+    ShardedConCorpus::open_existing(&source)
+        .unwrap()
+        .join_to_single_env(&joined_path)
+        .unwrap();
+    let joined = ConCorpus::open_readonly(&joined_path).unwrap();
+    assert_eq!(
+        joined.canonical_dump().unwrap(),
+        original_dump,
+        "join must preserve the encoded claim key and payload"
+    );
+
+    let split = dir.path().join("split");
+    ShardedConCorpus::split_single_to_sharded(&joined, &split, 2).unwrap();
+    joined.close();
+    assert!(!split.join("shard_0001").exists());
+    let shard_zero = ConCorpus::open_readonly(split.join("shard_0000")).unwrap();
+    assert_eq!(
+        shard_zero.canonical_dump().unwrap(),
+        original_dump,
+        "split must preserve the encoded claim key and payload in shard zero"
+    );
+}
