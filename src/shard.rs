@@ -590,7 +590,8 @@ impl ShardedConCorpus {
     /// catalog identity, or claim key appearing in two shards is an error detected before
     /// the destination is created; duplicate catalog records and claims follow the same
     /// refuse policy. Secondary indexes are built via normal append/prepare on each blob.
-    /// Reversible with [`Self::split_single_to_sharded`] using the same routing.
+    /// Frame traj_ids round-trip through [`Self::split_single_to_sharded`] with the same
+    /// routing; split places catalog records and unchanged work claims in shard zero.
     pub fn join_to_single_env(&mut self, dst: impl AsRef<Path>) -> Result<u32> {
         let dst = dst.as_ref();
         if dst.exists() {
@@ -627,6 +628,8 @@ impl ShardedConCorpus {
     }
 
     /// Join into a temp single-env, export extxyz, then remove the temp dest.
+    /// The join refuses duplicate traj ids, catalog identities, or work-claim
+    /// keys across shards before creating that destination.
     pub fn export_extxyz(
         &mut self,
         sel: &Select,

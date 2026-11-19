@@ -140,15 +140,15 @@ Same-frame MPI: do *not* open the env on every rank. Rank 0 of the *caller commu
 :PROPERTIES:
 :CUSTOM_ID: refuses-do-not-fight-them
 :END:
-| Command                          | Refuse                                                                                            |
-|----------------------------------+---------------------------------------------------------------------------------------------------|
-| =shard-ingest=                   | missing =shards.json=; =--start-id= not congruent to =--shard=                                    |
-| =shard-select= / =compact-join=  | missing root / missing =shards.json= (no mint)                                                    |
-| =drain=                          | missing source =shards.json=; dest =shard_XXXX/data.mdb= already exists; dest =n_shards= mismatch |
-| =join-drained=                   | dest exists; source lacks =shards.json=; duplicate traj id, catalog identity, or work-claim key   |
-| =compact-join=                   | dest exists; source missing; duplicate traj id, catalog identity, or work-claim key across shards |
-| =compact-split=                  | dest exists; source missing                                                                       |
-| =compact-export-extxyz=          | sharded root without =--sharded=; dest exists                                                     |
+| Command                         | Refuse                                                                                                              |
+|---------------------------------+---------------------------------------------------------------------------------------------------------------------|
+| =shard-ingest=                  | missing =shards.json=; =--start-id= not congruent to =--shard=                                                      |
+| =shard-select= / =compact-join= | missing root / missing =shards.json= (no mint)                                                                      |
+| =drain=                         | missing source =shards.json=; dest =shard_XXXX/data.mdb= already exists; dest =n_shards= mismatch                   |
+| =join-drained=                  | dest exists; source lacks =shards.json=; duplicate traj id, catalog identity, or work-claim key                     |
+| =compact-join=                  | dest exists; source missing; duplicate traj id, catalog identity, or work-claim key across shards                   |
+| =compact-split=                 | dest exists; source missing                                                                                         |
+| =compact-export-extxyz=         | sharded root without =--sharded=; dest exists; duplicate traj id, catalog identity, or work-claim key across shards |
 
 On refuse, dest is not created (or a partial dest is removed). Tests: =tests/cli_refuse.rs=, =src/shard.rs=.
 
