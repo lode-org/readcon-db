@@ -3,7 +3,7 @@ use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use heed::types::{Bytes, Str, Unit};
 use heed::{CompactionOption, Database, Env, EnvFlags, EnvOpenOptions, RwTxn};
@@ -12,6 +12,7 @@ use readcon_core::types::ConFrame;
 use readcon_core::writer::{ConFrameWriter, FloatFormat};
 use serde::{Deserialize, Serialize};
 
+use crate::catalog::{Clock, SystemClock};
 use crate::error::{Error, Result};
 use crate::export_xyz::write_frame_extxyz;
 use crate::frame_scalars::{
@@ -201,6 +202,8 @@ pub struct ConCorpus {
     pub(crate) catalog_records: Option<Database<Bytes, Bytes>>,
     /// Namespaced work claims and their completion state.
     pub(crate) work_claims: Option<Database<Bytes, Bytes>>,
+    /// Wall clock for claim leases; the host clock unless replaced.
+    pub(crate) clock: Arc<dyn Clock>,
 }
 
 fn frame_has_forces(frame: &ConFrame) -> bool {
@@ -553,6 +556,7 @@ impl ConCorpus {
                 canon_by_frame,
                 catalog_records,
                 work_claims,
+                clock: Arc::new(SystemClock),
             });
         }
 
@@ -609,6 +613,7 @@ impl ConCorpus {
             canon_by_frame: Some(canon_by_frame),
             catalog_records: Some(catalog_records),
             work_claims: Some(work_claims),
+            clock: Arc::new(SystemClock),
         })
     }
 

@@ -35,7 +35,8 @@ pub use canonical::{
     CANONICAL_IDENTITY_VERSION,
 };
 pub use catalog::{
-    CatalogRecord, ClaimStatus, MAX_CATALOG_COMPONENT_BYTES, MAX_CATALOG_RECORD_BYTES,
+    CatalogRecord, ClaimStatus, Clock, SystemClock, MAX_CATALOG_COMPONENT_BYTES,
+    MAX_CATALOG_RECORD_BYTES,
 };
 pub use cooked_soa::CookedSoa;
 pub use corpus::{frame_fmax, ConCorpus, TrajMeta};

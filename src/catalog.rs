@@ -2,10 +2,33 @@
 
 use heed::types::Bytes;
 use heed::{Database, RwTxn};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::corpus::ConCorpus;
 use crate::error::{ClaimError, Error, Result};
+
+/// Source of the wall-clock instants that date work-claim leases.
+///
+/// Every corpus starts on [`SystemClock`], so leases follow the host clock
+/// unless [`ConCorpus::with_clock`] replaces it.
+pub trait Clock: Send + Sync {
+    /// Nanoseconds since the unix epoch.
+    fn unix_time_nanos(&self) -> Result<u128>;
+}
+
+/// The host wall clock, `SystemTime::now`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn unix_time_nanos(&self) -> Result<u128> {
+        Ok(SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| Error::Message("system clock is before unix epoch".into()))?
+            .as_nanos())
+    }
+}
 
 /// Maximum size of a namespace, subject, fingerprint, task, or owner.
 pub const MAX_CATALOG_COMPONENT_BYTES: usize = 128;
@@ -149,13 +172,6 @@ const MILLIS_PER_SEC: u64 = 1_000;
 // so when the inequality holds it cannot happen before `(E + 1) ms`.
 const LEASE_RETURN_MARGIN_MS: u64 = 1;
 
-fn unix_time_nanos() -> Result<u128> {
-    Ok(SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| Error::Message("system clock is before unix epoch".into()))?
-        .as_nanos())
-}
-
 fn floor_unix_millis(now_ns: u128) -> Result<u64> {
     u64::try_from(now_ns / NANOS_PER_MILLI)
         .map_err(|_| Error::Message("system clock value overflowed u64 milliseconds".into()))
@@ -184,10 +200,10 @@ fn expiry_from_lease_secs(lease_ms: u64, now_ns: u128) -> Result<u64> {
         .ok_or_else(|| Error::Message("lease expiry overflowed u64 milliseconds".into()))
 }
 
-fn sampled_expiry_ms(lease_ms: u64) -> Result<u64> {
+fn sampled_expiry_ms(clock: &dyn Clock, lease_ms: u64) -> Result<u64> {
     // Before put and commit. A post-commit sample cannot change the value
     // this transaction stores; covering a slower commit would be another write.
-    expiry_from_lease_secs(lease_ms, unix_time_nanos()?)
+    expiry_from_lease_secs(lease_ms, clock.unix_time_nanos()?)
 }
 
 fn claim_value(state: u8, owner: &[u8], expiry_unix_ms: u64) -> Vec<u8> {
@@ -243,6 +259,16 @@ fn insert_record(
 }
 
 impl ConCorpus {
+    /// Replace the wall clock that dates work-claim leases.
+    ///
+    /// Only the claim code reads it, and every constructor starts on
+    /// [`SystemClock`]. A caller that needs an exact lease window, such as a
+    /// test, installs a clock it advances itself.
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
+    }
+
     fn writable_catalog_db(&self) -> Result<Database<Bytes, Bytes>> {
         if self.readonly {
             return Err(Error::Message(
@@ -332,8 +358,9 @@ impl ConCorpus {
     ///
     /// `lease_secs` is required and must be greater than zero.
     ///
-    /// Lease timestamps use the wall clock (`SystemTime::now`) in milliseconds.
-    /// They are evaluated only after this writer takes LMDB's write lock, so
+    /// Lease timestamps use this corpus's [`Clock`] in milliseconds, which is
+    /// the host wall clock unless [`Self::with_clock`] replaced it. They are
+    /// evaluated only after this writer takes LMDB's write lock, so
     /// queueing behind another writer cannot create an already-expired lease.
     /// The clock is read immediately before the expiry is stored, which is
     /// before the row is put and before the write transaction commits. The
@@ -369,18 +396,18 @@ impl ConCorpus {
             let existing = db.get(txn, &key)?.map(|value| value.to_vec());
             match existing {
                 None => {
-                    let expiry_unix_ms = sampled_expiry_ms(lease_ms)?;
+                    let expiry_unix_ms = sampled_expiry_ms(self.clock.as_ref(), lease_ms)?;
                     let active = claim_value(CLAIM_ACTIVE, owner, expiry_unix_ms);
                     db.put(txn, &key, &active)?;
                     Ok(ClaimStatus::Acquired)
                 }
                 Some(value) => {
                     let (state, old_expiry_unix_ms, stored_owner) = decode_claim(&value)?;
-                    let now_unix_ms = floor_unix_millis(unix_time_nanos()?)?;
+                    let now_unix_ms = floor_unix_millis(self.clock.unix_time_nanos()?)?;
                     if state == CLAIM_COMPLETE {
                         Ok(ClaimStatus::Complete)
                     } else if old_expiry_unix_ms < now_unix_ms {
-                        let expiry_unix_ms = sampled_expiry_ms(lease_ms)?;
+                        let expiry_unix_ms = sampled_expiry_ms(self.clock.as_ref(), lease_ms)?;
                         let active = claim_value(CLAIM_ACTIVE, owner, expiry_unix_ms);
                         db.put(txn, &key, &active)?;
                         Ok(ClaimStatus::Acquired)
@@ -396,8 +423,8 @@ impl ConCorpus {
 
     /// Renew an active claim lease for the current owner.
     ///
-    /// Lease timestamps use the wall clock (`SystemTime::now`) in milliseconds
-    /// and are computed after this writer holds LMDB's write lock. The stored
+    /// Lease timestamps use this corpus's [`Clock`] in milliseconds and are
+    /// computed after this writer holds LMDB's write lock. The stored
     /// expiry uses the same `ceil(sample) + lease + 1ms` deadline as
     /// [`Self::try_claim`]. As there, the sample is taken before put and
     /// commit, so the expiry is not earlier than this call's return plus
@@ -427,13 +454,13 @@ impl ConCorpus {
             if stored_owner != owner {
                 return Err(ClaimError::NotOwner.into());
             }
-            let now_unix_ms = floor_unix_millis(unix_time_nanos()?)?;
+            let now_unix_ms = floor_unix_millis(self.clock.unix_time_nanos()?)?;
             if old_expiry_unix_ms < now_unix_ms {
                 return Err(ClaimError::Expired.into());
             }
             // Resample immediately before the put so the stored deadline is
             // the latest instant this transaction can still record.
-            let expiry_unix_ms = sampled_expiry_ms(lease_ms)?;
+            let expiry_unix_ms = sampled_expiry_ms(self.clock.as_ref(), lease_ms)?;
             let renewed = claim_value(CLAIM_ACTIVE, owner, expiry_unix_ms);
             db.put(txn, &key, &renewed)?;
             Ok(())
@@ -468,7 +495,7 @@ impl ConCorpus {
                 .ok_or(ClaimError::Unclaimed)?
                 .to_vec();
             let (state, expiry_unix_ms, stored_owner) = decode_claim(&claim)?;
-            let now_unix_ms = floor_unix_millis(unix_time_nanos()?)?;
+            let now_unix_ms = floor_unix_millis(self.clock.unix_time_nanos()?)?;
             if state == CLAIM_COMPLETE {
                 return Err(ClaimError::AlreadyComplete.into());
             }
