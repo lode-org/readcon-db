@@ -3,7 +3,7 @@ use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use heed::types::{Bytes, Str, Unit};
 use heed::{CompactionOption, Database, Env, EnvFlags, EnvOpenOptions, RwTxn};
@@ -12,6 +12,7 @@ use readcon_core::types::ConFrame;
 use readcon_core::writer::{ConFrameWriter, FloatFormat};
 use serde::{Deserialize, Serialize};
 
+use crate::catalog::{Clock, SystemClock};
 use crate::error::{Error, Result};
 use crate::export_xyz::write_frame_extxyz;
 use crate::frame_scalars::{
@@ -158,6 +159,7 @@ struct PreparedIndexPuts {
 pub struct ConCorpus {
     path: PathBuf,
     env: Env,
+    pub(crate) readonly: bool,
     /// Shared by read transactions, exclusive for a write transaction or a
     /// resize. LMDB requires that this process hold no transaction while the
     /// map grows, so the write guard stays held across the abort and the
@@ -196,6 +198,12 @@ pub struct ConCorpus {
     idx_canon: Option<Database<Bytes, Unit>>,
     /// Optional FrameKey → version ‖ canonical hash ‖ content hash.
     canon_by_frame: Option<Database<Bytes, Bytes>>,
+    /// Opaque records keyed by namespace, subject, and fingerprint.
+    pub(crate) catalog_records: Option<Database<Bytes, Bytes>>,
+    /// Namespaced work claims and their completion state.
+    pub(crate) work_claims: Option<Database<Bytes, Bytes>>,
+    /// Wall clock for claim leases; the host clock unless replaced.
+    pub(crate) clock: Arc<dyn Clock>,
 }
 
 fn frame_has_forces(frame: &ConFrame) -> bool {
@@ -516,11 +524,14 @@ impl ConCorpus {
             let topo_by_frame = env.open_database(&rtxn, Some("topo_by_frame"))?;
             let idx_canon = env.open_database(&rtxn, Some("idx_canon"))?;
             let canon_by_frame = env.open_database(&rtxn, Some("canon_by_frame"))?;
+            let catalog_records = env.open_database(&rtxn, Some("catalog_records"))?;
+            let work_claims = env.open_database(&rtxn, Some("work_claims"))?;
             // heed: uncommitted open_database txn → EINVAL on the next RoTxn.
             rtxn.commit()?;
             return Ok(Self {
                 path,
                 env,
+                readonly: true,
                 txn_gate: RwLock::new(()),
                 frames,
                 compress_frames: AtomicBool::new(true),
@@ -543,6 +554,9 @@ impl ConCorpus {
                 topo_by_frame,
                 idx_canon,
                 canon_by_frame,
+                catalog_records,
+                work_claims,
+                clock: Arc::new(SystemClock),
             });
         }
 
@@ -567,11 +581,14 @@ impl ConCorpus {
         let topo_by_frame = env.create_database(&mut wtxn, Some("topo_by_frame"))?;
         let idx_canon = env.create_database(&mut wtxn, Some("idx_canon"))?;
         let canon_by_frame = env.create_database(&mut wtxn, Some("canon_by_frame"))?;
+        let catalog_records = env.create_database(&mut wtxn, Some("catalog_records"))?;
+        let work_claims = env.create_database(&mut wtxn, Some("work_claims"))?;
         wtxn.commit()?;
 
         Ok(Self {
             path,
             env,
+            readonly: false,
             txn_gate: RwLock::new(()),
             frames,
             compress_frames: AtomicBool::new(true),
@@ -594,6 +611,9 @@ impl ConCorpus {
             topo_by_frame: Some(topo_by_frame),
             idx_canon: Some(idx_canon),
             canon_by_frame: Some(canon_by_frame),
+            catalog_records: Some(catalog_records),
+            work_claims: Some(work_claims),
+            clock: Arc::new(SystemClock),
         })
     }
 
@@ -901,18 +921,6 @@ impl ConCorpus {
         Ok(())
     }
 
-    /// Reindex path: build puts then put (derivation not under a multi-frame exclusive prepare loop).
-    fn index_frame(
-        &self,
-        wtxn: &mut RwTxn,
-        fk: FrameKey,
-        frame: &ConFrame,
-        blob: &str,
-    ) -> Result<()> {
-        let puts = Self::build_index_puts(fk, frame, blob.to_owned(), self.compress_on())?;
-        self.put_index_puts(wtxn, &puts)
-    }
-
     /// Parse path/string CON into owned blobs + frames (no exclusive LMDB write section).
     fn prepare_trajectory_str(
         traj_id: TrajId,
@@ -1083,11 +1091,16 @@ impl ConCorpus {
         if let Some(d) = self.canon_by_frame {
             tables.push(("canon_by_frame", d));
         }
+        if let Some(d) = self.catalog_records {
+            tables.push(("catalog_records", d));
+        }
+        if let Some(d) = self.work_claims {
+            tables.push(("work_claims", d));
+        }
         for (name, db) in tables {
-            for part in [name.as_bytes()] {
-                out.extend_from_slice(&(part.len() as u64).to_le_bytes());
-                out.extend_from_slice(part);
-            }
+            let name_bytes = name.as_bytes();
+            out.extend_from_slice(&(name_bytes.len() as u64).to_le_bytes());
+            out.extend_from_slice(name_bytes);
             for kv in db.iter(&rtxn)? {
                 let (k, v) = kv?;
                 for part in [k, v] {
@@ -2731,6 +2744,18 @@ impl ConCorpus {
             let mut iter = db.iter(&rtxn)?;
             while let Some(Ok((k, v))) = iter.next() {
                 lines.push(format!("canon_by_frame\t{}\t{}", hex(k), hex(v)));
+            }
+        }
+        if let Some(db) = self.catalog_records {
+            let mut iter = db.iter(&rtxn)?;
+            while let Some(Ok((k, v))) = iter.next() {
+                lines.push(format!("catalog_records\t{}\t{}", hex(k), hex(v)));
+            }
+        }
+        if let Some(db) = self.work_claims {
+            let mut iter = db.iter(&rtxn)?;
+            while let Some(Ok((k, v))) = iter.next() {
+                lines.push(format!("work_claims\t{}\t{}", hex(k), hex(v)));
             }
         }
         lines.sort();

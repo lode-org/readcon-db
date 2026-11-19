@@ -1,13 +1,37 @@
 use std::sync::Arc;
 
+use pyo3::create_exception;
 use pyo3::exceptions::{PyIndexError, PyRuntimeError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyBytes, PyDict, PyList};
 
 use crate::canonical::AtomOrderHit;
+use crate::catalog::ClaimStatus;
 use crate::corpus::ConCorpus;
+use crate::error::{ClaimError as RustClaimError, Error};
 use crate::keys::{ContentHash, FrameKey};
 use crate::select::Select;
+
+create_exception!(readcon_db, ClaimError, PyRuntimeError);
+create_exception!(readcon_db, ClaimNotOwnerError, ClaimError);
+create_exception!(readcon_db, ClaimAlreadyCompleteError, ClaimError);
+create_exception!(readcon_db, ClaimUnclaimedError, ClaimError);
+create_exception!(readcon_db, ClaimExpiredError, ClaimError);
+
+fn map_py_error(error: Error) -> PyErr {
+    match error {
+        Error::Claim(RustClaimError::NotOwner) => ClaimNotOwnerError::new_err(error.to_string()),
+        Error::Claim(RustClaimError::AlreadyComplete) => {
+            ClaimAlreadyCompleteError::new_err(error.to_string())
+        }
+        Error::Claim(RustClaimError::Unclaimed) => ClaimUnclaimedError::new_err(error.to_string()),
+        Error::Claim(RustClaimError::Expired) => ClaimExpiredError::new_err(error.to_string()),
+        Error::Claim(RustClaimError::UnknownClaimFormatVersion(_)) => {
+            ClaimError::new_err(error.to_string())
+        }
+        _ => PyRuntimeError::new_err(error.to_string()),
+    }
+}
 
 /// One LMDB corpus directory (`data.mdb` and `lock.mdb`).
 #[pyclass(name = "ConCorpus")]
@@ -28,6 +52,131 @@ impl PyConCorpus {
         }
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(Self { inner })
+    }
+
+    /// Insert an opaque catalog record, deduplicated by its three-part identity.
+    ///
+    /// Returns ``True`` only when this call inserted the record.
+    fn insert_catalog_record(
+        &self,
+        namespace: Vec<u8>,
+        subject: Vec<u8>,
+        fingerprint: Vec<u8>,
+        value: Vec<u8>,
+    ) -> PyResult<bool> {
+        self.inner
+            .insert_catalog_record(&namespace, &subject, &fingerprint, &value)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Return ``(fingerprint, value)`` byte pairs for a namespace and subject.
+    fn list_catalog_records(
+        &self,
+        py: Python<'_>,
+        namespace: Vec<u8>,
+        subject: Vec<u8>,
+    ) -> PyResult<Vec<(Py<PyBytes>, Py<PyBytes>)>> {
+        self.inner
+            .list_catalog_records(&namespace, &subject)
+            .map(|records| {
+                records
+                    .into_iter()
+                    .map(|record| {
+                        (
+                            PyBytes::new(py, &record.fingerprint).unbind(),
+                            PyBytes::new(py, &record.value).unbind(),
+                        )
+                    })
+                    .collect()
+            })
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Atomically claim a task.
+    ///
+    /// Returns one of ``"Acquired"``, ``"AlreadyOwned"``, ``"Busy"``, or
+    /// ``"Complete"``.
+    ///
+    /// ``lease_secs`` is a wall-clock lease duration in seconds and must be
+    /// positive. The lease expiry is computed after this process acquires
+    /// LMDB's write lock; waiting behind other writers does not shorten it.
+    /// The stored expiry is ``ceil(sample) + lease + 1ms``, and the sample is
+    /// taken before the row is committed. That is not earlier than this
+    /// call's return plus ``lease_secs`` only while commit and return finish
+    /// within one millisecond of the sample. Another caller takes the task
+    /// over only when that expiry is strictly before the new call's clock
+    /// sample.
+    ///
+    /// Clock steps are observed directly: a backward step extends a lease and
+    /// a forward step can expire it earlier. All participants should share one
+    /// host clock. If an owner reclaims its own expired task, this returns
+    /// ``"Acquired"``.
+    ///
+    /// ``"AlreadyOwned"`` reports the existing ownership and does not extend
+    /// the lease.
+    fn try_claim(
+        &self,
+        namespace: Vec<u8>,
+        task: Vec<u8>,
+        owner: Vec<u8>,
+        lease_secs: u64,
+    ) -> PyResult<&'static str> {
+        self.inner
+            .try_claim(&namespace, &task, &owner, lease_secs)
+            .map(|status| match status {
+                ClaimStatus::Acquired => "Acquired",
+                ClaimStatus::AlreadyOwned => "AlreadyOwned",
+                ClaimStatus::Busy => "Busy",
+                ClaimStatus::Complete => "Complete",
+            })
+            .map_err(map_py_error)
+    }
+
+    /// Renew an active claim lease owned by ``owner``.
+    ///
+    /// Uses wall-clock time in milliseconds, with expiry computed after this
+    /// process acquires LMDB's write lock. The sample is taken before the
+    /// row is committed, so the stored expiry stays at least this call's
+    /// return plus ``lease_secs`` only while commit and return finish within
+    /// one millisecond of the sample. Clock steps are observed directly:
+    /// a backward step extends a lease and a forward step can expire it.
+    fn renew_claim(
+        &self,
+        namespace: Vec<u8>,
+        task: Vec<u8>,
+        owner: Vec<u8>,
+        lease_secs: u64,
+    ) -> PyResult<()> {
+        self.inner
+            .renew_claim(&namespace, &task, &owner, lease_secs)
+            .map_err(map_py_error)
+    }
+
+    /// Insert a record and mark a task complete in one transaction.
+    ///
+    /// Returns ``True`` only when this call inserted the record.
+    fn complete_claim(
+        &self,
+        namespace: Vec<u8>,
+        task: Vec<u8>,
+        owner: Vec<u8>,
+        subject: Vec<u8>,
+        fingerprint: Vec<u8>,
+        value: Vec<u8>,
+    ) -> PyResult<bool> {
+        self.inner
+            .complete_claim(&namespace, &task, &owner, &subject, &fingerprint, &value)
+            .map_err(map_py_error)
+    }
+
+    /// Release a task. Only its current owner may do so.
+    ///
+    /// Release ignores lease expiry: a lapsed owner can still clear their
+    /// stale claim record.
+    fn release_claim(&self, namespace: Vec<u8>, task: Vec<u8>, owner: Vec<u8>) -> PyResult<()> {
+        self.inner
+            .release_claim(&namespace, &task, &owner)
+            .map_err(map_py_error)
     }
 
     /// RCSO bytes for a unidirectional broadcast on the *caller* communicator.
@@ -417,6 +566,7 @@ impl PyConCorpus {
         limit=None
     ))]
     /// Return `(traj_id, frame_idx)` pairs that match every predicate.
+    #[allow(clippy::too_many_arguments)]
     fn select(
         &self,
         traj_id: Option<u64>,
@@ -1015,6 +1165,20 @@ fn readcon_db(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<StoredFrame>()?;
     m.add_class::<StoredAtom>()?;
     m.add_class::<StoredAtoms>()?;
+    m.add("ClaimError", m.py().get_type::<ClaimError>())?;
+    m.add(
+        "ClaimNotOwnerError",
+        m.py().get_type::<ClaimNotOwnerError>(),
+    )?;
+    m.add(
+        "ClaimAlreadyCompleteError",
+        m.py().get_type::<ClaimAlreadyCompleteError>(),
+    )?;
+    m.add(
+        "ClaimUnclaimedError",
+        m.py().get_type::<ClaimUnclaimedError>(),
+    )?;
+    m.add("ClaimExpiredError", m.py().get_type::<ClaimExpiredError>())?;
     m.add_function(wrap_pyfunction!(bcast_packed_frame, m)?)?;
     m.add_function(wrap_pyfunction!(bcast_packed_frames, m)?)?;
     m.add_function(wrap_pyfunction!(unit_conversion_factor, m)?)?;

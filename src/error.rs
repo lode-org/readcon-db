@@ -1,6 +1,26 @@
 use crate::keys::FrameKey;
 use thiserror::Error;
 
+/// Claim-specific failures for catalog task coordination.
+#[derive(Error, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimError {
+    /// The task has no current claim.
+    #[error("cannot operate on an unclaimed task")]
+    Unclaimed,
+    /// The active claim has expired.
+    #[error("claim lease has expired")]
+    Expired,
+    /// The task was already completed.
+    #[error("task is already complete")]
+    AlreadyComplete,
+    /// The caller is not the active owner.
+    #[error("only the current owner may operate on this task")]
+    NotOwner,
+    /// The stored claim encoding version is unknown.
+    #[error("unknown claim encoding version {0}")]
+    UnknownClaimFormatVersion(u8),
+}
+
 #[derive(Error, Debug)]
 /// Errors returned by the corpus, the C ABI, and the bindings.
 pub enum Error {
@@ -28,6 +48,9 @@ pub enum Error {
     #[error("nul in path or string")]
     /// A path or string passed to the C ABI contained a NUL byte.
     Nul,
+    #[error("{0}")]
+    /// A claim lifecycle operation failed.
+    Claim(#[from] ClaimError),
     #[error("{0}")]
     /// A failure that does not fit a more specific variant.
     Message(String),
