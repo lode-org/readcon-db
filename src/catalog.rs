@@ -52,6 +52,18 @@ pub struct CatalogRecord {
     pub value: Vec<u8>,
 }
 
+pub(crate) struct WorkClaimRecord {
+    pub namespace: Vec<u8>,
+    pub task: Vec<u8>,
+    pub encoded_key: Vec<u8>,
+    pub encoded_value: Vec<u8>,
+}
+
+pub(crate) struct CatalogState {
+    pub records: Vec<CatalogRecord>,
+    pub claims: Vec<WorkClaimRecord>,
+}
+
 /// Result of trying to claim a unit of work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClaimStatus {
@@ -151,6 +163,24 @@ fn decode_catalog_key(key: &[u8]) -> Result<(&[u8], &[u8], &[u8])> {
     validate_component("stored subject", subject)?;
     validate_component("stored fingerprint", fingerprint)?;
     Ok((namespace, subject, fingerprint))
+}
+
+fn decode_work_key(key: &[u8]) -> Result<(&[u8], &[u8])> {
+    let mut rest = key;
+    let namespace = take_component(&mut rest, "work claim key")?;
+    let task = take_component(&mut rest, "work claim key")?;
+    if !rest.is_empty() {
+        return Err(Error::Message(
+            "corrupt work claim key: trailing bytes".into(),
+        ));
+    }
+    validate_component("stored namespace", namespace)?;
+    validate_component("stored task", task)?;
+    Ok((namespace, task))
+}
+
+fn quoted_component(value: &[u8]) -> String {
+    format!("{:?}", String::from_utf8_lossy(value))
 }
 
 const NANOS_PER_MILLI: u128 = 1_000_000;
@@ -335,23 +365,71 @@ impl ConCorpus {
         Ok(records)
     }
 
-    pub(crate) fn all_catalog_records(&self) -> Result<Vec<CatalogRecord>> {
-        let Some(db) = self.catalog_records else {
-            return Ok(Vec::new());
-        };
+    pub(crate) fn catalog_state(&self) -> Result<CatalogState> {
         let txn = self.read_txn()?;
         let mut records = Vec::new();
-        for item in db.iter(&txn)? {
-            let (key, value) = item?;
-            let (namespace, subject, fingerprint) = decode_catalog_key(key)?;
-            records.push(CatalogRecord {
-                namespace: namespace.to_vec(),
-                subject: subject.to_vec(),
-                fingerprint: fingerprint.to_vec(),
-                value: value.to_vec(),
-            });
+        if let Some(db) = self.catalog_records {
+            for item in db.iter(&txn)? {
+                let (key, value) = item?;
+                let (namespace, subject, fingerprint) = decode_catalog_key(key)?;
+                records.push(CatalogRecord {
+                    namespace: namespace.to_vec(),
+                    subject: subject.to_vec(),
+                    fingerprint: fingerprint.to_vec(),
+                    value: value.to_vec(),
+                });
+            }
         }
-        Ok(records)
+        let mut claims = Vec::new();
+        if let Some(db) = self.work_claims {
+            for item in db.iter(&txn)? {
+                let (key, value) = item?;
+                let (namespace, task) = decode_work_key(key)?;
+                decode_claim(value)?;
+                claims.push(WorkClaimRecord {
+                    namespace: namespace.to_vec(),
+                    task: task.to_vec(),
+                    encoded_key: key.to_vec(),
+                    encoded_value: value.to_vec(),
+                });
+            }
+        }
+        Ok(CatalogState { records, claims })
+    }
+
+    pub(crate) fn insert_copied_catalog_record(&self, record: &CatalogRecord) -> Result<()> {
+        let key = catalog_key(&record.namespace, &record.subject, &record.fingerprint)?;
+        validate_record(&record.value)?;
+        let db = self.writable_catalog_db()?;
+        self.with_write(record.value.len(), |txn| {
+            if db.get(txn, &key)?.is_some() {
+                return Err(Error::Message(format!(
+                    "catalog record conflict: namespace {}, subject {}, fingerprint {} appears in more than one source",
+                    quoted_component(&record.namespace),
+                    quoted_component(&record.subject),
+                    quoted_component(&record.fingerprint),
+                )));
+            }
+            db.put(txn, &key, &record.value)?;
+            Ok(())
+        })
+    }
+
+    pub(crate) fn insert_copied_work_claim(&self, claim: &WorkClaimRecord) -> Result<()> {
+        let (namespace, task) = decode_work_key(&claim.encoded_key)?;
+        decode_claim(&claim.encoded_value)?;
+        let db = self.writable_claims_db()?;
+        self.with_write(claim.encoded_value.len(), |txn| {
+            if db.get(txn, &claim.encoded_key)?.is_some() {
+                return Err(Error::Message(format!(
+                    "work claim conflict: namespace {}, key {} appears in more than one source",
+                    quoted_component(namespace),
+                    quoted_component(task),
+                )));
+            }
+            db.put(txn, &claim.encoded_key, &claim.encoded_value)?;
+            Ok(())
+        })
     }
 
     /// Atomically try to claim one namespaced task for one owner.

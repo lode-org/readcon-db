@@ -75,7 +75,7 @@ readcon-db join-drained /lustre/orion/proj/campaign_single \
     /lustre/orion/proj/campaign/node_*
 #+end_src
 
-=join-drained= requires =shards.json= on every source, refuses an existing dest, and refuses traj-id collisions *before* creating dest. Give writers disjoint traj id ranges (or disjoint shard sets) so join does not collide.
+=join-drained= requires =shards.json= on every source and refuses an existing dest. Before creating dest, it refuses traj-id collisions, duplicate catalog identities (namespace, subject, fingerprint), and duplicate work-claim keys (namespace, task). Catalog records and claims use the same policy: an identity present in two sources is an error even when its stored bytes are identical. Give writers disjoint traj id ranges (or disjoint shard sets), catalog identities, and claim keys so join does not collide.
 
 =drain= to a dest that already has =shard_XXXX/data.mdb= is an error: two node-local trees that share a shard id must not last-writer-wins.
 
@@ -145,8 +145,9 @@ Same-frame MPI: do *not* open the env on every rank. Rank 0 of the *caller commu
 | =shard-ingest=                   | missing =shards.json=; =--start-id= not congruent to =--shard=                                    |
 | =shard-select= / =compact-join=  | missing root / missing =shards.json= (no mint)                                                    |
 | =drain=                          | missing source =shards.json=; dest =shard_XXXX/data.mdb= already exists; dest =n_shards= mismatch |
-| =join-drained=                   | dest exists; a source lacks =shards.json=; traj id appears in more than one source                |
-| =compact-join= / =compact-split= | dest exists; source missing                                                                       |
+| =join-drained=                   | dest exists; source lacks =shards.json=; duplicate traj id, catalog identity, or work-claim key   |
+| =compact-join=                   | dest exists; source missing; duplicate traj id, catalog identity, or work-claim key across shards |
+| =compact-split=                  | dest exists; source missing                                                                       |
 | =compact-export-extxyz=          | sharded root without =--sharded=; dest exists                                                     |
 
 On refuse, dest is not created (or a partial dest is removed). Tests: =tests/cli_refuse.rs=, =src/shard.rs=.
