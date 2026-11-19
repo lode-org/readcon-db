@@ -209,7 +209,7 @@ Assign trajectory IDs so ~traj_id % n_shards == shard_id~ (CLI =shard-ingest= ad
 :END:
 *KEEP sharded LMDB (Heed).* Single-env multi-writer contradicts LMDB SWMR; HPC-scale uploads use *independent envs per shard* (MDHIM-style local backends / industry sharded-LMDB practice). Full rationale, citations (LMDB docs, MDHIM HotStorage'15, PapyrusKV, RocksDB contrast, HDF5/Zarr/ADIOS2/DAOS contrast), risks, and falsifiers: see the architecture note on sharded LMDB. Do *not* interpret “one write_txn per env” as “LMDB cannot do multi-process writes”---only that *partitioning is mandatory* for concurrent commits.
 
-** Compaction: reversible join / split for analysis
+** Compaction: join / split for analysis
 :PROPERTIES:
 :CUSTOM_ID: compaction-reversible-join-split-for-analysis
 :END:
@@ -219,4 +219,4 @@ Assign trajectory IDs so ~traj_id % n_shards == shard_id~ (CLI =shard-ingest= ad
 | *single-env-lmdb* | =compact-join= / ordinary =ingest=  | Laptop analysis; =ConCorpus::open_readonly= |
 | *extxyz*          | =compact-export-extxyz= [--sharded] | External ML tools (non-LMDB)                |
 
-Join copies CON blobs by traj (ids preserved; duplicate traj across shards errors). Split routes =traj_id % n_shards= into a new manifest root. Membership is reversible under that routing (indexes rebuilt via normal prepare/commit ingest).
+Join copies CON blobs by traj (ids preserved; duplicate traj across shards errors). Split routes =traj_id % n_shards= into a new manifest root. Frame traj_ids round-trip under that routing (indexes rebuilt via normal prepare/commit ingest); split places catalog records and unchanged work claims in shard zero.
