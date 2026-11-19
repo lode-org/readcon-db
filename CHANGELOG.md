@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.3 - 2026-11-19
+#### Bug Fixes
+- join and split preserve catalog records and work claims across shards
+
 ## v0.2.2 - 2026-11-19
 #### Features
 - (**python**) add insert_catalog_record and list_catalog_records - (218ff19) - *HaoZeke*
