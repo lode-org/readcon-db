@@ -1,8 +1,19 @@
 # Changelog
 
-## Unreleased
+## v0.2.2 - 2026-11-19
 #### Features
-- (**identity**) opt-in canonical hash for frames that differ by atom-id order
+- (**python**) add insert_catalog_record and list_catalog_records - (218ff19) - *HaoZeke*
+- (**catalog**) finalize catalog records and leased claims; dumps and shard rebuilds keep catalog rows, and claim errors subclass RuntimeError - (218ff19) - *HaoZeke*
+- (**catalog**) take the claim lease clock from the corpus - (ee80d62) - *HaoZeke*
+- (**identity**) opt-in canonical hash for frames that differ by atom-id order - (34c88b8) - *HaoZeke*
+#### Bug Fixes
+- (**ci**) retry the MPICH deb download after a launchpad 503 - (da7d307) - *HaoZeke*
+- (**docs**) write the rustdoc root page help and settings link to - (3f91bee) - *HaoZeke*
+- (**docs**) fetch crates before the docs rustdoc build - (ff3a169) - *HaoZeke*
+#### Documentation
+- link the canonical identity note to reorder_like - (39ee7bb) - *HaoZeke*
+#### Tests
+- pin the lease window with a hand-advanced clock - (07ecd24) - *HaoZeke*
 #### Build system
 - (**reader**) require readcon-core 0.21.0 for atom-id correspondence
 
