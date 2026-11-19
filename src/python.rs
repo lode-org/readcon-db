@@ -417,6 +417,7 @@ impl PyConCorpus {
         limit=None
     ))]
     /// Return `(traj_id, frame_idx)` pairs that match every predicate.
+    #[allow(clippy::too_many_arguments)]
     fn select(
         &self,
         traj_id: Option<u64>,

@@ -901,18 +901,6 @@ impl ConCorpus {
         Ok(())
     }
 
-    /// Reindex path: build puts then put (derivation not under a multi-frame exclusive prepare loop).
-    fn index_frame(
-        &self,
-        wtxn: &mut RwTxn,
-        fk: FrameKey,
-        frame: &ConFrame,
-        blob: &str,
-    ) -> Result<()> {
-        let puts = Self::build_index_puts(fk, frame, blob.to_owned(), self.compress_on())?;
-        self.put_index_puts(wtxn, &puts)
-    }
-
     /// Parse path/string CON into owned blobs + frames (no exclusive LMDB write section).
     fn prepare_trajectory_str(
         traj_id: TrajId,
@@ -1084,10 +1072,9 @@ impl ConCorpus {
             tables.push(("canon_by_frame", d));
         }
         for (name, db) in tables {
-            for part in [name.as_bytes()] {
-                out.extend_from_slice(&(part.len() as u64).to_le_bytes());
-                out.extend_from_slice(part);
-            }
+            let name_bytes = name.as_bytes();
+            out.extend_from_slice(&(name_bytes.len() as u64).to_le_bytes());
+            out.extend_from_slice(name_bytes);
             for kv in db.iter(&rtxn)? {
                 let (k, v) = kv?;
                 for part in [k, v] {
