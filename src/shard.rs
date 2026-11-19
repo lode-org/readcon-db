@@ -688,10 +688,24 @@ impl ShardedConCorpus {
                 let nf = sharded.append_trajectory_str(tid, &concat, "split-from-single")?;
                 n += nf;
             }
+            let shard0 = sharded.shard_mut(0)?;
+            copy_catalog_records(single, shard0)?;
             Ok(n)
         })();
         rollback_new_dest(dst_root, n)
     }
+}
+
+fn copy_catalog_records(from: &ConCorpus, into: &ConCorpus) -> Result<()> {
+    for record in from.all_catalog_records()? {
+        into.insert_catalog_record(
+            &record.namespace,
+            &record.subject,
+            &record.fingerprint,
+            &record.value,
+        )?;
+    }
+    Ok(())
 }
 
 fn append_sharded_into(
@@ -724,6 +738,7 @@ fn append_sharded_into(
             }
             n += out.append_trajectory_str(tid, &concat, format!("join-from-shard-{sid}"))?;
         }
+        copy_catalog_records(&shard, out)?;
         shard.close();
     }
     Ok(n)
@@ -833,6 +848,7 @@ pub fn join_corpus_dirs(sources: &[PathBuf], dst: impl AsRef<Path>) -> Result<u3
                 }
                 n += out.append_trajectory_str(tid, &concat, src.display().to_string())?;
             }
+            copy_catalog_records(&c, &out)?;
             c.close();
         }
         out.close();
@@ -904,6 +920,11 @@ mod compaction_tests {
                 s.append_trajectory_str(tid, &con_text, "t").unwrap();
             }
         }
+        let shard0 = ShardedConCorpus::open_shard(&sharded_root, 0).unwrap();
+        assert!(shard0
+            .insert_catalog_record(b"jobs", b"result", b"fp-1", b"value-1")
+            .unwrap());
+        shard0.close();
         let mut s = ShardedConCorpus::open(&sharded_root, 4).unwrap();
         let before = s.select(&Select::new()).unwrap();
         assert_eq!(before.len(), 4);
@@ -915,6 +936,10 @@ mod compaction_tests {
         let joined_c = ConCorpus::open(&joined).unwrap();
         let mid = joined_c.select(&Select::new()).unwrap();
         assert_eq!(mid.len(), 4);
+        let records = joined_c.list_catalog_records(b"jobs", b"result").unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].fingerprint, b"fp-1");
+        assert_eq!(records[0].value, b"value-1");
 
         let split_root = dir.path().join("split_again");
         let n2 = ShardedConCorpus::split_single_to_sharded(&joined_c, &split_root, 4).unwrap();
@@ -928,6 +953,14 @@ mod compaction_tests {
         bt.sort();
         at.sort();
         assert_eq!(bt, at);
+        let rejoined = dir.path().join("rejoined");
+        let n3 = s2.join_to_single_env(&rejoined).unwrap();
+        assert_eq!(n3, 4);
+        let rejoined_c = ConCorpus::open(&rejoined).unwrap();
+        let records_after = rejoined_c.list_catalog_records(b"jobs", b"result").unwrap();
+        assert_eq!(records_after.len(), 1);
+        assert_eq!(records_after[0].fingerprint, b"fp-1");
+        assert_eq!(records_after[0].value, b"value-1");
     }
 
     #[test]

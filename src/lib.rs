@@ -9,6 +9,7 @@
 
 pub mod archive;
 mod canonical;
+mod catalog;
 mod cooked_soa;
 mod corpus;
 mod error;
@@ -33,9 +34,12 @@ pub use canonical::{
     atom_order_permutation, canonical_identity, AtomOrderHit, CanonicalIdentity,
     CANONICAL_IDENTITY_VERSION,
 };
+pub use catalog::{
+    CatalogRecord, ClaimStatus, MAX_CATALOG_COMPONENT_BYTES, MAX_CATALOG_RECORD_BYTES,
+};
 pub use cooked_soa::CookedSoa;
 pub use corpus::{frame_fmax, ConCorpus, TrajMeta};
-pub use error::{Error, Result};
+pub use error::{ClaimError, Error, Result};
 pub use export_h5md::{H5mdArrays, H5mdCollectOpts};
 pub use export_xyz::{write_frame_extxyz, write_frames_extxyz};
 pub use frame_scalars::{frame_cell_volume, frame_total_mass};
