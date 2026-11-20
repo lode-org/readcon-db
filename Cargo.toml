@@ -44,6 +44,7 @@ mpi = { version = "0.8", optional = true, default-features = false }
 tempfile = "3"
 sha2 = "0.10"
 libc = "0.2"
+object = { version = "0.36", default-features = false, features = ["read_core", "archive", "elf", "macho", "pe", "coff"] }
 
 [package.metadata.docs.rs]
 all-features = false
