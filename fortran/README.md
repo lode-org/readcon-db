@@ -34,7 +34,7 @@ objects (`libreadcon_db.so` and `libreadcon_core.so`). Do not static-link
 ## From a checkout
 
 ```bash
-cargo build --release
+cargo build --release --features capi
 cd fortran/ReadConDb
 fpm build --flag "-I../../include" \
   --link-flag "-L../../target/release -lreadcon_db -ldl -lpthread -lm"

@@ -4,7 +4,7 @@
 :PROPERTIES:
 :CUSTOM_ID: mpi-ingest-and-export
 :END:
-Build with =--features mpi= against one MPI implementation (=MPICC=mpicc.mpich= or =mpicc.openmpi=). The library never calls =MPI_Init= and only uses the communicator you pass.
+Build with =--features mpi= against one MPI implementation (=MPICC=mpicc.mpich= or =mpicc.openmpi=). The library never calls =MPI_Init= and only uses the communicator you pass. The C and Fortran entry point =rkrdb_mpi_ingest_paths_f= also needs the =capi= feature (=--features mpi,capi=).
 
 ** Ingest
 :PROPERTIES:

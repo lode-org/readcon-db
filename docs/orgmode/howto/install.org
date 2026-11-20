@@ -35,7 +35,9 @@ Install [[https://pypi.org/project/readcon/][readcon]] (core) as well when you n
 git clone https://github.com/lode-org/readcon-db
 cd readcon-db
 cargo test --locked
-cargo build --release   # libreadcon_db + CLI readcon-db
+cargo test --locked --features capi
+cargo build --release                    # CLI readcon-db; no C symbols
+cargo build --release --features capi   # libreadcon_db with the C ABI
 #+end_src
 
 =readcon-core= comes from crates.io (~{{{readcon-core-req}}}~).
@@ -57,6 +59,8 @@ maturin develop --release --features python --manifest-path python/pyproject.tom
 :PROPERTIES:
 :CUSTOM_ID: c-c-no-cbindgen
 :END:
+The C ABI (=rkrdb_*=) is compiled only with the =capi= cargo feature, which is off by default so that Rust consumers do not export unmangled =rkrdb_*= symbols. The CMake and Meson builds, =scripts/package-clib.sh= and the clib tarball enable =capi= for you. A plain =cargo build --features capi=, or =cargo cbuild --features capi= with cargo-c, is needed when you drive cargo yourself. =READCON_DB_CARGO_FEATURES= (CMake) and =-Dcargo_features= (Meson) add features on top of =capi=.
+
 =include/readcon-db.h= is hand-written and shipped. Optional =include/readcon-db-mpi.h= takes the caller's =MPI_Comm= (not linked into the library). CMake FetchContent, Meson wrap, and =pkg-config= do *not* run cbindgen.
 
 CMake:
@@ -117,7 +121,7 @@ fpm build --flag "$(pkg-config --cflags readcon-db)" \
   --link-flag "$(pkg-config --libs readcon-db) -ldl -lpthread -lm"
 #+end_src
 
-From a checkout (after a release build of the cdylib):
+From a checkout (after =cargo build --release --features capi=):
 
 #+begin_src sh
 cd fortran/ReadConDb && fpm build --flag "-I../../include" \
