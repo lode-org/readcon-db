@@ -18,6 +18,7 @@
 # --target names the archive; cargo --target is used only when it differs
 # from the host triple. --prefix skips cargo and copies an existing install.
 # --no-build refuses to invoke cargo (uses --prefix or $root/target/release).
+# The build always enables the capi feature; --features adds to it.
 set -euo pipefail
 
 usage() {
@@ -226,10 +227,8 @@ else
         fi
         (
             cd "$ROOT_DIR"
-            feat_args=()
-            if [[ -n "$FEATURES" ]]; then
-                feat_args=(--features "$FEATURES")
-            fi
+            # The C ABI is only compiled with the capi feature.
+            feat_args=(--features "capi${FEATURES:+,$FEATURES}")
             cargo build --release --locked --package readcon-db \
                 ${CARGO_TARGET_ARGS[@]+"${CARGO_TARGET_ARGS[@]}"} \
                 ${feat_args[@]+"${feat_args[@]}"}

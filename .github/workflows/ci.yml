@@ -33,8 +33,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
       - name: Test (locked)
         run: cargo test --locked --all-targets
+      - name: Test with the C ABI (capi)
+        run: cargo test --locked --all-targets --features capi
       - name: Clippy
         run: cargo clippy --locked --all-targets
+      - name: Clippy with the C ABI (capi)
+        run: cargo clippy --locked --all-targets --features capi
       - name: Docs
         run: cargo doc --locked --no-deps
       - name: Verify registry package

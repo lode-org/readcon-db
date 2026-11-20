@@ -48,8 +48,9 @@ def main(argv: list[str]) -> int:
         cmd.append("--offline")
     if profile == "release":
         cmd.append("--release")
-    if features.strip():
-        cmd.extend(["--features", features.strip()])
+    # The C ABI is only compiled with the capi feature.
+    wanted = ["capi", *(f for f in features.replace(" ", ",").split(",") if f)]
+    cmd.extend(["--features", ",".join(dict.fromkeys(wanted))])
     rustc_args = ["--crate-type=cdylib", "--crate-type=staticlib"]
     if sys.platform.startswith("linux"):
         rustc_args.append(f"-Clink-arg=-Wl,-soname,{shared_name}")

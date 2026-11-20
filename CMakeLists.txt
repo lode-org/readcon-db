@@ -53,7 +53,7 @@ endif()
 
 option(BUILD_SHARED_LIBS "Use a shared library by default instead of a static one" ON)
 option(READCON_DB_INSTALL_BOTH_STATIC_SHARED "Install both shared and static libraries" ON)
-set(READCON_DB_CARGO_FEATURES "" CACHE STRING "Comma-free cargo features to enable (space-separated)")
+set(READCON_DB_CARGO_FEATURES "" CACHE STRING "Extra cargo features to enable (space-separated). The capi feature is always enabled.")
 
 set(BIN_INSTALL_DIR "bin" CACHE PATH "Path relative to CMAKE_INSTALL_PREFIX where to install binaries/DLL")
 set(LIB_INSTALL_DIR "lib" CACHE PATH "Path relative to CMAKE_INSTALL_PREFIX where to install libraries")
@@ -147,10 +147,11 @@ endif()
 
 set(CARGO_TARGET_DIR ${CMAKE_CURRENT_BINARY_DIR}/cargo-target)
 set(CARGO_BUILD_ARG "${CARGO_BUILD_ARG};--target-dir=${CARGO_TARGET_DIR}")
-if (NOT "${READCON_DB_CARGO_FEATURES}" STREQUAL "")
-    string(REPLACE " " "," _feats "${READCON_DB_CARGO_FEATURES}")
-    set(CARGO_BUILD_ARG "${CARGO_BUILD_ARG};--features=${_feats}")
-endif()
+# The C ABI (src/ffi.rs) is only compiled with the capi feature.
+set(_cargo_features "capi ${READCON_DB_CARGO_FEATURES}")
+string(STRIP "${_cargo_features}" _cargo_features)
+string(REPLACE " " "," _feats "${_cargo_features}")
+set(CARGO_BUILD_ARG "${CARGO_BUILD_ARG};--features=${_feats}")
 
 if ("${RUST_BUILD_TARGET}" STREQUAL "")
     if (CARGO_VERSION_RAW MATCHES "host: ([a-zA-Z0-9_\\-]*)\n")
