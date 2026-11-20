@@ -18,13 +18,18 @@ const EXPECTED_WITH_CAPI: &[&str] = &[
     "rkrdb_archive_close",
 ];
 
-fn target_dir() -> PathBuf {
-    if let Some(d) = std::env::var_os("CARGO_TARGET_DIR") {
-        return PathBuf::from(d);
-    }
-    // <target>/<profile>/deps/<this test binary>
-    let exe = std::env::current_exe().unwrap();
-    exe.ancestors().nth(3).unwrap().to_path_buf()
+// One target dir per feature set. The cdylib and staticlib paths carry no
+// feature hash, so builds with different features in a shared target dir
+// overwrite each other while cargo still reports the other one as fresh.
+fn target_dir(features: &[&str]) -> PathBuf {
+    let name = if features.is_empty() {
+        "default".to_string()
+    } else {
+        features.join("-")
+    };
+    Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join("capi_symbols")
+        .join(name)
 }
 
 fn artifacts(features: &[&str]) -> Vec<PathBuf> {
@@ -34,7 +39,7 @@ fn artifacts(features: &[&str]) -> Vec<PathBuf> {
         .arg("--manifest-path")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
         .arg("--target-dir")
-        .arg(target_dir());
+        .arg(target_dir(features));
     if !features.is_empty() {
         cmd.arg("--features").arg(features.join(","));
     }
