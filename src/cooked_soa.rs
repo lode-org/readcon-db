@@ -203,6 +203,7 @@ pub fn encode_batch(blobs: &[Vec<u8>]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+#[cfg(any(feature = "capi", feature = "python", test))]
 pub fn decode_batch(bytes: &[u8]) -> Result<Vec<Vec<u8>>> {
     if bytes.len() < 12 {
         return Err(Error::Message("RCSB truncated header".into()));

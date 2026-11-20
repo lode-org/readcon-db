@@ -817,6 +817,7 @@ pub fn append_trajectory_paths_sharded<C: Communicator>(
 }
 
 /// C ABI: MPI ingest over a Fortran `MPI_Fint` communicator handle.
+/// Compiled only with the `capi` feature.
 ///
 /// `n_shards == 0` writes one corpus at `dir` from rank 0; otherwise `dir`
 /// is a sharded root. `traj_ids` and `paths` hold `n_files` entries in
@@ -827,6 +828,7 @@ pub fn append_trajectory_paths_sharded<C: Communicator>(
 /// # Safety
 /// MPI must be initialized, `comm_f` must name a live intra-communicator,
 /// and the pointers must be valid for `n_files` entries.
+#[cfg(feature = "capi")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rkrdb_mpi_ingest_paths_f(
     comm_f: mpi::ffi::RSMPI_Fint,
