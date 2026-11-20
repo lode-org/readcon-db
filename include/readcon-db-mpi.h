@@ -221,7 +221,7 @@ static inline int rkrdb_bcast_packed_frames_f(MPI_Fint comm_f, int root,
 }
 
 /*
- * Exported by libreadcon_db built with the `mpi` feature (Rust side takes
+ * Exported by libreadcon_db built with the `mpi` and `capi` features (Rust side takes
  * the Fortran handle so the library does not hard-link one MPI ABI).
  * Collective parallel ingest of `n_files` CON files in order. With
  * `n_shards == 0` rank 0 writes the single corpus at `dir`; otherwise

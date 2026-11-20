@@ -6,7 +6,7 @@
 :END:
 Module: =fortran/ReadConDb/src/readcon_db.f90= (=bind(C)= to =rkrdb_*=).
 
-Link =libreadcon_db= from a checkout (=cargo build --release=) or from the prebuilt =readcon-db-clib-$VERSION-$target.tar.gz= Release asset (no local cargo). See @@rst::doc:`/howto/install`@@ and =fortran/README.md=.
+Link =libreadcon_db= from a checkout (=cargo build --release --features capi=) or from the prebuilt =readcon-db-clib-$VERSION-$target.tar.gz= Release asset (no local cargo). See @@rst::doc:`/howto/install`@@ and =fortran/README.md=.
 
 #+begin_src fortran
 use readcon_db

@@ -30,7 +30,9 @@ Docs: <https://lode-org.github.io/readcon-db/> · crate: <https://crates.io/crat
 git clone https://github.com/lode-org/readcon-db
 cd readcon-db
 cargo test --locked
-cargo build --release   # libreadcon_db + CLI readcon-db
+cargo test --locked --features capi
+cargo build --release                    # CLI readcon-db; no C symbols
+cargo build --release --features capi   # libreadcon_db with the C ABI
 ```
 
 Optional LODE sibling checkout (edit core + db together): clone both under the same parent, then create **untracked** `.cargo/config.toml` in `readcon-db`:

@@ -106,7 +106,7 @@ jobs:
       - name: C wrapper on a split communicator
         run: |
           set -euo pipefail
-          cargo build --features mpi --lib
+          cargo build --features mpi,capi --lib
           ${{ matrix.cc }} -Iinclude tests/mpi-c/ingest_smoke.c -Ltarget/debug -lreadcon_db -Wl,-rpath,$PWD/target/debug -o ingest_smoke
           for p in 1 2 3 4; do
             T=$(mktemp -d)

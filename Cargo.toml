@@ -19,6 +19,9 @@ crate-type = ["lib", "cdylib", "staticlib"]
 [features]
 default = []
 python = ["dep:pyo3"]
+# Compiles the C ABI (src/ffi.rs and the rkrdb_* exports in src/archive.rs
+# and src/mpi_ingest.rs). Off by default so Rust consumers do not export
+# unmangled rkrdb_* symbols. C, Fortran and cargo-c builds must enable it.
 capi = []
 # Parallel ingest over a caller-supplied communicator (rsmpi). Needs an MPI
 # implementation and libclang at build time. See src/mpi_ingest.rs.
@@ -41,10 +44,20 @@ mpi = { version = "0.8", optional = true, default-features = false }
 tempfile = "3"
 sha2 = "0.10"
 libc = "0.2"
+object = { version = "0.36", default-features = false, features = [
+  "read_core",
+  "archive",
+  "elf",
+  "macho",
+  "pe",
+  "coff",
+] }
 
 [package.metadata.docs.rs]
 all-features = false
 
+# cargo-c has no per-package default features: run
+# `cargo cbuild --features capi` / `cargo cinstall --features capi`.
 [package.metadata.capi]
 min_version = "0.10.17"
 

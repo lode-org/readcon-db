@@ -1,8 +1,8 @@
 option('with_tests', type : 'boolean',
        value : false,
-       description: 'Runs cargo test from meson',
+       description: 'Runs cargo test --features capi from meson',
       )
 option('cargo_features', type : 'string',
        value : '',
-       description: 'Comma-separated cargo features forwarded to cargo rustc',
+       description: 'Extra comma-separated cargo features forwarded to cargo rustc. capi is always enabled.',
       )

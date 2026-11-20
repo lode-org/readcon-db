@@ -144,7 +144,14 @@ if get_option('with_tests')
     test(
         'cargo-tests',
         cargo_prog,
-        args: ['test', '--manifest-path', _msproot / 'Cargo.toml', '--locked'],
+        args: [
+            'test',
+            '--manifest-path',
+            _msproot / 'Cargo.toml',
+            '--locked',
+            '--features',
+            'capi',
+        ],
         timeout: 300,
     )
 endif

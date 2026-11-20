@@ -264,188 +264,194 @@ fn commit_row(corpus: &ConCorpus, traj: u64, z: &[u32], cell: [f64; 3], row: &Ro
 // C ABI
 // ---------------------------------------------------------------------------
 
-use std::ffi::CStr;
-use std::os::raw::{c_char, c_int};
-use std::sync::Mutex;
+#[cfg(feature = "capi")]
+mod c_abi {
+    use super::ObservationArchive;
+    use crate::error::Error;
 
-use crate::ffi::{RKRDB_ERR, RKRDB_NOT_FOUND, RKRDB_NULL, RKRDB_OK};
+    use std::ffi::CStr;
+    use std::os::raw::{c_char, c_int};
+    use std::sync::Mutex;
 
-static ARCHIVES: Mutex<Vec<Option<Box<ObservationArchive>>>> = Mutex::new(Vec::new());
+    use crate::ffi::{RKRDB_ERR, RKRDB_NOT_FOUND, RKRDB_NULL, RKRDB_OK};
 
-fn push_archive(a: ObservationArchive) -> usize {
-    let mut g = ARCHIVES.lock().unwrap();
-    for (i, slot) in g.iter_mut().enumerate() {
-        if slot.is_none() {
-            *slot = Some(Box::new(a));
-            return i;
-        }
-    }
-    g.push(Some(Box::new(a)));
-    g.len() - 1
-}
+    static ARCHIVES: Mutex<Vec<Option<Box<ObservationArchive>>>> = Mutex::new(Vec::new());
 
-fn with_archive<F, T>(id: usize, f: F) -> std::result::Result<T, c_int>
-where
-    F: FnOnce(&ObservationArchive) -> std::result::Result<T, c_int>,
-{
-    let g = ARCHIVES.lock().unwrap();
-    let slot = g.get(id).ok_or(RKRDB_NULL)?;
-    let a = slot.as_ref().ok_or(RKRDB_NULL)?;
-    f(a)
-}
-
-/// Open (or create) an observation archive at `dir` for a fixed
-/// composition: `z` is the per-atom atomic-number list in caller
-/// order (`natoms` entries), `cell3` the three orthorhombic box
-/// lengths. Writes the opaque handle to `out_id`.
-#[no_mangle]
-pub unsafe extern "C" fn rkrdb_archive_open(
-    dir: *const c_char,
-    z: *const u32,
-    natoms: u32,
-    cell3: *const f64,
-    out_id: *mut usize,
-) -> c_int {
-    if dir.is_null() || z.is_null() || cell3.is_null() || out_id.is_null() || natoms == 0 {
-        return RKRDB_NULL;
-    }
-    let cdir = unsafe { CStr::from_ptr(dir) };
-    let Ok(dir) = cdir.to_str() else {
-        return RKRDB_ERR;
-    };
-    let z = unsafe { std::slice::from_raw_parts(z, natoms as usize) }.to_vec();
-    let cell = unsafe { [*cell3, *cell3.add(1), *cell3.add(2)] };
-    match ObservationArchive::open(dir, z, cell) {
-        Ok(archive) => {
-            unsafe { *out_id = push_archive(archive) };
-            RKRDB_OK
-        }
-        Err(_) => RKRDB_ERR,
-    }
-}
-
-/// Enqueue one evaluation: flat `3 * natoms` position and force
-/// buffers in caller order plus the total energy. Non-blocking; disk
-/// failures are counted via `rkrdb_archive_dropped`.
-#[no_mangle]
-pub unsafe extern "C" fn rkrdb_archive_append(
-    id: usize,
-    positions: *const f64,
-    forces: *const f64,
-    energy: f64,
-) -> c_int {
-    if positions.is_null() || forces.is_null() {
-        return RKRDB_NULL;
-    }
-    with_archive(id, |a| {
-        let n3 = 3 * a.natoms();
-        let pos = unsafe { std::slice::from_raw_parts(positions, n3) };
-        let frc = unsafe { std::slice::from_raw_parts(forces, n3) };
-        Ok(if a.append(pos, frc, energy) {
-            RKRDB_OK
-        } else {
-            RKRDB_ERR
-        })
-    })
-    .unwrap_or(RKRDB_NULL)
-}
-
-/// Block until every enqueued row is committed or counted dropped.
-#[no_mangle]
-pub unsafe extern "C" fn rkrdb_archive_flush(id: usize) -> c_int {
-    with_archive(id, |a| {
-        a.flush();
-        Ok(RKRDB_OK)
-    })
-    .unwrap_or(RKRDB_NULL)
-}
-
-/// Rows committed to the corpus (including prior runs).
-#[no_mangle]
-pub unsafe extern "C" fn rkrdb_archive_count(id: usize, out_count: *mut u64) -> c_int {
-    if out_count.is_null() {
-        return RKRDB_NULL;
-    }
-    with_archive(id, |a| {
-        unsafe { *out_count = a.committed() };
-        Ok(RKRDB_OK)
-    })
-    .unwrap_or(RKRDB_NULL)
-}
-
-/// Rows accepted by append, including any still queued (prior runs
-/// included). Key cache refreshes on this; fetch bounds on
-/// rkrdb_archive_count after a flush.
-#[no_mangle]
-pub unsafe extern "C" fn rkrdb_archive_appended(id: usize, out_count: *mut u64) -> c_int {
-    if out_count.is_null() {
-        return RKRDB_NULL;
-    }
-    with_archive(id, |a| {
-        unsafe { *out_count = a.appended() };
-        Ok(RKRDB_OK)
-    })
-    .unwrap_or(RKRDB_NULL)
-}
-
-/// Rows the writer thread could not persist.
-#[no_mangle]
-pub unsafe extern "C" fn rkrdb_archive_dropped(id: usize, out_count: *mut u64) -> c_int {
-    if out_count.is_null() {
-        return RKRDB_NULL;
-    }
-    with_archive(id, |a| {
-        unsafe { *out_count = a.dropped() };
-        Ok(RKRDB_OK)
-    })
-    .unwrap_or(RKRDB_NULL)
-}
-
-/// Fetch committed row `index` in the caller's original atom order.
-/// `positions` and `forces` receive `3 * natoms` doubles; `out_energy`
-/// the total energy. Flush first for a complete snapshot.
-#[no_mangle]
-pub unsafe extern "C" fn rkrdb_archive_fetch(
-    id: usize,
-    index: u64,
-    positions: *mut f64,
-    forces: *mut f64,
-    capacity_atoms: u32,
-    out_energy: *mut f64,
-) -> c_int {
-    if positions.is_null() || forces.is_null() || out_energy.is_null() {
-        return RKRDB_NULL;
-    }
-    with_archive(id, |a| {
-        if (capacity_atoms as usize) < a.natoms() {
-            return Ok(RKRDB_ERR);
-        }
-        match a.fetch(index) {
-            Ok((pos, frc, energy)) => {
-                unsafe {
-                    std::ptr::copy_nonoverlapping(pos.as_ptr(), positions, pos.len());
-                    std::ptr::copy_nonoverlapping(frc.as_ptr(), forces, frc.len());
-                    *out_energy = energy;
-                }
-                Ok(RKRDB_OK)
+    fn push_archive(a: ObservationArchive) -> usize {
+        let mut g = ARCHIVES.lock().unwrap();
+        for (i, slot) in g.iter_mut().enumerate() {
+            if slot.is_none() {
+                *slot = Some(Box::new(a));
+                return i;
             }
-            Err(Error::MissingFrame(_)) => Ok(RKRDB_NOT_FOUND),
-            Err(_) => Ok(RKRDB_ERR),
         }
-    })
-    .unwrap_or(RKRDB_NULL)
-}
+        g.push(Some(Box::new(a)));
+        g.len() - 1
+    }
 
-/// Drain the writer, close the corpus, release the handle.
-#[no_mangle]
-pub unsafe extern "C" fn rkrdb_archive_close(id: usize) -> c_int {
-    let mut g = ARCHIVES.lock().unwrap();
-    match g.get_mut(id) {
-        Some(slot) => {
-            *slot = None;
-            RKRDB_OK
+    fn with_archive<F, T>(id: usize, f: F) -> std::result::Result<T, c_int>
+    where
+        F: FnOnce(&ObservationArchive) -> std::result::Result<T, c_int>,
+    {
+        let g = ARCHIVES.lock().unwrap();
+        let slot = g.get(id).ok_or(RKRDB_NULL)?;
+        let a = slot.as_ref().ok_or(RKRDB_NULL)?;
+        f(a)
+    }
+
+    /// Open (or create) an observation archive at `dir` for a fixed
+    /// composition: `z` is the per-atom atomic-number list in caller
+    /// order (`natoms` entries), `cell3` the three orthorhombic box
+    /// lengths. Writes the opaque handle to `out_id`.
+    #[no_mangle]
+    pub unsafe extern "C" fn rkrdb_archive_open(
+        dir: *const c_char,
+        z: *const u32,
+        natoms: u32,
+        cell3: *const f64,
+        out_id: *mut usize,
+    ) -> c_int {
+        if dir.is_null() || z.is_null() || cell3.is_null() || out_id.is_null() || natoms == 0 {
+            return RKRDB_NULL;
         }
-        None => RKRDB_NULL,
+        let cdir = unsafe { CStr::from_ptr(dir) };
+        let Ok(dir) = cdir.to_str() else {
+            return RKRDB_ERR;
+        };
+        let z = unsafe { std::slice::from_raw_parts(z, natoms as usize) }.to_vec();
+        let cell = unsafe { [*cell3, *cell3.add(1), *cell3.add(2)] };
+        match ObservationArchive::open(dir, z, cell) {
+            Ok(archive) => {
+                unsafe { *out_id = push_archive(archive) };
+                RKRDB_OK
+            }
+            Err(_) => RKRDB_ERR,
+        }
+    }
+
+    /// Enqueue one evaluation: flat `3 * natoms` position and force
+    /// buffers in caller order plus the total energy. Non-blocking; disk
+    /// failures are counted via `rkrdb_archive_dropped`.
+    #[no_mangle]
+    pub unsafe extern "C" fn rkrdb_archive_append(
+        id: usize,
+        positions: *const f64,
+        forces: *const f64,
+        energy: f64,
+    ) -> c_int {
+        if positions.is_null() || forces.is_null() {
+            return RKRDB_NULL;
+        }
+        with_archive(id, |a| {
+            let n3 = 3 * a.natoms();
+            let pos = unsafe { std::slice::from_raw_parts(positions, n3) };
+            let frc = unsafe { std::slice::from_raw_parts(forces, n3) };
+            Ok(if a.append(pos, frc, energy) {
+                RKRDB_OK
+            } else {
+                RKRDB_ERR
+            })
+        })
+        .unwrap_or(RKRDB_NULL)
+    }
+
+    /// Block until every enqueued row is committed or counted dropped.
+    #[no_mangle]
+    pub unsafe extern "C" fn rkrdb_archive_flush(id: usize) -> c_int {
+        with_archive(id, |a| {
+            a.flush();
+            Ok(RKRDB_OK)
+        })
+        .unwrap_or(RKRDB_NULL)
+    }
+
+    /// Rows committed to the corpus (including prior runs).
+    #[no_mangle]
+    pub unsafe extern "C" fn rkrdb_archive_count(id: usize, out_count: *mut u64) -> c_int {
+        if out_count.is_null() {
+            return RKRDB_NULL;
+        }
+        with_archive(id, |a| {
+            unsafe { *out_count = a.committed() };
+            Ok(RKRDB_OK)
+        })
+        .unwrap_or(RKRDB_NULL)
+    }
+
+    /// Rows accepted by append, including any still queued (prior runs
+    /// included). Key cache refreshes on this; fetch bounds on
+    /// rkrdb_archive_count after a flush.
+    #[no_mangle]
+    pub unsafe extern "C" fn rkrdb_archive_appended(id: usize, out_count: *mut u64) -> c_int {
+        if out_count.is_null() {
+            return RKRDB_NULL;
+        }
+        with_archive(id, |a| {
+            unsafe { *out_count = a.appended() };
+            Ok(RKRDB_OK)
+        })
+        .unwrap_or(RKRDB_NULL)
+    }
+
+    /// Rows the writer thread could not persist.
+    #[no_mangle]
+    pub unsafe extern "C" fn rkrdb_archive_dropped(id: usize, out_count: *mut u64) -> c_int {
+        if out_count.is_null() {
+            return RKRDB_NULL;
+        }
+        with_archive(id, |a| {
+            unsafe { *out_count = a.dropped() };
+            Ok(RKRDB_OK)
+        })
+        .unwrap_or(RKRDB_NULL)
+    }
+
+    /// Fetch committed row `index` in the caller's original atom order.
+    /// `positions` and `forces` receive `3 * natoms` doubles; `out_energy`
+    /// the total energy. Flush first for a complete snapshot.
+    #[no_mangle]
+    pub unsafe extern "C" fn rkrdb_archive_fetch(
+        id: usize,
+        index: u64,
+        positions: *mut f64,
+        forces: *mut f64,
+        capacity_atoms: u32,
+        out_energy: *mut f64,
+    ) -> c_int {
+        if positions.is_null() || forces.is_null() || out_energy.is_null() {
+            return RKRDB_NULL;
+        }
+        with_archive(id, |a| {
+            if (capacity_atoms as usize) < a.natoms() {
+                return Ok(RKRDB_ERR);
+            }
+            match a.fetch(index) {
+                Ok((pos, frc, energy)) => {
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(pos.as_ptr(), positions, pos.len());
+                        std::ptr::copy_nonoverlapping(frc.as_ptr(), forces, frc.len());
+                        *out_energy = energy;
+                    }
+                    Ok(RKRDB_OK)
+                }
+                Err(Error::MissingFrame(_)) => Ok(RKRDB_NOT_FOUND),
+                Err(_) => Ok(RKRDB_ERR),
+            }
+        })
+        .unwrap_or(RKRDB_NULL)
+    }
+
+    /// Drain the writer, close the corpus, release the handle.
+    #[no_mangle]
+    pub unsafe extern "C" fn rkrdb_archive_close(id: usize) -> c_int {
+        let mut g = ARCHIVES.lock().unwrap();
+        match g.get_mut(id) {
+            Some(slot) => {
+                *slot = None;
+                RKRDB_OK
+            }
+            None => RKRDB_NULL,
+        }
     }
 }
 
