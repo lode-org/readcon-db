@@ -41,6 +41,7 @@ cargo build --release --features capi   # libreadcon_db with the C ABI
 #+end_src
 
 =readcon-core= comes from crates.io (~{{{readcon-core-req}}}~).
+A build from source, including =cargo install=, the Python sdist and the cxx tarball, needs CMake outside Windows: readcon-core links zlib-ng, which =libz-ng-sys= builds with CMake.
 Add an *untracked* =.cargo/config.toml= with the patch below to build against a local core tree.
 
 #+begin_src toml
@@ -107,7 +108,7 @@ export READCON_DB_LIB="$PREFIX/lib/libreadcon_db.so"
 pkg-config --cflags --libs readcon-db
 #+end_src
 
-The cxx tarball still needs rustc/cargo. The clib tarball is the Fortran / C path that does not.
+The cxx tarball still needs rustc/cargo, and CMake outside Windows. The clib tarball is the Fortran / C path that does not.
 
 ** Fortran
 :PROPERTIES:
