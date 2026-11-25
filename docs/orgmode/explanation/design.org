@@ -72,6 +72,10 @@ Formula encoding: sorted non-empty symbols, =Sym:count= joined by =|= (e.g. =Cu
 2. *In-memory frames* (=append_trajectory_frames= / =extend_trajectory_frames=) for chemfiles → =ConFrame= → corpus without a temp file. Python: =append_trajectory_str= / =append_trajectory_frames=. C: =rkrdb_append_trajectory_str= / =rkrdb_append_trajectory_frame= (=RKRConFrame*=).
 3. Directory ingest (=ingest_directory=).
 
+=extend_trajectory_str= and =extend_trajectory_path= (no units stamp) store those same raw spans. Python =extend_trajectory= and C =rkrdb_extend_trajectory= are that path. A units stamp, and in-memory =extend_trajectory_frames=, write with readcon-core =FloatFormat::RoundTrip= because the original text is gone.
+
+Stores already written at six decimal places are not migrated. Open and a later extend leave those rows byte for byte. A resume that hashes the original high-precision file misses and starts a new trajectory. A resume that hashes the stored six-decimal text hits the same trajectory when that text still parses. A mass near =1e-9= written at six decimals can become =0.000000=, which fails mass validation, so that stored spelling does not resume.
+
 ** Reindex
 :PROPERTIES:
 :CUSTOM_ID: reindex

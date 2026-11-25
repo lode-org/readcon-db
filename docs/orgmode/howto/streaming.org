@@ -36,6 +36,14 @@ Rust is =ConCorpus::open= and =ConCorpus::open_readonly=. The command line is =r
 
 Rust =ConCorpus::append_trajectory_frames= still commits the slice you pass in one transaction. The grouping is the Python binding.
 
+** Extend a live trajectory
+:PROPERTIES:
+:CUSTOM_ID: extend-a-live-trajectory
+:END:
+Python =extend_trajectory=, C =rkrdb_extend_trajectory=, and Rust =extend_trajectory_str= / =extend_trajectory_path= append the file's own frame text. The content hash is the xxh3-128 of that text, so a later open of the same file finds the same generation.
+
+A corpus written by an older extend stored those frames at six decimal places. Opening it does not rewrite the rows. Resuming from the original file misses those hashes and starts a new trajectory. Resuming from the stored six-decimal text hits when that text still parses. A mass near =1e-9= can round to =0.000000= and then fail to parse.
+
 ** Random access
 :PROPERTIES:
 :CUSTOM_ID: random-access

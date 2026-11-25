@@ -1279,6 +1279,14 @@ impl ConCorpus {
     /// Callers that stream a long trajectory pass one chunk at a time so the
     /// prepared index rows for the whole file are not resident together.
     /// A chunk that does not parse is not written, and earlier frames stay.
+    ///
+    /// A store written by an older extend can hold frames at six decimal
+    /// places. Opening that store does not rewrite those rows, and a later
+    /// extend leaves them in place. Hashing the original spelling misses, so
+    /// a resume of that file starts a new trajectory. Hashing the stored
+    /// six-decimal spelling hits the same trajectory when the text still
+    /// parses. A mass near `1e-9` can become `0.000000` at six decimals, and
+    /// that text then fails mass validation.
     pub fn extend_trajectory_str(
         &self,
         traj_id: TrajId,
