@@ -42,7 +42,7 @@ Rust =ConCorpus::append_trajectory_frames= still commits the slice you pass in o
 :END:
 Python =extend_trajectory=, C =rkrdb_extend_trajectory=, and Rust =extend_trajectory_str= / =extend_trajectory_path= append the file's own frame text. The content hash is the xxh3-128 of that text, so a later open of the same file finds the same generation.
 
-To look a file up before a resume, hash it with Rust =ConCorpus::hash_con_text= or =readcon-db hash-file <file.con>=. Both hash the first frame's source span as written, the same bytes the store hashed, and the result goes to =find_by_hash=.
+To look a file up before a resume, hash it with Rust =ConCorpus::hash_con_text=, Python =ConCorpus.hash_con_text=, C =rkrdb_hash_con_text=, Fortran =db_hash_con_text=, or =readcon-db hash-file <file.con>=. All of them hash the first frame's source span as written, the same bytes the store hashed, and the result goes to =find_by_hash=.
 
 A corpus written by an older extend stored those frames at six decimal places. Opening it does not rewrite the rows. Resuming from the original file misses those hashes and starts a new trajectory. Resuming from the stored six-decimal text hits when that text still parses. A mass near =1e-9= can round to =0.000000= and then fail to parse.
 

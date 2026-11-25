@@ -5,6 +5,7 @@ module readcon_db
   public :: rkrdb_ok, rkrdb_err, rkrdb_not_found, db_open, db_open_readonly, db_close, db_append, db_append_units, &
             db_extend, db_extend_units, db_select_basic, &
             db_result_count, db_result_key, db_frame_hash, db_frame_formula, db_xxh3_128, &
+            db_hash_con_text, &
             db_get_frame, db_pack_frame, db_pack_frames, db_unpack_positions, &
             db_unpack_batch_nframes, db_unpack_batch_item, db_set_units, db_frame_units, &
             db_h5md_times, db_h5md_shape, db_h5md_positions, db_h5md_edges, &
@@ -250,6 +251,13 @@ module readcon_db
     function rkrdb_xxh3_128(data, n, out_hash) bind(C, name="rkrdb_xxh3_128") result(st)
       import :: c_int, c_size_t, c_int8_t
       integer(c_int8_t), intent(in) :: data(*)
+      integer(c_size_t), value :: n
+      integer(c_int8_t), intent(out) :: out_hash(*)
+      integer(c_int) :: st
+    end function
+    function rkrdb_hash_con_text(text, n, out_hash) bind(C, name="rkrdb_hash_con_text") result(st)
+      import :: c_char, c_int, c_size_t, c_int8_t
+      character(kind=c_char), intent(in) :: text(*)
       integer(c_size_t), value :: n
       integer(c_int8_t), intent(out) :: out_hash(*)
       integer(c_int) :: st
@@ -628,6 +636,13 @@ contains
     integer(c_int8_t), intent(out) :: hash16(16)
     integer(c_int), intent(out) :: status
     status = rkrdb_xxh3_128(data, n, hash16)
+  end subroutine
+
+  subroutine db_hash_con_text(text, hash16, status)
+    character(len=*), intent(in) :: text
+    integer(c_int8_t), intent(out) :: hash16(16)
+    integer(c_int), intent(out) :: status
+    status = rkrdb_hash_con_text(text, int(len(text), c_size_t), hash16)
   end subroutine
 
   subroutine db_frame_formula(id, traj_id, frame_idx, formula, status)

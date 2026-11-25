@@ -905,6 +905,19 @@ impl PyConCorpus {
     fn xxh3_128(data: Vec<u8>) -> Vec<u8> {
         crate::keys::hash_frame_bytes(&data).to_bytes().to_vec()
     }
+
+    #[staticmethod]
+    /// Content hash of the first frame in CON `text`, 16 bytes, little-endian.
+    ///
+    /// This is xxHash3-128 of that frame's source span, the hash
+    /// `append_trajectory`, `append_trajectory_str` and `extend_trajectory`
+    /// store for it and `readcon-db hash-file` prints. Pass it to
+    /// `find_by_hash` or `select(exact_hash=...)`.
+    fn hash_con_text(text: &str) -> PyResult<Vec<u8>> {
+        ConCorpus::hash_con_text(text)
+            .map(|h| h.to_bytes().to_vec())
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
 }
 
 /// Unidirectional RCSO broadcast on the caller's mpi4py communicator.
