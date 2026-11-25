@@ -6,7 +6,7 @@ module readcon_db
             db_extend, db_extend_units, db_select_basic, &
             db_result_count, db_result_key, db_frame_hash, db_frame_formula, db_xxh3_128, &
             db_hash_con_text, &
-            db_get_frame, db_pack_frame, db_pack_frames, db_unpack_positions, &
+            db_get_frame, db_free_frame, db_pack_frame, db_pack_frames, db_unpack_positions, &
             db_unpack_batch_nframes, db_unpack_batch_item, db_set_units, db_frame_units, &
             db_h5md_times, db_h5md_shape, db_h5md_positions, db_h5md_edges, &
             db_h5md_forces, db_h5md_velocities, db_h5md_species, &
@@ -269,6 +269,10 @@ module readcon_db
       integer(c_int32_t), value :: frame_idx
       type(c_ptr) :: p
     end function
+    subroutine rkrdb_free_frame(frame) bind(C, name="rkrdb_free_frame")
+      import :: c_ptr
+      type(c_ptr), value :: frame
+    end subroutine
     function rkrdb_frame_formula(id, traj_id, frame_idx, buf, buflen) bind(C, name="rkrdb_frame_formula") result(st)
       import :: c_int, c_size_t, c_int64_t, c_int32_t, c_char
       integer(c_size_t), value :: id
@@ -700,13 +704,18 @@ contains
   end subroutine
 
   function db_get_frame(id, traj_id, frame_idx) result(p)
-    ! RKRConFrame*; free with free_rkr_frame from readcon-core.
+    ! ConFrame* allocated in libreadcon_db. Free with db_free_frame.
     integer(c_size_t), intent(in) :: id
     integer(c_int64_t), intent(in) :: traj_id
     integer(c_int32_t), intent(in) :: frame_idx
     type(c_ptr) :: p
     p = rkrdb_get_frame(id, traj_id, frame_idx)
   end function
+
+  subroutine db_free_frame(frame)
+    type(c_ptr), intent(in) :: frame
+    call rkrdb_free_frame(frame)
+  end subroutine
 
   subroutine db_recook_all(id, status)
     integer(c_size_t), intent(in) :: id

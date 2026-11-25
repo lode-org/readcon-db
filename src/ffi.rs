@@ -23,7 +23,7 @@ pub const RKRDB_NULL: c_int = -3;
 /// Breaking-change major for the public C ABI.
 pub const RKRDB_ABI_VERSION_MAJOR: u32 = 1;
 /// Additive-change minor for the public C ABI.
-pub const RKRDB_ABI_VERSION_MINOR: u32 = 2;
+pub const RKRDB_ABI_VERSION_MINOR: u32 = 3;
 /// Layout revision for exported records and the handle contract.
 pub const RKRDB_ABI_LAYOUT_REVISION: u32 = 1;
 
@@ -50,7 +50,7 @@ pub extern "C" fn rkrdb_abi_layout_revision() -> u32 {
 /// The pointer refers to static storage and must not be freed.
 #[no_mangle]
 pub extern "C" fn rkrdb_abi_stamp() -> *const c_char {
-    const STAMP: &[u8] = b"readcon-db/abi-1.2/layout-1\0";
+    const STAMP: &[u8] = b"readcon-db/abi-1.3/layout-1\0";
     STAMP.as_ptr() as *const c_char
 }
 
@@ -1194,8 +1194,10 @@ pub unsafe extern "C" fn rkrdb_get_frame_text(
     .unwrap_or(RKRDB_NULL)
 }
 
-/// Parse stored CON text into a readcon-core `RKRConFrame`.
-/// Caller frees with `free_rkr_frame` from libreadcon_core. NULL on error.
+/// Parse stored CON text into a readcon-core `ConFrame`.
+///
+/// The pointer is allocated in this library. Free it with
+/// [`rkrdb_free_frame`]. NULL on error.
 #[no_mangle]
 pub unsafe extern "C" fn rkrdb_get_frame(
     id: usize,
@@ -1211,6 +1213,23 @@ pub unsafe extern "C" fn rkrdb_get_frame(
         }
     })
     .unwrap_or(std::ptr::null_mut())
+}
+
+/// Free a frame returned by [`rkrdb_get_frame`].
+///
+/// The frame was allocated in this library, so it is freed here. A null
+/// pointer does nothing.
+///
+/// # Safety
+///
+/// `frame` is null, or a pointer returned by [`rkrdb_get_frame`] that has
+/// not already been freed.
+#[no_mangle]
+pub unsafe extern "C" fn rkrdb_free_frame(frame: *mut std::ffi::c_void) {
+    if frame.is_null() {
+        return;
+    }
+    drop(Box::from_raw(frame.cast::<readcon_core::types::ConFrame>()));
 }
 
 /// Collect one trajectory for the H5MD readers.
@@ -1593,6 +1612,7 @@ mod tests {
             "rkrdb_abi_layout_revision(void)",
             "rkrdb_abi_stamp(void)",
             "rkrdb_abi_compatible(uint32_t major",
+            "rkrdb_free_frame(void *frame)",
         ] {
             assert!(header.contains(f), "readcon-db.h lacks {f}");
         }
@@ -1683,8 +1703,11 @@ mod tests {
                 RKRDB_OK
             );
             assert!(n2 >= 1);
+            rkrdb_free_frame(handle);
             let again = rkrdb_get_frame(id, 2, 0);
             assert!(!again.is_null());
+            rkrdb_free_frame(again);
+            rkrdb_free_frame(ptr::null_mut());
             rkrdb_close(id);
         }
     }
