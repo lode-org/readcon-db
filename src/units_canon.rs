@@ -233,7 +233,7 @@ pub fn rescale_frame_units(
         fr.header.boxl[0] *= lf;
         fr.header.boxl[1] *= lf;
         fr.header.boxl[2] *= lf;
-        if let Some(arr) = fr.header.metadata.get_mut("lattice_vectors") {
+        if let Some(mut arr) = fr.header.metadata.get("lattice_vectors").cloned() {
             if let Some(rows) = arr.as_array_mut() {
                 for row in rows {
                     if let Some(cs) = row.as_array_mut() {
@@ -244,6 +244,7 @@ pub fn rescale_frame_units(
                         }
                     }
                 }
+                fr.header.metadata.insert("lattice_vectors".into(), arr);
             }
         }
     }
@@ -470,7 +471,7 @@ mod tests {
             let f = frc[i].map(|c| c * (1.0 / lf));
             let a = &fr.atom_data[i];
             assert_eq!(fr.positions.as_f64_row(i), p, "positions row {i}");
-            assert_eq!([a.x, a.y, a.z], p, "atom {i} coordinates");
+            assert_eq!([a.x(), a.y(), a.z()], p, "atom {i} coordinates");
             assert_eq!(fr.velocities.as_f64_row(i), v, "velocities row {i}");
             assert_eq!(a.velocity(), Some(v), "atom {i} velocity");
             assert_eq!(fr.forces.as_f64_row(i), f, "forces row {i}");

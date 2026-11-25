@@ -2373,8 +2373,8 @@ mod tests {
         };
         assert_eq!(stored.header.boxl, source.header.boxl);
         assert_eq!(stored.header.masses_per_type, source.header.masses_per_type);
-        assert_eq!(stored.atom_data[0].x, source.atom_data[0].x);
-        assert_eq!(stored.atom_data[1].x, source.atom_data[1].x);
+        assert_eq!(stored.atom_data[0].x(), source.atom_data[0].x());
+        assert_eq!(stored.atom_data[1].x(), source.atom_data[1].x());
         unsafe {
             assert_eq!(rkrdb_close(id), RKRDB_OK);
         }
