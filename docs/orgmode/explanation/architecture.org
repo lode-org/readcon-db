@@ -66,7 +66,7 @@ See @@rst::doc:`/cooked-soa`@@.
 :PROPERTIES:
 :CUSTOM_ID: ingest-path
 :END:
-1. Path / CON text: =ConFrameIterator::next_with_raw_span= when possible.
+1. Path / CON text: =ConFrameIterator::next_with_raw_span= for append and for extend of a file or string. In-memory frames and a units stamp use the round-trip writer. An older six-decimal row is left as stored.
 2. *In-memory* =append_trajectory_frames= / =extend_trajectory_frames= for chemfiles → corpus.
 3. Parse once for indexes (natoms, symbols, composition, energy, fmax, flags).
 4. Store blob; compute *xxHash3-128*; update secondary B-trees.
