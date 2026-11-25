@@ -922,13 +922,17 @@ impl ConCorpus {
     }
 
     /// Parse path/string CON into owned blobs + frames (no exclusive LMDB write section).
+    ///
+    /// `start_idx` is the first `frame_idx`. Append starts at 0. Extend starts
+    /// at the live frame count. Stored blobs are the raw spans.
     fn prepare_trajectory_str(
         traj_id: TrajId,
         file_contents: &str,
+        start_idx: u32,
         compress: bool,
     ) -> Result<Vec<PreparedIndexPuts>> {
         let mut out = Vec::new();
-        let mut frame_idx: u32 = 0;
+        let mut frame_idx: u32 = start_idx;
         let mut iter = ConFrameIterator::new(file_contents);
         loop {
             let (frame, blob) = match iter.next_with_raw_span(file_contents) {
@@ -1261,25 +1265,33 @@ impl ConCorpus {
         let source = source.into();
         // Prepare outside exclusive write section (parallel writers can parse concurrently).
         let mut prepared =
-            Self::prepare_trajectory_str(traj_id, file_contents, self.compress_on())?;
+            Self::prepare_trajectory_str(traj_id, file_contents, 0, self.compress_on())?;
         self.commit_prepared(traj_id, &mut prepared, source, false, self.compress_on())
     }
 
     /// Append CON text onto an existing trajectory, or create it when it is absent.
     ///
+    /// Stored blobs are the source spans, the same bytes
+    /// [`Self::append_trajectory_str`] keeps. The content hash is the xxh3-128
+    /// of that UTF-8. A later open that hashes the source file finds these
+    /// frames on this trajectory.
+    ///
     /// Callers that stream a long trajectory pass one chunk at a time so the
     /// prepared index rows for the whole file are not resident together.
+    /// A chunk that does not parse is not written, and earlier frames stay.
     pub fn extend_trajectory_str(
         &self,
         traj_id: TrajId,
         file_contents: &str,
         source: impl Into<String>,
     ) -> Result<u32> {
-        let mut frames = Vec::new();
-        for item in ConFrameIterator::new(file_contents) {
-            frames.push(item.map_err(|e| Error::Parse(e.to_string()))?);
+        let (start_idx, prior) = self.read_extend_start(traj_id)?;
+        let mut prepared =
+            Self::prepare_trajectory_str(traj_id, file_contents, start_idx, self.compress_on())?;
+        if self.compress_on() {
+            Self::group_prepared(&mut prepared)?;
         }
-        self.extend_trajectory_frames(traj_id, &frames, source)
+        self.commit_extend(traj_id, &prepared, start_idx, prior, source.into())
     }
 
     /// Ingest already-parsed frames in one commit.
@@ -1335,32 +1347,28 @@ impl ConCorpus {
         self.commit_prepared(traj_id, &mut prepared, source, false, self.compress_on())
     }
 
-    /// Append frames to an existing trajectory (or create it). Returns new total frame count.
-    /// Concurrent extend of the **same** `traj_id` is rejected if `n_frames` moved (TOCTOU guard).
-    pub fn extend_trajectory_frames(
+    fn read_extend_start(&self, traj_id: TrajId) -> Result<(u32, Option<TrajMeta>)> {
+        let rtxn = self.read_txn()?;
+        let tid_key = traj_id.to_be_bytes();
+        if let Some(existing) = self.traj_meta.get(&rtxn, &tid_key[..])? {
+            let meta: TrajMeta = serde_json::from_str(existing)?;
+            Ok((meta.n_frames, Some(meta)))
+        } else {
+            Ok((0, None))
+        }
+    }
+
+    /// Same exclusive section as [`Self::extend_trajectory_frames`].
+    /// Earlier frame keys are not rewritten.
+    fn commit_extend(
         &self,
         traj_id: TrajId,
-        frames: &[ConFrame],
-        source_hint: impl Into<String>,
+        prepared: &[PreparedIndexPuts],
+        start_idx: u32,
+        prior: Option<TrajMeta>,
+        hint: String,
     ) -> Result<u32> {
-        let (start_idx, prior) = {
-            let rtxn = self.read_txn()?;
-            let tid_key = traj_id.to_be_bytes();
-            if let Some(existing) = self.traj_meta.get(&rtxn, &tid_key[..])? {
-                let meta: TrajMeta = serde_json::from_str(existing)?;
-                (meta.n_frames, Some(meta))
-            } else {
-                (0u32, None)
-            }
-        };
-        // Key derivation fully outside exclusive section.
-        let mut prepared =
-            Self::prepare_trajectory_frames(traj_id, frames, start_idx, self.compress_on())?;
-        if self.compress_on() {
-            Self::group_prepared(&mut prepared)?;
-        }
-        let hint = source_hint.into();
-        let input_bytes = prepared_bytes(&prepared).saturating_add(hint.len());
+        let input_bytes = prepared_bytes(prepared).saturating_add(hint.len());
         self.with_write(input_bytes, |wtxn| {
             let tid_key = traj_id.to_be_bytes();
             let live: Option<TrajMeta> =
@@ -1375,7 +1383,7 @@ impl ConCorpus {
                     "concurrent extend race on traj {traj_id}: expected start {start_idx}, live {live_n}"
                 )));
             }
-            for p in &prepared {
+            for p in prepared {
                 self.put_index_puts(wtxn, p)?;
             }
             let n_frames = prepared
@@ -1393,13 +1401,41 @@ impl ConCorpus {
         })
     }
 
-    /// [`Self::extend_trajectory_frames`] from a CON path: create the
-    /// trajectory or append frames after the live count.
+    /// Append frames to an existing trajectory (or create it). Returns new total frame count.
+    /// Concurrent extend of the **same** `traj_id` is rejected if `n_frames` moved (TOCTOU guard).
+    ///
+    /// There is no source text to keep. Numbers are written with
+    /// [`FloatFormat::RoundTrip`] so each finite value parses back to the same
+    /// binary64.
+    pub fn extend_trajectory_frames(
+        &self,
+        traj_id: TrajId,
+        frames: &[ConFrame],
+        source_hint: impl Into<String>,
+    ) -> Result<u32> {
+        let (start_idx, prior) = self.read_extend_start(traj_id)?;
+        let mut prepared = Self::prepare_trajectory_frames_formatted(
+            traj_id,
+            frames,
+            start_idx,
+            FloatFormat::RoundTrip,
+            self.compress_on(),
+        )?;
+        if self.compress_on() {
+            Self::group_prepared(&mut prepared)?;
+        }
+        self.commit_extend(traj_id, &prepared, start_idx, prior, source_hint.into())
+    }
+
+    /// [`Self::extend_trajectory_str`] from a CON path: create the
+    /// trajectory or append the file's own frame text after the live count.
     pub fn extend_trajectory_path(&self, traj_id: TrajId, file: impl AsRef<Path>) -> Result<u32> {
         self.extend_trajectory_path_units(traj_id, file, None)
     }
 
-    /// Append a CON path, optionally stamping canonical `units` on the new frames.
+    /// Append a CON path. Without `units`, the file text is stored as
+    /// [`Self::extend_trajectory_str`] stores it. With `units`, each new frame
+    /// is stamped and written with [`FloatFormat::RoundTrip`].
     pub fn extend_trajectory_path_units(
         &self,
         traj_id: TrajId,
@@ -1407,19 +1443,18 @@ impl ConCorpus {
         units: Option<serde_json::Value>,
     ) -> Result<u32> {
         let text = fs::read_to_string(file.as_ref())?;
-        let mut frames = Vec::new();
-        let units = match units {
-            Some(u) => Some(crate::units_canon::canonicalize_units_object(u)?),
-            None => None,
+        let source = file.as_ref().display().to_string();
+        let Some(units) = units else {
+            return self.extend_trajectory_str(traj_id, &text, source);
         };
+        let units = crate::units_canon::canonicalize_units_object(units)?;
+        let mut frames = Vec::new();
         for item in ConFrameIterator::new(&text) {
             let mut fr = item.map_err(|e| Error::Parse(e.to_string()))?;
-            if let Some(ref u) = units {
-                fr.header.set_units(u.clone());
-            }
+            fr.header.set_units(units.clone());
             frames.push(fr);
         }
-        self.extend_trajectory_frames(traj_id, &frames, file.as_ref().display().to_string())
+        self.extend_trajectory_frames(traj_id, &frames, source)
     }
 
     fn clear_secondary(&self, wtxn: &mut RwTxn) -> Result<()> {
@@ -2647,7 +2682,7 @@ impl ConCorpus {
     ) -> Result<Vec<PreparedIndexPuts>> {
         let text = fs::read_to_string(path)?;
         let Some(units) = units else {
-            return Self::prepare_trajectory_str(traj_id, &text, compress);
+            return Self::prepare_trajectory_str(traj_id, &text, 0, compress);
         };
         let units = crate::units_canon::canonicalize_units_object(units.clone())?;
         let mut frames = Vec::new();
@@ -4715,7 +4750,7 @@ mod tests {
 
     fn prepared_fixture(traj: u64, name: &str) -> (String, Vec<PreparedIndexPuts>) {
         let text = std::fs::read_to_string(fixture(name)).unwrap();
-        let prepared = ConCorpus::prepare_trajectory_str(traj, &text, true).unwrap();
+        let prepared = ConCorpus::prepare_trajectory_str(traj, &text, 0, true).unwrap();
         (text, prepared)
     }
 
@@ -4906,7 +4941,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "extend_trajectory_str rewrites frame text"]
     fn extend_trajectory_str_keeps_source_text_and_generation() {
         let head = std::fs::read_to_string(fixture("highprec_a.con")).unwrap();
         let tail = std::fs::read_to_string(fixture("highprec_b.con")).unwrap();
@@ -4921,7 +4955,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "extend_trajectory_path rewrites frame text"]
     fn extend_trajectory_path_keeps_source_text_and_generation() {
         let head = std::fs::read_to_string(fixture("highprec_a.con")).unwrap();
         let tail = std::fs::read_to_string(fixture("highprec_b.con")).unwrap();
@@ -4987,6 +5020,17 @@ mod tests {
             None => assert!(db.get_frame(key).is_err()),
             other => panic!("stored spelling resumed as {other:?}"),
         }
+        let more = std::fs::read_to_string(fixture("highprec_b.con")).unwrap();
+        assert_eq!(db.extend_trajectory_str(4, &more, "more").unwrap(), 2);
+        assert_eq!(db.get_frame_text(key).unwrap(), stored);
+        assert_eq!(
+            db.get_frame_text(FrameKey {
+                traj_id: 4,
+                frame_idx: 1,
+            })
+            .unwrap(),
+            more
+        );
         let reread = db.get_frame(key);
         match reread {
             Ok(frame) => {

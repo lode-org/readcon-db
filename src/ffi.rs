@@ -2296,7 +2296,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "extend_trajectory rewrites frame text"]
     fn c_abi_extend_trajectory_keeps_source_text_and_generation() {
         let head = std::fs::read_to_string(fixture("highprec_a.con")).unwrap();
         let tail = std::fs::read_to_string(fixture("highprec_b.con")).unwrap();
@@ -2385,6 +2384,19 @@ mod tests {
         assert_eq!(c_text(id, 4, 0), legacy);
         assert_eq!(c_hash_hits(id, &legacy), Some((4, 0)));
         assert_eq!(c_hash_hits(id, &original), None);
+        let more = std::fs::read_to_string(fixture("highprec_b.con")).unwrap();
+        let more_path = dir.path().join("b.con");
+        std::fs::write(&more_path, &more).unwrap();
+        let cmore = CString::new(more_path.to_str().unwrap()).unwrap();
+        unsafe {
+            assert_eq!(
+                rkrdb_extend_trajectory(id, 4, cmore.as_ptr(), &mut n),
+                RKRDB_OK
+            );
+            assert_eq!(n, 2);
+        }
+        assert_eq!(c_text(id, 4, 0), legacy);
+        assert_eq!(c_text(id, 4, 1), more);
         unsafe {
             assert_eq!(rkrdb_close(id), RKRDB_OK);
         }

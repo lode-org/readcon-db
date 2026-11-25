@@ -1,9 +1,7 @@
 """Precision of frames extended onto a live trajectory."""
 
-import os
 from pathlib import Path
 
-import pytest
 import readcon
 from readcon_db import ConCorpus
 
@@ -31,10 +29,6 @@ def _same_generation(db, spans):
     return True
 
 
-@pytest.mark.skipif(
-    os.environ.get("READCON_DB_RUN_EXTEND_PRECISION") != "1",
-    reason="extend rewrites frame text",
-)
 def test_extend_trajectory_keeps_source_text_and_generation(tmp_path):
     head = _text("highprec_a.con")
     tail = _text("highprec_b.con")
@@ -79,3 +73,7 @@ def test_legacy_six_decimal_text_is_a_different_generation(tmp_path):
     got = _numbers(stored)
     src = _numbers(original)
     assert got != src
+    more = _text("highprec_b.con")
+    assert db.extend_trajectory(4, str(FIXTURE / "highprec_b.con")) == 2
+    assert db.get_frame_text(4, 0) == stored
+    assert db.get_frame_text(4, 1) == more
