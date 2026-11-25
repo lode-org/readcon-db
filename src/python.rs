@@ -4,6 +4,9 @@ use pyo3::create_exception;
 use pyo3::exceptions::{PyIndexError, PyRuntimeError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
+use readcon_core::iterators::ConFrameIterator;
+use readcon_core::types::ConFrame;
+use readcon_core::writer::FloatFormat;
 
 use crate::canonical::AtomOrderHit;
 use crate::catalog::ClaimStatus;
@@ -430,10 +433,13 @@ impl PyConCorpus {
 
     /// Ingest already-parsed `readcon` frames, committing 64 frames at a time.
     ///
-    /// The first group is `append_trajectory_str`. Each later group is
-    /// `extend_trajectory_str`. A `read_con` result is written from the stored
-    /// frames, so this does not build a Python frame per index. The return
-    /// value is the number of frames in the trajectory after the last commit.
+    /// `readcon.write_con_string` turns each group into CON text. A
+    /// `read_con` result is written from the stored frames, so this does not
+    /// build a Python frame per index. The group is parsed here and stored
+    /// with readcon-core `FloatFormat::RoundTrip`, whatever float format the
+    /// installed `readcon` wheel writes by default. The first group is a new
+    /// trajectory and each later group extends it. The return value is the
+    /// number of frames in the trajectory after the last commit.
     #[pyo3(signature = (traj_id, frames, source="memory"))]
     fn append_trajectory_frames(
         &self,
@@ -448,10 +454,24 @@ impl PyConCorpus {
         let mut total = 0u32;
         let mut started = false;
         let flush = |text: &str, started: bool| -> PyResult<u32> {
+            let parsed: Result<Vec<ConFrame>, Error> = ConFrameIterator::new(text)
+                .map(|item| item.map_err(|e| Error::Parse(e.to_string())))
+                .collect();
+            let frames = parsed.map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
             let result = if started {
-                self.inner.extend_trajectory_str(traj_id, text, source)
+                self.inner.extend_trajectory_frames_with_float_format(
+                    traj_id,
+                    &frames,
+                    source,
+                    FloatFormat::RoundTrip,
+                )
             } else {
-                self.inner.append_trajectory_str(traj_id, text, source)
+                self.inner.append_trajectory_frames_with_float_format(
+                    traj_id,
+                    &frames,
+                    source,
+                    FloatFormat::RoundTrip,
+                )
             };
             result.map_err(|e| PyRuntimeError::new_err(e.to_string()))
         };

@@ -956,6 +956,9 @@ impl ConCorpus {
     }
 
     /// Serialize ConFrames to CON text **outside** write_txn (in-memory ingress path).
+    ///
+    /// These frames have no source text, so each finite value is written
+    /// with [`FloatFormat::RoundTrip`] and parses back to the same binary64.
     fn prepare_trajectory_frames(
         traj_id: TrajId,
         frames: &[ConFrame],
@@ -966,7 +969,7 @@ impl ConCorpus {
             traj_id,
             frames,
             start_idx,
-            FloatFormat::default(),
+            FloatFormat::RoundTrip,
             compress,
         )
     }
@@ -1307,6 +1310,7 @@ impl ConCorpus {
 
     /// Ingest already-parsed frames in one commit.
     ///
+    /// Numbers are written with [`FloatFormat::RoundTrip`].
     /// Serialization happens before the write transaction. The Python
     /// binding does not call this with the whole trajectory: it commits
     /// groups of 64 frames so a long append does not hold every blob.
@@ -1424,12 +1428,29 @@ impl ConCorpus {
         frames: &[ConFrame],
         source_hint: impl Into<String>,
     ) -> Result<u32> {
+        self.extend_trajectory_frames_with_float_format(
+            traj_id,
+            frames,
+            source_hint,
+            FloatFormat::RoundTrip,
+        )
+    }
+
+    /// [`Self::extend_trajectory_frames`] with the selected CON numeric
+    /// representation.
+    pub fn extend_trajectory_frames_with_float_format(
+        &self,
+        traj_id: TrajId,
+        frames: &[ConFrame],
+        source_hint: impl Into<String>,
+        float_format: FloatFormat,
+    ) -> Result<u32> {
         let (start_idx, prior) = self.read_extend_start(traj_id)?;
         let mut prepared = Self::prepare_trajectory_frames_formatted(
             traj_id,
             frames,
             start_idx,
-            FloatFormat::RoundTrip,
+            float_format,
             self.compress_on(),
         )?;
         if self.compress_on() {
@@ -5011,6 +5032,48 @@ mod tests {
             h_head
         );
         assert!(ConCorpus::hash_con_text("").is_err());
+    }
+
+    #[test]
+    fn in_memory_frames_are_written_round_trip() {
+        let head = std::fs::read_to_string(fixture("highprec_a.con")).unwrap();
+        let tail = std::fs::read_to_string(fixture("highprec_b.con")).unwrap();
+        let frames = [parsed_one(&head), parsed_one(&tail)];
+        let round_trip = |frame: &ConFrame| {
+            let mut buf = Cursor::new(Vec::new());
+            {
+                let mut w = ConFrameWriter::with_float_format(&mut buf, FloatFormat::RoundTrip);
+                w.write_frame(frame).unwrap();
+            }
+            String::from_utf8(buf.into_inner()).unwrap()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_frames(1, &frames[..1], "memory")
+            .unwrap();
+        db.extend_trajectory_frames(1, &frames[1..], "memory")
+            .unwrap();
+        for (idx, frame) in (0u32..).zip(frames.iter()) {
+            let key = FrameKey {
+                traj_id: 1,
+                frame_idx: idx,
+            };
+            let stored = db.get_frame_text(key).unwrap();
+            assert_eq!(stored, round_trip(frame));
+            assert_same_numbers(&db.get_frame(key).unwrap(), frame);
+            assert_eq!(
+                db.frame_hash(key).unwrap(),
+                ConCorpus::hash_con_text(&stored).unwrap()
+            );
+        }
+        let stored = db
+            .get_frame_text(FrameKey {
+                traj_id: 1,
+                frame_idx: 0,
+            })
+            .unwrap();
+        assert!(stored.contains("21.702000987654323"), "{stored}");
+        assert!(stored.contains("1.23456789e-9"), "{stored}");
     }
 
     #[test]

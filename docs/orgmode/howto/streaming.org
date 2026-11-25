@@ -34,6 +34,8 @@ Rust is =ConCorpus::open= and =ConCorpus::open_readonly=. The command line is =r
 :END:
 =append_trajectory_frames= commits 64 frames at a time. The first group is a new trajectory. Each later group extends it. A list returned by =read_con= is written from the frames the parser already stored, so the append does not build a Python atom for every site.
 
+Each group of CON text from =readcon.write_con_string= is parsed by readcon-db and stored with readcon-core =FloatFormat::RoundTrip=, so every finite value reads back as the same binary64 and the stored spelling does not depend on the default writer of the installed =readcon= wheel. =ConCorpus.hash_con_text= of the stored text equals =frame_hash=.
+
 Rust =ConCorpus::append_trajectory_frames= still commits the slice you pass in one transaction. The grouping is the Python binding.
 
 ** Extend a live trajectory

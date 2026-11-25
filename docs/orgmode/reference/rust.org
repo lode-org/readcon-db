@@ -96,7 +96,7 @@ ShardedConCorpus::drain_to(src, dest)?;
 join_drained_roots(&[dest_a, dest_b], joined)?;
 #+end_src
 
-=extend_trajectory_str= and =extend_trajectory_path= keep the source spans. =extend_trajectory_frames= and a units-stamped path write with =FloatFormat::RoundTrip=. An older six-decimal row is not rewritten on open or on a later extend. A resume of the original spelling misses. A resume of the stored spelling hits when that text still parses.
+=extend_trajectory_str= and =extend_trajectory_path= keep the source spans. =append_trajectory_frames=, =extend_trajectory_frames= and a units-stamped path write with =FloatFormat::RoundTrip=. =append_trajectory_frames_with_float_format= and =extend_trajectory_frames_with_float_format= take the format. An older six-decimal row is not rewritten on open or on a later extend. A resume of the original spelling misses. A resume of the stored spelling hits when that text still parses.
 
 =ConCorpus::hash_con_text= and =readcon-db hash-file <file.con>= hash the first frame's source span, the bytes =append_trajectory_str= and =extend_trajectory_str= store and hash. The text is not parsed and written back first, so a high-precision file gives the stored hash and =find_by_hash= finds its trajectory.
 
