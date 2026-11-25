@@ -921,6 +921,16 @@ impl ConCorpus {
         Ok(())
     }
 
+    /// Each frame of `text` with its source span. String and path ingest
+    /// store and hash these spans, and [`Self::hash_con_text`] hashes them.
+    fn raw_frame_spans(text: &str) -> impl Iterator<Item = Result<(ConFrame, &str)>> + '_ {
+        let mut iter = ConFrameIterator::new(text);
+        std::iter::from_fn(move || {
+            iter.next_with_raw_span(text)
+                .map(|item| item.map_err(|e| Error::Parse(e.to_string())))
+        })
+    }
+
     /// Parse path/string CON into owned blobs + frames (no exclusive LMDB write section).
     ///
     /// `start_idx` is the first `frame_idx`. Append starts at 0. Extend starts
@@ -932,14 +942,8 @@ impl ConCorpus {
         compress: bool,
     ) -> Result<Vec<PreparedIndexPuts>> {
         let mut out = Vec::new();
-        let mut frame_idx: u32 = start_idx;
-        let mut iter = ConFrameIterator::new(file_contents);
-        loop {
-            let (frame, blob) = match iter.next_with_raw_span(file_contents) {
-                None => break,
-                Some(Err(e)) => return Err(Error::Parse(e.to_string())),
-                Some(Ok(x)) => x,
-            };
+        for (frame_idx, item) in (start_idx..).zip(Self::raw_frame_spans(file_contents)) {
+            let (frame, blob) = item?;
             let fk = FrameKey { traj_id, frame_idx };
             out.push(Self::build_index_puts(
                 fk,
@@ -947,7 +951,6 @@ impl ConCorpus {
                 blob.to_owned(),
                 compress,
             )?);
-            frame_idx += 1;
         }
         Ok(out)
     }
@@ -2163,20 +2166,18 @@ impl ConCorpus {
         }
     }
 
-    /// xxHash3-128 of CON text, using the same bytes the corpus stores.
+    /// xxHash3-128 of the first frame's source span in `text`.
+    ///
+    /// [`Self::append_trajectory_str`], [`Self::extend_trajectory_str`] and
+    /// the path forms without units store that frame under this hash. The
+    /// span is hashed as written, so every digit of the source spelling
+    /// counts. Frames the corpus serialized itself (in-memory frames, a units
+    /// stamp) are hashed from their stored text: see [`Self::frame_hash`].
     pub fn hash_con_text(text: &str) -> Result<ContentHash> {
-        let mut it = ConFrameIterator::new(text);
-        let frame = it
+        let (_, span) = Self::raw_frame_spans(text)
             .next()
-            .ok_or_else(|| Error::Parse("no frame".into()))?
-            .map_err(|e| Error::Parse(e.to_string()))?;
-        let mut buf = Cursor::new(Vec::new());
-        {
-            let mut w = ConFrameWriter::new(&mut buf);
-            w.write_frame(&frame)
-                .map_err(|e| Error::Parse(format!("re-serialize: {e}")))?;
-        }
-        Ok(hash_frame_bytes(&buf.into_inner()))
+            .ok_or_else(|| Error::Parse("no frame".into()))??;
+        Ok(hash_frame_bytes(span.as_bytes()))
     }
 
     /// Canonical formula for a stored frame (decode once).
@@ -4982,6 +4983,34 @@ mod tests {
         let path = dir.path().to_path_buf();
         drop(db);
         reopen_matches_append(&path, &head, &tail);
+    }
+
+    #[test]
+    fn hash_con_text_matches_stored_hash_of_high_precision_file() {
+        let head = std::fs::read_to_string(fixture("highprec_a.con")).unwrap();
+        let tail = std::fs::read_to_string(fixture("highprec_b.con")).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_path(1, fixture("highprec_a.con"))
+            .unwrap();
+        db.extend_trajectory_path(1, fixture("highprec_b.con"))
+            .unwrap();
+        db.append_trajectory_str(2, &format!("{tail}{head}"), "pair.con")
+            .unwrap();
+        let key = |traj_id, frame_idx| FrameKey { traj_id, frame_idx };
+        let h_head = ConCorpus::hash_con_text(&head).unwrap();
+        let h_tail = ConCorpus::hash_con_text(&tail).unwrap();
+        assert_eq!(h_head, db.frame_hash(key(1, 0)).unwrap());
+        assert_eq!(h_tail, db.frame_hash(key(1, 1)).unwrap());
+        assert_eq!(h_tail, db.frame_hash(key(2, 0)).unwrap());
+        assert_eq!(h_head, db.frame_hash(key(2, 1)).unwrap());
+        assert_eq!(db.find_by_hash(h_head).unwrap(), Some(key(1, 0)));
+        assert_eq!(db.find_by_hash(h_tail).unwrap(), Some(key(1, 1)));
+        assert_eq!(
+            ConCorpus::hash_con_text(&format!("{head}{tail}")).unwrap(),
+            h_head
+        );
+        assert!(ConCorpus::hash_con_text("").is_err());
     }
 
     #[test]
