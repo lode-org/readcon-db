@@ -8,6 +8,11 @@
 //! reads lives in `docs/orgmode/howto/streaming.org`.
 #![deny(missing_docs)]
 
+// Pulls mimalloc into this crate so local_dynamic_tls is unified onto
+// the global allocator installed by readcon-core.
+#[allow(unused_imports)]
+use mimalloc as _mimalloc_local_dynamic_tls;
+
 pub mod archive;
 mod canonical;
 mod catalog;

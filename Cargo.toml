@@ -31,6 +31,14 @@ mpi = ["dep:mpi"]
 heed = "0.21"
 # The pinned writer provides exact numeric CON and JSON round trips.
 readcon-core = "=0.23.2"
+# readcon-core installs mimalloc as the global allocator and has no
+# feature to turn that off. The C objects default to initial-exec TLS,
+# which sets DF_STATIC_TLS on this cdylib. Cargo unifies
+# local_dynamic_tls onto that same mimalloc.
+mimalloc = { version = "0.1.43", default-features = false, features = [
+  "extended",
+  "local_dynamic_tls",
+] }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
