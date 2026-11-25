@@ -26,6 +26,9 @@ Docs: <https://lode-org.github.io/readcon-db/> · crate: <https://crates.io/crat
 
 ## Quick start (from source)
 
+Outside Windows a source build also needs CMake: readcon-core links
+zlib-ng, which `libz-ng-sys` builds with CMake.
+
 ```bash
 git clone https://github.com/lode-org/readcon-db
 cd readcon-db

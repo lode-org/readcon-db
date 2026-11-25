@@ -853,7 +853,7 @@ impl PyConCorpus {
         let rows = frame
             .atom_data
             .iter()
-            .map(|atom| (atom.symbol.to_string(), atom.x, atom.y, atom.z))
+            .map(|atom| (atom.symbol.to_string(), atom.x(), atom.y(), atom.z()))
             .collect();
         Ok(StoredFrame {
             rows: Arc::new(rows),

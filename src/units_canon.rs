@@ -233,7 +233,7 @@ pub fn rescale_frame_units(
         fr.header.boxl[0] *= lf;
         fr.header.boxl[1] *= lf;
         fr.header.boxl[2] *= lf;
-        if let Some(arr) = fr.header.metadata.get_mut("lattice_vectors") {
+        if let Some(mut arr) = fr.header.metadata.get("lattice_vectors").cloned() {
             if let Some(rows) = arr.as_array_mut() {
                 for row in rows {
                     if let Some(cs) = row.as_array_mut() {
@@ -244,6 +244,7 @@ pub fn rescale_frame_units(
                         }
                     }
                 }
+                fr.header.metadata.insert("lattice_vectors".into(), arr);
             }
         }
     }
@@ -261,6 +262,9 @@ pub fn rescale_frame_units(
         }
     }
     let n = fr.positions.nrows();
+    let has_vel = fr.velocities.nrows() == n;
+    let has_frc = fr.forces.nrows() == n;
+    let has_eng = fr.atom_energies.len() == n;
     for i in 0..n {
         if lf != 1.0 {
             let mut p = fr.positions.as_f64_row(i);
@@ -269,21 +273,21 @@ pub fn rescale_frame_units(
             p[2] *= lf;
             fr.positions.set_f64_row(i, p);
         }
-        if fr.velocities.nrows() == n && vf != 1.0 {
+        if has_vel && vf != 1.0 {
             let mut v = fr.velocities.as_f64_row(i);
             v[0] *= vf;
             v[1] *= vf;
             v[2] *= vf;
             fr.velocities.set_f64_row(i, v);
         }
-        if fr.forces.nrows() == n && ff != 1.0 {
+        if has_frc && ff != 1.0 {
             let mut f = fr.forces.as_f64_row(i);
             f[0] *= ff;
             f[1] *= ff;
             f[2] *= ff;
             fr.forces.set_f64_row(i, f);
         }
-        if fr.atom_energies.len() == n && ef != 1.0 {
+        if has_eng && ef != 1.0 {
             let e = fr.atom_energies.get_f64(i);
             fr.atom_energies.set_f64(i, e * ef);
         }
@@ -291,13 +295,9 @@ pub fn rescale_frame_units(
             let m = fr.masses.get_f64(i);
             fr.masses.set_f64(i, m * mf);
         }
+        // A section the arrays do not hold is scaled on the atom itself.
         if let Some(a) = fr.atom_data.get_mut(i) {
-            if lf != 1.0 {
-                a.x *= lf;
-                a.y *= lf;
-                a.z *= lf;
-            }
-            if let Some(mut v) = a.velocity() {
+            if let Some(mut v) = a.velocity().filter(|_| !has_vel) {
                 if vf != 1.0 {
                     v[0] *= vf;
                     v[1] *= vf;
@@ -305,7 +305,7 @@ pub fn rescale_frame_units(
                     a.set_velocity(Some(v));
                 }
             }
-            if let Some(mut f) = a.force() {
+            if let Some(mut f) = a.force().filter(|_| !has_frc) {
                 if ff != 1.0 {
                     f[0] *= ff;
                     f[1] *= ff;
@@ -313,13 +313,16 @@ pub fn rescale_frame_units(
                     a.set_force(Some(f));
                 }
             }
-            if let Some(e) = a.energy() {
+            if let Some(e) = a.energy().filter(|_| !has_eng) {
                 if ef != 1.0 {
                     a.set_energy(Some(e * ef));
                 }
             }
         }
     }
+    // A parsed frame's atoms can share storage with these arrays, so they
+    // are copied from the arrays instead of being scaled a second time.
+    fr.sync_atom_data_from_arrays();
     if mf != 1.0 {
         for m in &mut fr.header.masses_per_type {
             *m *= mf;
@@ -447,6 +450,33 @@ mod tests {
         .unwrap();
         assert!((fr.header.time().unwrap() - 12.5 * tf).abs() < 1e-12);
         assert!((fr.velocities.as_f64_row(0)[0] - vx / tf).abs() < 1e-9);
+    }
+
+    #[test]
+    fn rescale_scales_each_view_once() {
+        let mut fr = load_fixture("tiny_cuh2_vel_forces.con");
+        let n = fr.atom_data.len();
+        let pos: Vec<_> = (0..n).map(|i| fr.positions.as_f64_row(i)).collect();
+        let vel: Vec<_> = (0..n).map(|i| fr.velocities.as_f64_row(i)).collect();
+        let frc: Vec<_> = (0..n).map(|i| fr.forces.as_f64_row(i)).collect();
+        let lf = readcon_core::units::unit_conversion_factor("angstrom", "nm").unwrap();
+        rescale_frame_units(
+            &mut fr,
+            &serde_json::json!({"length": "nm", "energy": "eV", "mass": "amu", "time": "fs"}),
+        )
+        .unwrap();
+        for i in 0..n {
+            let p = pos[i].map(|c| c * lf);
+            let v = vel[i].map(|c| c * lf);
+            let f = frc[i].map(|c| c * (1.0 / lf));
+            let a = &fr.atom_data[i];
+            assert_eq!(fr.positions.as_f64_row(i), p, "positions row {i}");
+            assert_eq!([a.x(), a.y(), a.z()], p, "atom {i} coordinates");
+            assert_eq!(fr.velocities.as_f64_row(i), v, "velocities row {i}");
+            assert_eq!(a.velocity(), Some(v), "atom {i} velocity");
+            assert_eq!(fr.forces.as_f64_row(i), f, "forces row {i}");
+            assert_eq!(a.force(), Some(f), "atom {i} force");
+        }
     }
 
     #[test]

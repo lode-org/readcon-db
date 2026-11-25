@@ -80,7 +80,7 @@ impl CookedSoa {
         out.extend_from_slice(&0u32.to_le_bytes());
 
         for a in &frame.atom_data {
-            for c in [a.x, a.y, a.z] {
+            for c in [a.x(), a.y(), a.z()] {
                 out.extend_from_slice(&c.to_le_bytes());
             }
         }
@@ -276,7 +276,7 @@ mod tests {
         let cooked = CookedSoa::decode(&bytes).unwrap();
         assert_eq!(cooked.natoms as usize, fr.atom_data.len());
         for (i, a) in fr.atom_data.iter().enumerate() {
-            assert_eq!(cooked.positions[i], [a.x, a.y, a.z]);
+            assert_eq!(cooked.positions[i], [a.x(), a.y(), a.z()]);
         }
         assert!(cooked.forces.is_none());
     }
@@ -290,7 +290,7 @@ mod tests {
         assert!(cooked.forces.is_some());
         let forces = cooked.forces.as_ref().unwrap();
         for (i, a) in fr.atom_data.iter().enumerate() {
-            assert_eq!(cooked.positions[i], [a.x, a.y, a.z]);
+            assert_eq!(cooked.positions[i], [a.x(), a.y(), a.z()]);
             if let Some(f) = a.force() {
                 assert_eq!(forces[i], f);
             }
@@ -308,7 +308,7 @@ mod tests {
         let forces = cooked.forces.as_ref().unwrap();
         let vels = cooked.velocities.as_ref().unwrap();
         for (i, a) in fr.atom_data.iter().enumerate() {
-            assert_eq!(cooked.positions[i], [a.x, a.y, a.z]);
+            assert_eq!(cooked.positions[i], [a.x(), a.y(), a.z()]);
             if let Some(f) = a.force() {
                 assert_eq!(forces[i], f);
             }
