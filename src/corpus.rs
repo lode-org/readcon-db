@@ -4797,4 +4797,213 @@ mod tests {
         assert!(db.traj_meta(1).unwrap().is_none());
         assert_eq!(db.list_frame_keys().unwrap(), before);
     }
+
+    fn raw_span_one(text: &str) -> String {
+        let mut it = ConFrameIterator::new(text);
+        let (_frame, span) = it.next_with_raw_span(text).expect("frame").expect("parse");
+        assert!(it.next().is_none(), "fixture is one frame");
+        span.to_owned()
+    }
+
+    fn parsed_one(text: &str) -> ConFrame {
+        let mut it = ConFrameIterator::new(text);
+        it.next().expect("frame").expect("parse")
+    }
+
+    fn assert_same_numbers(stored: &ConFrame, source: &ConFrame) {
+        assert_eq!(stored.header.boxl, source.header.boxl);
+        assert_eq!(stored.header.angles, source.header.angles);
+        assert_eq!(stored.header.masses_per_type, source.header.masses_per_type);
+        assert_eq!(stored.atom_data.len(), source.atom_data.len());
+        for (got, exp) in stored.atom_data.iter().zip(source.atom_data.iter()) {
+            assert_eq!((got.x, got.y, got.z), (exp.x, exp.y, exp.z));
+        }
+    }
+
+    /// Same generation when every source span hashes to that trajectory in order.
+    /// A miss is what a resume treats as a new generation.
+    fn resume_generation(db: &ConCorpus, text: &str) -> Option<TrajId> {
+        let mut it = ConFrameIterator::new(text);
+        let mut idx = 0u32;
+        let mut traj = None;
+        loop {
+            let span = match it.next_with_raw_span(text) {
+                None => break,
+                Some(Err(_)) => return None,
+                Some(Ok((_, span))) => span,
+            };
+            let hit = db
+                .find_by_hash(hash_frame_bytes(span.as_bytes()))
+                .unwrap()?;
+            if hit.frame_idx != idx {
+                return None;
+            }
+            match traj {
+                None => traj = Some(hit.traj_id),
+                Some(id) if id != hit.traj_id => return None,
+                Some(_) => {}
+            }
+            idx += 1;
+        }
+        if idx == 0 {
+            None
+        } else {
+            traj
+        }
+    }
+
+    fn assert_extend_matches_append(db: &ConCorpus, head: &str, tail: &str) {
+        let k0 = FrameKey {
+            traj_id: 1,
+            frame_idx: 0,
+        };
+        let k1 = FrameKey {
+            traj_id: 1,
+            frame_idx: 1,
+        };
+        let head_span = raw_span_one(head);
+        let tail_span = raw_span_one(tail);
+        assert_eq!(db.get_frame_text(k0).unwrap(), head_span);
+        assert_eq!(db.get_frame_text(k1).unwrap(), tail_span);
+        assert!(tail_span.contains("9.87654321098765"), "{tail_span}");
+        assert!(tail_span.contains("1000000.987654321"), "{tail_span}");
+        assert!(tail_span.contains("0.00000000987654321"), "{tail_span}");
+        assert!(head_span.contains("1.23456789012345"));
+        assert!(head_span.contains("1000000.123456789"));
+        assert!(head_span.contains("0.00000000123456789"));
+        assert!(head_span.contains("15.345600123456789"));
+        assert_same_numbers(&db.get_frame(k1).unwrap(), &parsed_one(tail));
+        assert_same_numbers(&db.get_frame(k0).unwrap(), &parsed_one(head));
+        assert_eq!(
+            db.frame_hash(k1).unwrap(),
+            hash_frame_bytes(tail_span.as_bytes())
+        );
+        let file = format!("{head}{tail}");
+        assert_eq!(resume_generation(db, &file), Some(1));
+        assert_eq!(db.traj_meta(1).unwrap().unwrap().n_frames, 2);
+        let whole = tempfile::tempdir().unwrap();
+        let appended = ConCorpus::open(whole.path()).unwrap();
+        appended.append_trajectory_str(1, &file, "run.con").unwrap();
+        for idx in 0..2 {
+            let key = FrameKey {
+                traj_id: 1,
+                frame_idx: idx,
+            };
+            assert_eq!(
+                db.get_frame_text(key).unwrap(),
+                appended.get_frame_text(key).unwrap()
+            );
+            assert_eq!(
+                db.frame_hash(key).unwrap(),
+                appended.frame_hash(key).unwrap()
+            );
+        }
+    }
+
+    fn reopen_matches_append(dir: &std::path::Path, head: &str, tail: &str) {
+        let db = ConCorpus::open(dir).unwrap();
+        assert_extend_matches_append(&db, head, tail);
+    }
+
+    #[test]
+    #[ignore = "extend_trajectory_str rewrites frame text"]
+    fn extend_trajectory_str_keeps_source_text_and_generation() {
+        let head = std::fs::read_to_string(fixture("highprec_a.con")).unwrap();
+        let tail = std::fs::read_to_string(fixture("highprec_b.con")).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let db = ConCorpus::open(dir.path()).unwrap();
+            assert_eq!(db.append_trajectory_str(1, &head, "run.con").unwrap(), 1);
+            assert_eq!(db.extend_trajectory_str(1, &tail, "run.con").unwrap(), 2);
+            assert_extend_matches_append(&db, &head, &tail);
+        }
+        reopen_matches_append(dir.path(), &head, &tail);
+    }
+
+    #[test]
+    #[ignore = "extend_trajectory_path rewrites frame text"]
+    fn extend_trajectory_path_keeps_source_text_and_generation() {
+        let head = std::fs::read_to_string(fixture("highprec_a.con")).unwrap();
+        let tail = std::fs::read_to_string(fixture("highprec_b.con")).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        assert_eq!(
+            db.append_trajectory_path(1, fixture("highprec_a.con"))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.extend_trajectory_path(1, fixture("highprec_b.con"))
+                .unwrap(),
+            2
+        );
+        assert_extend_matches_append(&db, &head, &tail);
+        let path = dir.path().to_path_buf();
+        drop(db);
+        reopen_matches_append(&path, &head, &tail);
+    }
+
+    #[test]
+    fn legacy_six_decimal_frames_stay_a_separate_generation() {
+        let original = std::fs::read_to_string(fixture("highprec_a.con")).unwrap();
+        let parsed = parsed_one(&original);
+        let mut buf = Cursor::new(Vec::new());
+        {
+            let mut w = ConFrameWriter::with_float_format(&mut buf, FloatFormat::DecimalPlaces(6));
+            w.write_frame(&parsed).unwrap();
+        }
+        let legacy = String::from_utf8(buf.into_inner()).unwrap();
+        assert_ne!(legacy, original);
+        assert!(!legacy.contains("1.23456789012345"), "{legacy}");
+        assert!(!legacy.contains("0.00000000123456789"), "{legacy}");
+        assert!(!legacy.contains("1000000.123456789"), "{legacy}");
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConCorpus::open(dir.path()).unwrap();
+        db.append_trajectory_frames_with_precision(4, &[parsed], "old-extend", 6)
+            .unwrap();
+        let key = FrameKey {
+            traj_id: 4,
+            frame_idx: 0,
+        };
+        let stored = db.get_frame_text(key).unwrap();
+        assert_eq!(stored, legacy);
+        let path = dir.path().to_path_buf();
+        drop(db);
+        let db = ConCorpus::open(&path).unwrap();
+        assert_eq!(db.get_frame_text(key).unwrap(), stored);
+        assert_eq!(
+            db.find_by_hash(hash_frame_bytes(stored.as_bytes()))
+                .unwrap(),
+            Some(key)
+        );
+        assert_eq!(
+            db.find_by_hash(hash_frame_bytes(original.as_bytes()))
+                .unwrap(),
+            None
+        );
+        assert_eq!(resume_generation(&db, &original), None);
+        match resume_generation(&db, &stored) {
+            Some(4) => {}
+            None => assert!(db.get_frame(key).is_err()),
+            other => panic!("stored spelling resumed as {other:?}"),
+        }
+        let reread = db.get_frame(key);
+        match reread {
+            Ok(frame) => {
+                assert_ne!(frame.atom_data[0].x, parsed_one(&original).atom_data[0].x);
+                assert_ne!(
+                    frame.header.masses_per_type,
+                    parsed_one(&original).header.masses_per_type
+                );
+                assert_ne!(frame.header.boxl, parsed_one(&original).header.boxl);
+            }
+            Err(err) => {
+                let msg = err.to_string();
+                assert!(
+                    msg.contains("positive") || msg.contains("parse") || msg.contains("Parse"),
+                    "{msg}"
+                );
+            }
+        }
+    }
 }

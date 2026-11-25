@@ -2259,4 +2259,134 @@ mod tests {
         }
         assert_h5md_readers(id, RKRDB_NULL);
     }
+
+    fn c_text(id: usize, traj: u64, frame: u32) -> String {
+        let mut buf = vec![0u8; 1 << 16];
+        let n = unsafe {
+            rkrdb_get_frame_text(
+                id,
+                traj,
+                frame,
+                buf.as_mut_ptr() as *mut std::os::raw::c_char,
+                buf.len(),
+            )
+        };
+        assert!(n > 0, "get_frame_text {n}");
+        let bytes = &buf[..n as usize];
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    fn c_hash_hits(id: usize, text: &str) -> Option<(u64, u32)> {
+        let mut digest = [0u8; 16];
+        unsafe {
+            assert_eq!(
+                rkrdb_xxh3_128(text.as_ptr(), text.len(), digest.as_mut_ptr()),
+                RKRDB_OK
+            );
+            assert_eq!(rkrdb_select_hash(id, digest.as_ptr()), RKRDB_OK);
+            if rkrdb_result_count(id) == 0 {
+                return None;
+            }
+            assert_eq!(rkrdb_result_count(id), 1);
+            let mut traj = 0u64;
+            let mut frame = 0u32;
+            assert_eq!(rkrdb_result_key(id, 0, &mut traj, &mut frame), RKRDB_OK);
+            Some((traj, frame))
+        }
+    }
+
+    #[test]
+    #[ignore = "extend_trajectory rewrites frame text"]
+    fn c_abi_extend_trajectory_keeps_source_text_and_generation() {
+        let head = std::fs::read_to_string(fixture("highprec_a.con")).unwrap();
+        let tail = std::fs::read_to_string(fixture("highprec_b.con")).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let head_path = dir.path().join("a.con");
+        let tail_path = dir.path().join("b.con");
+        std::fs::write(&head_path, &head).unwrap();
+        std::fs::write(&tail_path, &tail).unwrap();
+        let corpus = dir.path().join("db");
+        let open = |path: &std::path::Path| {
+            let cpath = CString::new(path.to_str().unwrap()).unwrap();
+            let mut id = 0usize;
+            assert_eq!(unsafe { rkrdb_open(cpath.as_ptr(), &mut id) }, RKRDB_OK);
+            id
+        };
+        let id = open(&corpus);
+        let chead = CString::new(head_path.to_str().unwrap()).unwrap();
+        let ctail = CString::new(tail_path.to_str().unwrap()).unwrap();
+        let mut n = 0u32;
+        unsafe {
+            assert_eq!(
+                rkrdb_append_trajectory(id, 1, chead.as_ptr(), &mut n),
+                RKRDB_OK
+            );
+            assert_eq!(n, 1);
+            assert_eq!(
+                rkrdb_extend_trajectory(id, 1, ctail.as_ptr(), &mut n),
+                RKRDB_OK
+            );
+            assert_eq!(n, 2);
+            assert_eq!(rkrdb_close(id), RKRDB_OK);
+        }
+        let id = open(&corpus);
+        assert_eq!(c_text(id, 1, 0), head);
+        assert_eq!(c_text(id, 1, 1), tail);
+        assert_eq!(c_hash_hits(id, &head), Some((1, 0)));
+        assert_eq!(c_hash_hits(id, &tail), Some((1, 1)));
+        let stored = unsafe { rkrdb_get_frame(id, 1, 1) };
+        assert!(!stored.is_null());
+        let stored = unsafe { Box::from_raw(stored as *mut readcon_core::types::ConFrame) };
+        let source = {
+            let mut it = readcon_core::iterators::ConFrameIterator::new(&tail);
+            it.next().unwrap().unwrap()
+        };
+        assert_eq!(stored.header.boxl, source.header.boxl);
+        assert_eq!(stored.header.masses_per_type, source.header.masses_per_type);
+        assert_eq!(stored.atom_data[0].x, source.atom_data[0].x);
+        assert_eq!(stored.atom_data[1].x, source.atom_data[1].x);
+        unsafe {
+            assert_eq!(rkrdb_close(id), RKRDB_OK);
+        }
+    }
+
+    #[test]
+    fn c_abi_six_decimal_text_stays_on_resume() {
+        let original = std::fs::read_to_string(fixture("highprec_a.con")).unwrap();
+        let parsed = {
+            let mut it = readcon_core::iterators::ConFrameIterator::new(&original);
+            it.next().unwrap().unwrap()
+        };
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut w = readcon_core::writer::ConFrameWriter::with_float_format(
+                &mut buf,
+                readcon_core::writer::FloatFormat::DecimalPlaces(6),
+            );
+            w.write_frame(&parsed).unwrap();
+        }
+        let legacy = String::from_utf8(buf.into_inner()).unwrap();
+        assert_ne!(legacy, original);
+        let dir = tempfile::tempdir().unwrap();
+        let corpus = dir.path().join("db");
+        let cpath = CString::new(corpus.to_str().unwrap()).unwrap();
+        let ctext = CString::new(legacy.clone()).unwrap();
+        let mut id = 0usize;
+        let mut n = 0u32;
+        unsafe {
+            assert_eq!(rkrdb_open(cpath.as_ptr(), &mut id), RKRDB_OK);
+            assert_eq!(
+                rkrdb_append_trajectory_str(id, 4, ctext.as_ptr(), std::ptr::null(), &mut n),
+                RKRDB_OK
+            );
+            assert_eq!(rkrdb_close(id), RKRDB_OK);
+            assert_eq!(rkrdb_open(cpath.as_ptr(), &mut id), RKRDB_OK);
+        }
+        assert_eq!(c_text(id, 4, 0), legacy);
+        assert_eq!(c_hash_hits(id, &legacy), Some((4, 0)));
+        assert_eq!(c_hash_hits(id, &original), None);
+        unsafe {
+            assert_eq!(rkrdb_close(id), RKRDB_OK);
+        }
+    }
 }
