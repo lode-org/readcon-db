@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.2.4 - 2026-11-25
+#### Features
+- expose hash_con_text to c, fortran and python - (6704042) - *HaoZeke*
+#### Bug Fixes
+- free a parsed frame in this library - (c6db980) - *HaoZeke*
+- compile mimalloc with local-dynamic tls - (f9c24f9) - *HaoZeke*
+- hash con text over the stored source span - (7d45827) - *HaoZeke*
+- rescale frame units through the column arrays - (73de882) - *HaoZeke*
+- keep source spans in extend_trajectory_str - (de86b9c) - *HaoZeke*
+- compile the C ABI only with the capi feature - (05bf53f) - *HaoZeke*
+#### Documentation
+- say that a source build needs cmake outside windows - (b7a45bb) - *HaoZeke*
+- record resume of six-decimal extend frames - (fbcc627) - *HaoZeke*
+- say that the C ABI needs the capi feature - (2d1ce76) - *HaoZeke*
+#### Tests
+- reject static tls on the linux cdylibs - (344ae77) - *HaoZeke*
+- record that con major-4 files are refused at ingest - (eb12d0b) - *HaoZeke*
+- cover extend text identity and six-decimal resumes - (6daef42) - *HaoZeke*
+- build each capi_symbols feature set in its own target dir - (c03b56d) - *HaoZeke*
+- pin rkrdb_ exports to the capi feature - (7024018) - *HaoZeke*
+#### Build system
+- require readcon-core 0.23.2 - (98a127d) - *HaoZeke*
+- always enable the capi feature for C ABI builds - (98df81b) - *HaoZeke*
+#### Refactoring
+- name FloatFormat::RoundTrip for in-memory frames - (11ac25f) - *HaoZeke*
+#### Style
+- taplo-format Cargo.toml - (c153759) - *HaoZeke*
+
 ## v0.2.3 - 2026-11-19
 #### Bug Fixes
 - join and split preserve catalog records and work claims across shards
