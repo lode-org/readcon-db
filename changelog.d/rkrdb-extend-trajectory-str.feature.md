@@ -1,0 +1,1 @@
+`rkrdb_extend_trajectory_str` and Python `extend_trajectory_str` append CON text after the live frame count. The new text is parsed before the write. A span that does not parse is not written, and earlier frames stay as stored.
