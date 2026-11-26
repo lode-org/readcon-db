@@ -699,42 +699,56 @@ mod tests {
         );
     }
 
+    /// One unix instant. `try_claim` samples this instead of the host clock,
+    /// so a slow commit cannot push the sample past the return margin.
+    struct PinnedClock(u128);
+
+    impl Clock for PinnedClock {
+        fn unix_time_nanos(&self) -> Result<u128> {
+            Ok(self.0)
+        }
+    }
+
     #[test]
     fn try_claim_stored_expiry_covers_return_within_margin() {
-        let dir = tempfile::tempdir().unwrap();
-        let corpus = ConCorpus::open(dir.path()).unwrap();
-        let started = Instant::now();
-        let mut eligible = 0u32;
-        let mut trial = 0u32;
-        while started.elapsed() < STORED_EXPIRY_RETRY_LIMIT && eligible < 1 {
-            trial += 1;
+        // Stored expiry covers `return + lease` only while the return stays
+        // inside `LEASE_RETURN_MARGIN_MS` of the sample. The old loop treated
+        // a host return inside that window as the only eligible trial, then
+        // failed when every commit on a slow runner took longer. The sample
+        // is this clock. The return is the last nanosecond that margin allows.
+        let margin_ns = u128::from(LEASE_RETURN_MARGIN_MS) * NANOS_PER_MILLI;
+        let lease_secs = 1;
+        let lease_ms = lease_millis(lease_secs).unwrap();
+        // Offset 0 is a millisecond boundary: `ceil` adds nothing, so the
+        // margin is the whole cushion. The other two sit inside the millisecond.
+        let offsets: &[u128] = &[0, 1, NANOS_PER_MILLI - 1];
+        for (trial, &offset) in offsets.iter().enumerate() {
+            let sample_ns = 1_700_000_000_000u128 * NANOS_PER_MILLI + offset;
+            let dir = tempfile::tempdir().unwrap();
+            let corpus = ConCorpus::open(dir.path())
+                .unwrap()
+                .with_clock(Arc::new(PinnedClock(sample_ns)));
             let task = format!("fast-expiry-{trial}");
-            let before = Instant::now();
-            let before_wall = SystemTime::now();
             assert_eq!(
                 corpus
-                    .try_claim(b"jobs", task.as_bytes(), b"owner-a", 1)
+                    .try_claim(b"jobs", task.as_bytes(), b"owner-a", lease_secs)
                     .unwrap(),
                 ClaimStatus::Acquired
             );
-            let returned = SystemTime::now();
-            if !returned_within_margin(before, before_wall, returned) {
-                continue;
-            }
-            eligible += 1;
             let expiry_ms = stored_expiry_ms(&corpus, b"jobs", task.as_bytes());
+            let ceil_ms = u64::try_from(sample_ns.div_ceil(NANOS_PER_MILLI)).unwrap();
+            assert_eq!(
+                expiry_ms,
+                ceil_ms + lease_ms + LEASE_RETURN_MARGIN_MS,
+                "trial {trial}: stored expiry {expiry_ms} ms, sample {sample_ns} ns"
+            );
+            let returned_ns = sample_ns + margin_ns - 1;
+            let returned = UNIX_EPOCH + Duration::from_nanos(u64::try_from(returned_ns).unwrap());
             assert!(
-                expiry_covers_return(expiry_ms, returned, 1),
-                "trial {trial}: stored expiry {expiry_ms} ms is earlier than return+1s ({returned:?})"
+                expiry_covers_return(expiry_ms, returned, lease_secs),
+                "trial {trial}: stored expiry {expiry_ms} ms is earlier than return+{lease_secs}s ({returned:?})"
             );
         }
-        println!(
-            "try_claim_stored_expiry_covers_return_within_margin asserting_iterations={eligible}"
-        );
-        assert!(
-            eligible >= 1,
-            "no try_claim call returned within the 1ms margin ({trial} trials)"
-        );
     }
 
     #[test]
