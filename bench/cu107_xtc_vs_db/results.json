@@ -1,100 +1,102 @@
 {
-  "n_frames": 120000,
-  "n_atoms": 107,
-  "formula": "Cu:107",
-  "fixture": "resources/test/tiny_cuh2_forces.con",
-  "fixture_present": true,
-  "warmups_discarded": 2,
-  "repeats": 30,
-  "order": "ABAB",
-  "checks": {
-    "frame_set_equal": true,
-    "n_frames_selected": 120000,
-    "forces_max_abs_diff": 0.0,
-    "route_a_forces": "unanswerable_from_xtc"
-  },
-  "files_bytes_on_disk": {
-    "xtc": 61825024,
-    "gro": 8192,
-    "readcon_db_store": 1122197504
-  },
-  "cpu_model": "Intel(R) Xeon(R) Processor",
-  "core_count": 8,
-  "ram_bytes": 50527043584,
-  "os": "Ubuntu 24.04.5 LTS",
-  "python": "3.12.3",
-  "mdanalysis": "2.11.0",
-  "numpy": "2.5.5",
-  "readcon_db": {
-    "version": "0.2.4",
-    "git_sha": "9d95145e32efe1123996dc69ab1b82708828ce96"
-  },
-  "readcon_core": {
-    "version": "0.23.2",
-    "git_sha": "8c2d9984c40aedfb2e0084fedefaa02e930957f2"
-  },
-  "repro": [
-    "python3 -m venv .venv",
-    ". .venv/bin/activate",
-    "pip install maturin 'MDAnalysis>=2.7' numpy",
-    "maturin develop --release --bindings pyo3 --manifest-path python/pyproject.toml",
-    "python bench/cu107_xtc_vs_db/run.py"
-  ],
-  "by_cache": {
-    "warm": {
-      "A": {
-        "n": 30,
-        "median_s": 2.706285536999985,
-        "q1_s": 2.6727504047499906,
-        "q3_s": 2.7720763414999396,
-        "iqr_s": 0.09932593674994905,
-        "min_s": 2.571882267000092,
-        "max_s": 2.986434458999838
-      },
-      "B": {
-        "n": 30,
-        "median_s": 1.5023258880000867,
-        "q1_s": 1.4452930054999342,
-        "q3_s": 1.5436410625000576,
-        "iqr_s": 0.09834805700012339,
-        "min_s": 1.3973806610001702,
-        "max_s": 1.6344270240001606
-      },
-      "ratio": {
-        "median_ratio_B_over_A": 0.5551246782575163,
-        "ci95_low": 0.538151725754216,
-        "ci95_high": 0.5651538821995458,
-        "resamples": 10000,
-        "seed": 20261123,
-        "paired": true
-      }
+  "v1_all_cu107": {
+    "n_frames": 120000,
+    "n_atoms": 107,
+    "formula": "Cu:107",
+    "fixture": "resources/test/tiny_cuh2_forces.con",
+    "fixture_present": true,
+    "warmups_discarded": 2,
+    "repeats": 30,
+    "order": "ABAB",
+    "checks": {
+      "frame_set_equal": true,
+      "n_frames_selected": 120000,
+      "forces_max_abs_diff": 0.0,
+      "route_a_forces": "unanswerable_from_xtc"
     },
-    "cold": {
-      "A": {
-        "n": 30,
-        "median_s": 2.927478317000009,
-        "q1_s": 2.85908804449997,
-        "q3_s": 2.990097444750063,
-        "iqr_s": 0.13100940025009322,
-        "min_s": 2.752925955000137,
-        "max_s": 3.3618405099998654
+    "files_bytes_on_disk": {
+      "xtc": 61825024,
+      "gro": 8192,
+      "readcon_db_store": 1122197504
+    },
+    "cpu_model": "Intel(R) Xeon(R) Processor",
+    "core_count": 8,
+    "ram_bytes": 50527043584,
+    "os": "Ubuntu 24.04.5 LTS",
+    "python": "3.12.3",
+    "mdanalysis": "2.11.0",
+    "numpy": "2.5.5",
+    "readcon_db": {
+      "version": "0.2.4",
+      "git_sha": "c9d05798e97abaea4e595a6f35a2d3a92b6cab4f"
+    },
+    "readcon_core": {
+      "version": "0.23.2",
+      "git_sha": "8c2d9984c40aedfb2e0084fedefaa02e930957f2"
+    },
+    "repro": [
+      "python3 -m venv .venv",
+      ". .venv/bin/activate",
+      "pip install maturin 'MDAnalysis>=2.7' numpy",
+      "maturin develop --release --bindings pyo3 --manifest-path python/pyproject.toml",
+      "python bench/cu107_xtc_vs_db/run.py"
+    ],
+    "by_cache": {
+      "warm": {
+        "A": {
+          "n": 30,
+          "median_s": 2.706285536999985,
+          "q1_s": 2.6727504047499906,
+          "q3_s": 2.7720763414999396,
+          "iqr_s": 0.09932593674994905,
+          "min_s": 2.571882267000092,
+          "max_s": 2.986434458999838
+        },
+        "B": {
+          "n": 30,
+          "median_s": 1.5023258880000867,
+          "q1_s": 1.4452930054999342,
+          "q3_s": 1.5436410625000576,
+          "iqr_s": 0.09834805700012339,
+          "min_s": 1.3973806610001702,
+          "max_s": 1.6344270240001606
+        },
+        "ratio": {
+          "median_ratio_B_over_A": 0.5551246782575163,
+          "ci95_low": 0.538151725754216,
+          "ci95_high": 0.5651538821995458,
+          "resamples": 10000,
+          "seed": 20261123,
+          "paired": true
+        }
       },
-      "B": {
-        "n": 30,
-        "median_s": 1.5479596380000658,
-        "q1_s": 1.5107826477498634,
-        "q3_s": 1.6449048500001027,
-        "iqr_s": 0.1341222022502393,
-        "min_s": 1.453596890999961,
-        "max_s": 1.9887030750001031
-      },
-      "ratio": {
-        "median_ratio_B_over_A": 0.528768950742005,
-        "ci95_low": 0.5202891735468947,
-        "ci95_high": 0.5399032242917663,
-        "resamples": 10000,
-        "seed": 20261123,
-        "paired": true
+      "cold": {
+        "A": {
+          "n": 30,
+          "median_s": 2.927478317000009,
+          "q1_s": 2.85908804449997,
+          "q3_s": 2.990097444750063,
+          "iqr_s": 0.13100940025009322,
+          "min_s": 2.752925955000137,
+          "max_s": 3.3618405099998654
+        },
+        "B": {
+          "n": 30,
+          "median_s": 1.5479596380000658,
+          "q1_s": 1.5107826477498634,
+          "q3_s": 1.6449048500001027,
+          "iqr_s": 0.1341222022502393,
+          "min_s": 1.453596890999961,
+          "max_s": 1.9887030750001031
+        },
+        "ratio": {
+          "median_ratio_B_over_A": 0.528768950742005,
+          "ci95_low": 0.5202891735468947,
+          "ci95_high": 0.5399032242917663,
+          "resamples": 10000,
+          "seed": 20261123,
+          "paired": true
+        }
       }
     }
   }

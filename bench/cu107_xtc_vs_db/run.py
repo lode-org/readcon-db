@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import csv
 import gc
+import hashlib
 import json
 import os
 import subprocess
@@ -93,15 +94,58 @@ def os_name() -> str:
     return name
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def git_sha() -> str:
-    proc = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
+    """`git rev-parse` of the commit that was HEAD when this checkout's build was imported.
+
+    The extension must be the editable maturin build of this checkout, and
+    its bytes must match `target/release/libreadcon_db.so`. The recorded
+    commit is the latest one whose committer time is not after that file's
+    mtime, which is HEAD at build time.
+    """
+    import readcon_db
+
+    installed_dir = Path(readcon_db.__file__).resolve().parent
+    installed = sorted(installed_dir.glob("*.so"))
+    if len(installed) != 1:
+        raise SystemExit("imported readcon_db does not contain one extension")
+    built = ROOT / "target" / "release" / "libreadcon_db.so"
+    if not built.is_file():
+        raise SystemExit("this checkout has no release build of the extension")
+    if _sha256(installed[0]) != _sha256(built):
+        raise SystemExit("imported extension does not match this checkout's release build")
+    dist = installed_dir.parent / "readcon_db-0.2.4.dist-info" / "direct_url.json"
+    info = json.loads(dist.read_text(encoding="utf-8"))
+    if not info.get("dir_info", {}).get("editable"):
+        raise SystemExit("imported readcon_db is not an editable maturin build")
+    url = str(info.get("url", ""))
+    if not url.startswith("file://"):
+        raise SystemExit("imported readcon_db does not point at a local checkout")
+    if Path(url[7:]).resolve() != (ROOT / "python").resolve():
+        raise SystemExit("imported readcon_db is not this checkout")
+    when = time.strftime("%Y-%m-%d %H:%M:%S +0000", time.gmtime(installed[0].stat().st_mtime))
+    listed = subprocess.run(
+        ["git", "rev-list", "-1", f"--before={when}", "HEAD"],
         cwd=ROOT,
         check=True,
         capture_output=True,
         text=True,
     )
-    return proc.stdout.strip()
+    resolved = subprocess.run(
+        ["git", "rev-parse", listed.stdout.strip()],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return resolved.stdout.strip()
 
 
 def readcon_core_version() -> str:

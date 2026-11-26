@@ -58,3 +58,39 @@ count, RAM, the OS, and the Python, MDAnalysis, NumPy, readcon-db, and
 readcon-core versions. readcon-core `0.23.2` is commit
 `8c2d9984c40aedfb2e0084fedefaa02e930957f2`. File sizes are allocated blocks
 (`st_blocks * 512`) for the XTC, the GRO, and the store directory.
+The v1 readcon-db git sha `9d95145e` was `git rev-parse HEAD` after the harness commit; the imported extension was built earlier from this checkout at `c9d05798`, and the wheel does not carry a git sha.
+
+## Mixed composition
+
+`generate.py` also builds 120000 interleaved frames from the same fixture.
+1200 frames (every index divisible by 100) are Cu107 with forces.
+The other frames cycle, 23760 each: Cu107 without forces, Cu108 with
+forces, Cu108 without forces, Cu106 with forces, Cu106 without forces.
+XTC holds one atom count per file, so the run writes one XTC+GRO pair for
+106, 107, and 108 atoms and a sidecar that stores each frame's global
+index. Building those files is not timed. Route A loads every GRO topology
+and decodes every frame of every XTC file, which is what an XTC user has
+to do for this trajectory. XTC cannot tell Cu107 with forces from Cu107
+without forces, so Q1's forces half stays `unanswerable_from_xtc`. Route A
+returns the Cu107 superset (24960 frames) for both queries.
+
+Q1 asks for Cu107 frames that carry forces. Route B calls
+`select(formula="Cu:107", require_forces=True)` and reads positions and
+forces. Q2 asks for Cu107 by composition only. Route B calls
+`select(formula="Cu:107")` and reads positions. Q2's frame sets are equal.
+For Q1, route B matches the generator's with-forces set and route A matches
+the Cu107 superset. Warm and cold each discard 2 ABAB warmups, then keep
+30 repeats. The bootstrap is paired, 10000 draws, seed 20261123, reseeded
+per query and cache.
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+pip install maturin 'MDAnalysis>=2.7' numpy
+maturin develop --release --bindings pyo3 --manifest-path python/pyproject.toml
+python bench/cu107_xtc_vs_db/run_v2.py
+```
+
+`results.json` keeps the all-Cu107 run under `v1_all_cu107`. The mixed run
+is `v2_mixed`. `results-v2.csv` adds a `query` column. `repro` in
+`results.json` lists the commands above. Large files stay under `work-v2/`.

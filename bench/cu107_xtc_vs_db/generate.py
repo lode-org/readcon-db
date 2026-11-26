@@ -99,7 +99,7 @@ def box_side(seed: dict, n_frames: int) -> float:
 
 
 def frame_geometry(
-    seed: dict, frame_index: int
+    seed: dict, frame_index: int, n_atoms: int = N_ATOMS
 ) -> tuple[list[tuple[float, float, float]], list[tuple[float, float, float]]]:
     origin = seed["coords"][0]
     spacing = _spacing(seed)
@@ -107,7 +107,7 @@ def frame_geometry(
     scale = 1.0 + frame_index * FORCE_SCALE_PER_FRAME
     positions: list[tuple[float, float, float]] = []
     forces: list[tuple[float, float, float]] = []
-    for atom in range(N_ATOMS):
+    for atom in range(n_atoms):
         ix = atom % GRID
         iy = (atom // GRID) % GRID
         iz = atom // (GRID * GRID)
@@ -164,6 +164,84 @@ def write_con(path: Path, n_frames: int, seed: dict | None = None) -> dict:
                 lines.append(
                     f"   {force[0]!r} {force[1]!r} {force[2]!r} {flag} {atom}"
                 )
+            handle.write("\n".join(lines))
+            handle.write("\n")
+    return seed
+
+
+# Other classes, in cycle order, for frames whose index is not divisible by 100.
+_MIXED_OTHER = (
+    (107, False),
+    (108, True),
+    (108, False),
+    (106, True),
+    (106, False),
+)
+
+
+def mixed_class(frame_index: int) -> tuple[int, bool]:
+    """Atom count and whether that frame stores forces.
+
+    Every index divisible by 100 is Cu107 with forces. The remaining
+    frames rotate through Cu107 without forces, Cu108 with forces,
+    Cu108 without forces, Cu106 with forces, and Cu106 without forces.
+    """
+    if frame_index % 100 == 0:
+        return 107, True
+    ordinal = frame_index - (frame_index // 100) - 1
+    return _MIXED_OTHER[ordinal % 5]
+
+
+def mixed_counts(n_frames: int) -> dict[tuple[int, bool], int]:
+    counts: dict[tuple[int, bool], int] = {}
+    for frame_index in range(n_frames):
+        key = mixed_class(frame_index)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _meta_line(seed: dict, with_forces: bool) -> str:
+    if with_forces:
+        return seed["meta_line"]
+    meta = json.loads(seed["meta_line"])
+    meta.pop("sections", None)
+    return json.dumps(meta, separators=(",", ":"))
+
+
+def write_mixed_con(path: Path, n_frames: int, seed: dict | None = None) -> dict:
+    seed = load_seed() if seed is None else seed
+    side = box_side(seed, n_frames)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        for frame_index in range(n_frames):
+            n_atoms, with_forces = mixed_class(frame_index)
+            positions, forces = frame_geometry(seed, frame_index, n_atoms)
+            flags = [
+                seed["coords"][atom % len(seed["coords"])][3] for atom in range(n_atoms)
+            ]
+            lines = [
+                seed["line1"],
+                _meta_line(seed, with_forces),
+                f"{side:.6f} {side:.6f} {side:.6f}",
+                seed["angles_line"],
+                seed["line5"],
+                seed["line6"],
+                "1",
+                str(n_atoms),
+                seed["mass_token"],
+                "Cu",
+                "Coordinates of Component 1",
+            ]
+            for atom, (pos, flag) in enumerate(zip(positions, flags)):
+                lines.append(f"   {pos[0]!r} {pos[1]!r} {pos[2]!r} {flag} {atom}")
+            if with_forces:
+                lines.append("")
+                lines.append("Cu")
+                lines.append("Forces of Component 1")
+                for atom, (force, flag) in enumerate(zip(forces, flags)):
+                    lines.append(
+                        f"   {force[0]!r} {force[1]!r} {force[2]!r} {flag} {atom}"
+                    )
             handle.write("\n".join(lines))
             handle.write("\n")
     return seed
