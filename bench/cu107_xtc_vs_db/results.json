@@ -33,6 +33,13 @@
     "version": "0.23.2",
     "git_sha": "8c2d9984c40aedfb2e0084fedefaa02e930957f2"
   },
+  "repro": [
+    "python3 -m venv .venv",
+    ". .venv/bin/activate",
+    "pip install maturin 'MDAnalysis>=2.7' numpy",
+    "maturin develop --release --bindings pyo3 --manifest-path python/pyproject.toml",
+    "python bench/cu107_xtc_vs_db/run.py"
+  ],
   "by_cache": {
     "warm": {
       "A": {
