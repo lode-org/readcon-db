@@ -99,5 +99,194 @@
         }
       }
     }
-  }
+  },
+  "v2_mixed": {
+    "n_frames": 120000,
+    "counts": {
+      "Cu107_forces": 1200,
+      "Cu107_no_forces": 23760,
+      "Cu108_forces": 23760,
+      "Cu108_no_forces": 23760,
+      "Cu106_forces": 23760,
+      "Cu106_no_forces": 23760
+    },
+    "pattern": "index divisible by 100 is Cu107 with forces; other frames cycle Cu107 without forces, Cu108 with forces, Cu108 without forces, Cu106 with forces, Cu106 without forces",
+    "warmups_discarded": 2,
+    "repeats": 30,
+    "order": "ABAB",
+    "checks": {
+      "Q1": {
+        "A_n": 24960,
+        "B_n": 1200,
+        "A_equals_cu107_superset": true,
+        "B_equals_with_forces": true,
+        "forces_max_abs_diff": 0.0,
+        "route_a_forces": "unanswerable_from_xtc"
+      },
+      "Q2": {
+        "A_n": 24960,
+        "B_n": 24960,
+        "sets_equal": true
+      }
+    },
+    "files_bytes_on_disk": {
+      "xtc_gro_total": 61853696,
+      "readcon_db_store": 810336256,
+      "per_atom_count": {
+        "106": {
+          "xtc": 24297472,
+          "gro": 8192
+        },
+        "107": {
+          "xtc": 12853248,
+          "gro": 8192
+        },
+        "108": {
+          "xtc": 24678400,
+          "gro": 8192
+        }
+      }
+    },
+    "cpu_model": "Intel(R) Xeon(R) Processor",
+    "core_count": 8,
+    "ram_bytes": 50527043584,
+    "os": "Ubuntu 24.04.5 LTS",
+    "python": "3.12.3",
+    "mdanalysis": "2.11.0",
+    "numpy": "2.5.5",
+    "readcon_db": {
+      "version": "0.2.4",
+      "git_sha": "c9d05798e97abaea4e595a6f35a2d3a92b6cab4f",
+      "import_matches_checkout_build": true
+    },
+    "readcon_core": {
+      "version": "0.23.2",
+      "git_sha": "8c2d9984c40aedfb2e0084fedefaa02e930957f2"
+    },
+    "by_query": {
+      "Q1": {
+        "warm": {
+          "A": {
+            "n": 30,
+            "median_s": 2.7415849039998648,
+            "q1_s": 2.684400574249935,
+            "q3_s": 2.8360636799999384,
+            "iqr_s": 0.15166310575000352,
+            "min_s": 2.5642203659999723,
+            "max_s": 3.367511678000028
+          },
+          "B": {
+            "n": 30,
+            "median_s": 0.03955402850010614,
+            "q1_s": 0.038504136750020734,
+            "q3_s": 0.04050838725004269,
+            "iqr_s": 0.0020042505000219535,
+            "min_s": 0.03577293400030612,
+            "max_s": 0.05510188100015512
+          },
+          "ratio": {
+            "median_ratio_B_over_A": 0.014427431535094305,
+            "ci95_low": 0.014030150599014215,
+            "ci95_high": 0.014759428486179761,
+            "resamples": 10000,
+            "seed": 20261123,
+            "paired": true
+          }
+        },
+        "cold": {
+          "A": {
+            "n": 30,
+            "median_s": 2.9372054574998856,
+            "q1_s": 2.88947734424994,
+            "q3_s": 3.02664451499993,
+            "iqr_s": 0.13716717074998996,
+            "min_s": 2.8145822350002163,
+            "max_s": 3.3355189099997915
+          },
+          "B": {
+            "n": 30,
+            "median_s": 0.04076450799993836,
+            "q1_s": 0.04002179449992127,
+            "q3_s": 0.042577066500371075,
+            "iqr_s": 0.002555272000449804,
+            "min_s": 0.03781428000002052,
+            "max_s": 0.05198107499973048
+          },
+          "ratio": {
+            "median_ratio_B_over_A": 0.013878670930509786,
+            "ci95_low": 0.013512374309470956,
+            "ci95_high": 0.014172270647450726,
+            "resamples": 10000,
+            "seed": 20261123,
+            "paired": true
+          }
+        }
+      },
+      "Q2": {
+        "warm": {
+          "A": {
+            "n": 30,
+            "median_s": 2.6555196090000663,
+            "q1_s": 2.6203511347498534,
+            "q3_s": 2.7284799617498265,
+            "iqr_s": 0.10812882699997317,
+            "min_s": 2.478368041000067,
+            "max_s": 2.8751124449995586
+          },
+          "B": {
+            "n": 30,
+            "median_s": 0.17383408650016463,
+            "q1_s": 0.1700351152502435,
+            "q3_s": 0.18140794250007275,
+            "iqr_s": 0.011372827249829243,
+            "min_s": 0.16326484899991556,
+            "max_s": 0.20040543200002503
+          },
+          "ratio": {
+            "median_ratio_B_over_A": 0.06546142077467909,
+            "ci95_low": 0.06391819614139077,
+            "ci95_high": 0.06749590659885192,
+            "resamples": 10000,
+            "seed": 20261123,
+            "paired": true
+          }
+        },
+        "cold": {
+          "A": {
+            "n": 30,
+            "median_s": 2.5957293725000454,
+            "q1_s": 2.5258005677502524,
+            "q3_s": 2.69091105699988,
+            "iqr_s": 0.1651104892496278,
+            "min_s": 2.464000993999889,
+            "max_s": 2.8506170840000777
+          },
+          "B": {
+            "n": 30,
+            "median_s": 0.16966678700009652,
+            "q1_s": 0.16496129475012822,
+            "q3_s": 0.17714921449976373,
+            "iqr_s": 0.012187919749635512,
+            "min_s": 0.1593956859996979,
+            "max_s": 0.1940181200002371
+          },
+          "ratio": {
+            "median_ratio_B_over_A": 0.06536381981788957,
+            "ci95_low": 0.06366309238940528,
+            "ci95_high": 0.0668705741308872,
+            "resamples": 10000,
+            "seed": 20261123,
+            "paired": true
+          }
+        }
+      }
+    }
+  },
+  "repro": [
+    "python3 -m venv .venv",
+    ". .venv/bin/activate",
+    "pip install maturin 'MDAnalysis>=2.7' numpy",
+    "maturin develop --release --bindings pyo3 --manifest-path python/pyproject.toml",
+    "python bench/cu107_xtc_vs_db/run_v2.py"
+  ]
 }
